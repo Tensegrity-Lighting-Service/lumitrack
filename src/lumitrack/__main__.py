@@ -1,4 +1,4 @@
-"""Entry point: python -m stanczpsn"""
+"""Entry point: python -m lumitrack"""
 from __future__ import annotations
 
 import sys
@@ -37,8 +37,8 @@ def main() -> int:
     from .ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Stancz-PSN Editor")
-    app.setOrganizationName("stancz-psn-editor")
+    app.setApplicationName("Lumitrack")
+    app.setOrganizationName("Lumitrack")
     app.setStyle("Fusion")
     app.setStyleSheet(DARK_QSS)
 

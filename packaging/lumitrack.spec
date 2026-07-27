@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec. Build from the repository root:
 
-    pyinstaller packaging/stanczpsn.spec
+    pyinstaller packaging/lumitrack.spec
 
 PyInstaller does not cross-compile: build the Windows .exe on Windows and the
 macOS .app on macOS.
@@ -13,7 +13,7 @@ ROOT = Path(SPECPATH).parent
 SRC = ROOT / "src"
 
 a = Analysis(
-    [str(SRC / "stanczpsn" / "__main__.py")],
+    [str(SRC / "lumitrack" / "__main__.py")],
     pathex=[str(SRC)],
     binaries=[],
     datas=[],
@@ -72,7 +72,7 @@ if sys.platform == "darwin":
         coll,
         name="StanczPSN.app",
         icon=None,
-        bundle_identifier="eu.stanczpsn.editor",
+        bundle_identifier="eu.lumitrack.editor",
         info_plist={
             "CFBundleShortVersionString": "0.1.0",
             "NSHighResolutionCapable": True,

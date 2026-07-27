@@ -5,7 +5,7 @@ sous Windows, le `.app` sous macOS.
 
 ```bash
 pip install -r requirements-dev.txt
-pyinstaller packaging/stanczpsn.spec
+pyinstaller packaging/lumitrack.spec
 ```
 
 Le résultat arrive dans `dist/StanczPSN/` (Windows/Linux) ou

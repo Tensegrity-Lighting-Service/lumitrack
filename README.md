@@ -1,4 +1,4 @@
-# Stancz-PSN Editor
+# Lumitrack
 
 Éditeur de chorégraphie **desktop natif** (Windows / macOS / Linux) pour la
 lumière : on place des points sur une scène, on les anime sur une timeline, et
@@ -39,7 +39,7 @@ Python 3.10 ou plus récent.
 
 ```bash
 git clone <ton-dépôt>
-cd stancz-psn-editor
+cd lumitrack
 
 python -m venv .venv
 # Windows :
@@ -53,17 +53,17 @@ pip install -r requirements.txt
 ### Lancement
 
 ```bash
-python -m stanczpsn
+python -m lumitrack
 ```
 
 (depuis la racine du dépôt ; le paquet est dans `src/`, ajouté au chemin par
-`pyproject.toml` en installation éditable — sinon `PYTHONPATH=src python -m stanczpsn`)
+`pyproject.toml` en installation éditable — sinon `PYTHONPATH=src python -m lumitrack`)
 
-Ou en installation éditable, ce qui ajoute la commande `stanczpsn` :
+Ou en installation éditable, ce qui ajoute la commande `lumitrack` :
 
 ```bash
 pip install -e .
-stanczpsn
+lumitrack
 ```
 
 ### Dépendances optionnelles
@@ -102,7 +102,7 @@ Voir [`packaging/README.md`](packaging/README.md). En résumé :
 
 ```bash
 pip install pyinstaller
-pyinstaller packaging/stanczpsn.spec
+pyinstaller packaging/lumitrack.spec
 ```
 
 Chaque plateforme doit être compilée **sur elle-même** : PyInstaller ne fait
@@ -114,7 +114,7 @@ sous macOS.
 ## Architecture
 
 ```
-src/stanczpsn/
+src/lumitrack/
 ├── __main__.py          point d'entrée + thème sombre
 ├── core/                aucune dépendance à Qt — testable seul
 │   ├── project.py       modèle de données, format .spsn, import .stancz

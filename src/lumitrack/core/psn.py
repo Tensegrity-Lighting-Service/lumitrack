@@ -84,7 +84,7 @@ def build_data_packet(trackers: Iterable[Tracker], frame_id: int = 0,
     return _chunk(CHUNK_ID_DATA_PACKET, body, has_subchunks=True)
 
 
-def build_info_packet(trackers: Iterable[Tracker], system_name: str = "stancz-psn",
+def build_info_packet(trackers: Iterable[Tracker], system_name: str = "lumitrack",
                       frame_id: int = 0, packet_count: int = 1) -> bytes:
     header = _chunk(INFO_PACKET_HEADER, _header_bytes(frame_id, packet_count), has_subchunks=False)
     name_chunk = _chunk(INFO_SYSTEM_NAME, system_name.encode("utf-8"), has_subchunks=False)
@@ -126,7 +126,7 @@ def split_data_packets(trackers: list, frame_id: int = 0, max_size: int = PSN_MA
     return [build_data_packet(g, frame_id, packet_count=count) for g in groups]
 
 
-def split_info_packets(trackers: list, system_name: str = "stancz-psn",
+def split_info_packets(trackers: list, system_name: str = "lumitrack",
                        frame_id: int = 0, max_size: int = PSN_MAX_PACKET_SIZE):
     """Same splitting for PSN_INFO. With ~100 named trackers the info packet
     comfortably exceeds a 1500-byte MTU, so this is not optional."""
@@ -153,7 +153,7 @@ class PsnSender:
             self.sock.sendto(packet, (self.mcast_ip, self.port))
         self._frame_id = (self._frame_id + 1) & 0xFF
 
-    def send_info(self, trackers: list, system_name: str = "stancz-psn"):
+    def send_info(self, trackers: list, system_name: str = "lumitrack"):
         for packet in split_info_packets(trackers, system_name, self._frame_id):
             self.sock.sendto(packet, (self.mcast_ip, self.port))
 

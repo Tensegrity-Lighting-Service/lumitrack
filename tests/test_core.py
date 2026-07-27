@@ -7,13 +7,13 @@ import struct
 
 import pytest
 
-from stanczpsn.core.psn import (
+from lumitrack.core.psn import (
     Tracker, build_data_packet, build_info_packet,
     split_data_packets, split_info_packets, PSN_MAX_PACKET_SIZE,
 )
-from stanczpsn.core.timeline import Timeline, OutputTransform, apply_easing
-from stanczpsn.core.project import Project, Point, Formation
-from stanczpsn.core import timecode as tc
+from lumitrack.core.timeline import Timeline, OutputTransform, apply_easing
+from lumitrack.core.project import Project, Point, Formation
+from lumitrack.core import timecode as tc
 
 
 def _trackers(n, name_len=10):

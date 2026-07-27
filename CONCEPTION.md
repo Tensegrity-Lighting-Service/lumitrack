@@ -1,8 +1,8 @@
-# Éditeur de chorégraphie lumière — Dossier de conception
+# Lumitrack — Dossier de conception
 
-Document de référence de l'application qui programme la lumière en prévisu à
-partir d'un plan de déplacement de porteurs, et diffuse leurs positions en
-**PosiStageNet (PSN)** vers Capture / Depence / grandMA3.
+Document de référence de **Lumitrack**, l'application qui programme la
+lumière en prévisu à partir d'un plan de déplacement de porteurs, et diffuse
+leurs positions en **PosiStageNet (PSN)** vers Capture / Depence / grandMA3.
 
 **Contexte** : chaque acteur suivi représente en réalité un **projecteur porté
 par un humain**. L'objectif est de programmer la lumière en prévisu, ce n'est
@@ -21,10 +21,6 @@ plus la référence de conception du produit.
 
 Ce document reste la référence : format de fichier, protocole, décisions
 d'architecture, et ce qui n'est pas encore validé.
-
-⚠️ **Nom de code provisoire** : le nom actuel du dépôt/paquet (`stancz-psn-editor`
-/ `stanczpsn`) vient du point de départ historique et ne reflète plus le
-projet. Renommage pas encore fait, voir §12.15.
 
 ---
 
@@ -472,30 +468,30 @@ une demi-heure de manip qui sécurise tout le parsing.
 - Projet de test : <https://stancz.com/editor/o8IBHoZlfdwtNypeipiGx>
 
 **Livrables**
-- `stancz-psn-editor.zip` — l'application v0.1 (voir §11)
+- `lumitrack.zip` — l'application v0.1 (voir §11)
 - `stancz-psn.zip` — l'ancien prototype web, **obsolète**, gardé pour mémoire
 
 ---
 
 ## 11. Ce qui est déjà construit — passation
 
-Archive : **`stancz-psn-editor.zip`**. À décompresser dans `Documents`, puis
+Archive : **`lumitrack.zip`**. À décompresser dans `Documents`, puis
 `git init` (les commandes exactes sont dans `SETUP_GIT.md` à la racine).
 
 ### 11.1 Arborescence
 
 ```
-stancz-psn-editor/
+lumitrack/
 ├── README.md                 doc utilisateur + architecture
 ├── SETUP_GIT.md              init local et push GitHub
 ├── LICENSE                   MIT
-├── pyproject.toml            paquet + entrée console `stanczpsn`
+├── pyproject.toml            paquet + entrée console `lumitrack`
 ├── requirements.txt          PySide6, pypsn
 ├── requirements-dev.txt      + pytest, pyinstaller
 ├── packaging/
-│   ├── stanczpsn.spec        spec PyInstaller (Windows + macOS)
+│   ├── lumitrack.spec        spec PyInstaller (Windows + macOS)
 │   └── README.md             pare-feu, quarantaine, réseau local macOS 15+
-├── src/stanczpsn/
+├── src/lumitrack/
 │   ├── __main__.py           point d'entrée + thème sombre (DARK_QSS)
 │   ├── core/                 ← AUCUNE dépendance à Qt
 │   │   ├── project.py        modèle, format .spsn, import_stancz()
@@ -864,7 +860,7 @@ commercial" (l'app pourrait devenir un produit vendu) :
   `psn.py`, `timecode.py`, `engine.py`) est **conservé tel quel** — confirmé sans
   aucune dépendance à Qt, déjà testé (34 tests), déjà validé contre `pypsn`. Il
   tourne en **sidecar local** (process séparé, packagé comme aujourd'hui via
-  PyInstaller/`packaging/stanczpsn.spec`), communication via WebSocket local.
+  PyInstaller/`packaging/lumitrack.spec`), communication via WebSocket local.
   Seul `ui/` (3 fichiers, spécifique à Qt) est abandonné et reconstruit dans la
   nouvelle stack.
 - **Pourquoi Tauri plutôt qu'Electron** : Electron est plus rapide à câbler
@@ -967,14 +963,19 @@ MonShow.bundle/
   le partage/la sauvegarde externe, en plus du dossier actif utilisé pendant
   l'édition.
 
-### 12.15 Renommage du projet — pas encore fait
+### 12.15 Renommage du projet — fait : **Lumitrack**
 
-Le nom de code actuel (dépôt `stancz-psn-editor`, paquet Python `stanczpsn`,
-titre du présent document jusqu'à cette session) vient du point de départ
-historique. Cette session l'a retiré de la **conception** (§1-12 ci-dessus ne
-présentent plus le format `.stancz` que comme une option d'import), mais **le
-code et le nom du dépôt n'ont pas été renommés** — ça reste `stancz-psn-editor`
-/ `stanczpsn` partout dans `pyproject.toml`, les imports, le CLI
-(`stanczpsn`), `packaging/stanczpsn.spec`, et l'URL du dépôt GitHub. Renommer
-ça touche des identifiants réels (pas que de la prose) et suppose un nom de
-remplacement — pas encore choisi.
+Le nom de code initial (`stancz-psn-editor` / `stanczpsn`) venait du point de
+départ historique et ne reflétait plus le projet une fois la conception
+détachée de Stancz (§12 ci-dessus). Renommé en **Lumitrack** :
+
+- Dépôt GitHub : `Tensegrity-Lighting-Service/lumitrack`.
+- Paquet Python : `src/lumitrack/`, `pyproject.toml` (`name = "lumitrack"`,
+  entrée console `lumitrack = "lumitrack.__main__:main"`).
+- Spec PyInstaller : `packaging/lumitrack.spec` (`bundle_identifier =
+  "eu.lumitrack.editor"`).
+- Nom d'application/fenêtre Qt, nom de système PSN par défaut, format de
+  fichier `.spsn` (`PROJECT_FORMAT`) : tous alignés sur `Lumitrack`.
+- L'ancien nom ne subsiste que là où il désigne factuellement autre chose :
+  le format d'import `.stancz` lui-même (§1), et l'ancien prototype web
+  archivé `stancz-psn.zip` (§10, obsolète, gardé pour mémoire).

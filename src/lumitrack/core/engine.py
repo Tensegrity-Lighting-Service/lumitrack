@@ -106,7 +106,7 @@ class PsnBroadcaster:
         self.port = 56565
         self.iface_ip = "0.0.0.0"
         self.rate_hz = 30
-        self.system_name = "stancz-psn-editor"
+        self.system_name = "Lumitrack"
 
         self._sender: Optional[PsnSender] = None
         self._sender_key = None

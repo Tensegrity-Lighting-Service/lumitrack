@@ -27,7 +27,7 @@ UI_REFRESH_MS = 33  # ~30 fps for the interface; PSN has its own clock
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Stancz-PSN Editor")
+        self.setWindowTitle("Lumitrack")
         self.resize(1400, 900)
 
         self.project = Project()
@@ -201,7 +201,7 @@ class MainWindow(QMainWindow):
         self.psn_iface.setToolTip("Local interface to send from. Set this on a multi-NIC FOH machine.")
         self.psn_rate = QSpinBox(); self.psn_rate.setRange(1, 120); self.psn_rate.setValue(30)
         self.psn_rate.setSuffix(" Hz")
-        self.psn_name = QLineEdit("stancz-psn-editor")
+        self.psn_name = QLineEdit("Lumitrack")
         psn_form.addRow("Multicast IP", self.psn_ip)
         psn_form.addRow("Port", self.psn_port)
         psn_form.addRow("Interface", self.psn_iface)
@@ -382,7 +382,7 @@ class MainWindow(QMainWindow):
         self._refresh_point_list()
         self.duration_label.setText("/ " + format_timecode(self.project.duration_ms))
         title = self.project.name or "Untitled"
-        self.setWindowTitle(f"Stancz-PSN Editor — {title}")
+        self.setWindowTitle(f"Lumitrack — {title}")
 
     def _refresh_formation_list(self):
         self.formation_list.blockSignals(True)
@@ -577,7 +577,7 @@ class MainWindow(QMainWindow):
             port=self.psn_port.value(),
             iface_ip=self.psn_iface.text().strip() or "0.0.0.0",
             rate_hz=self.psn_rate.value(),
-            system_name=self.psn_name.text().strip() or "stancz-psn-editor",
+            system_name=self.psn_name.text().strip() or "Lumitrack",
         )
 
     def _toggle_psn(self, checked: bool):

@@ -13,7 +13,7 @@ import zipfile
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
-PROJECT_FORMAT = "stancz-psn-editor"
+PROJECT_FORMAT = "Lumitrack"
 PROJECT_VERSION = 1
 
 
@@ -155,7 +155,7 @@ def import_stancz(path: str, media_dir: Optional[str] = None) -> Project:
     the length of the segment leading INTO that formation.
     """
     if media_dir is None:
-        media_dir = tempfile.mkdtemp(prefix="stanczpsn_")
+        media_dir = tempfile.mkdtemp(prefix="lumitrack_")
     os.makedirs(media_dir, exist_ok=True)
 
     with zipfile.ZipFile(path) as zf:
