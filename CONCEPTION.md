@@ -987,6 +987,25 @@ détachée de Stancz (§12 ci-dessus). Renommé en **Lumitrack** :
   le format d'import `.stancz` lui-même (§1), et l'ancien prototype web
   archivé `stancz-psn.zip` (§10, obsolète, gardé pour mémoire).
 
+### 12.16 Recherche de base NLE/compositing open source — écartée
+
+Suite au constat "on se rapproche d'After Effects/Premiere Pro" (§13.3),
+recherche d'une base existante à reprendre pour gagner du temps sur le
+montage/la synchro vidéo. **Même verdict que pour l'éditeur 3D (§12.12) :
+rien à reprendre tel quel.**
+
+| Projet | Licence | Verdict |
+|---|---|---|
+| Shotcut, Kdenlive, Olive, Natron, Lossless-Cut | GPL-2/3 | Écartés — incompatibles avec un futur produit fermé, même raison que §5.1/§12.11 |
+| OpenShot | "Other" (dérivée GPL + restrictions de marque) | Écarté, même famille de problème |
+| `mltframework/mlt` (moteur derrière Shotcut/Kdenlive) | **LGPL-2.1** | Seul réellement utilisable en lien dynamique dans un produit fermé, mais lib C++ — gros effort d'intégration (Rust/Tauri ou Python) pour un besoin aussi ciblé que le nôtre. Pas retenu pour l'instant. |
+| `remotion-dev/remotion` (54,5k★) | Licence perso "Other" — **payante au-delà d'une certaine taille d'entreprise** | ⚠️ Piège : a l'air gratuit/MIT, ne l'est pas pour un usage commercial au-delà d'un seuil — à écarter vu §12.11 |
+
+**Décision** : pas de nouvelle brique dans la stack. `ffmpeg` en
+**sous-processus externe** (jamais lié/embarqué) pour l'extraction audio
+d'un fichier vidéo, `wavesurfer.js` et `react-timeline-editor` (déjà
+retenus, §12.12) couvrent le reste.
+
 ---
 
 ## 13. Périmètre du v1 (MVP) — tranché
@@ -1055,3 +1074,30 @@ snap avancé, export vidéo, vue tableau/feuille de conduite, modes Focus/
 Suivi de trajectoire pour le sens (le v1 couvre au minimum la rotation
 manuelle en vue Dessus, point 1), code couleur d'état des acteurs, export
 "feuille perso" par acteur (déjà noté reporté en §12.8).
+
+### 13.3 Reporté explicitement en v1.1 — piste vidéo de référence
+
+Constat en cours de session : le produit se rapproche autant d'un
+**After Effects/Premiere Pro** (montage, synchro à une référence) que d'un
+Logic Pro/grandMA. Fonctionnalité identifiée, **explicitement reportée en
+v1.1** pour ne pas alourdir le premier jalon (§13.1) :
+
+- **Piste vidéo de référence**, distincte de la piste "LED/média" (qui sert à
+  *programmer* le contenu du show, pas à s'y synchroniser) — une vidéo de
+  référence pour caler la chorégraphie (répétition filmée, captation...).
+- **Fenêtre de lecture embarquée ou externe** — au choix. Le multi-fenêtre
+  natif de Tauri (déjà retenu en §12.11) rend l'option "fenêtre externe"
+  simple à faire, cohérent avec le choix de stack.
+- **Waveform de l'audio intégré à la vidéo**, affichée dans la timeline en
+  plus de la waveform du projet, pour synchroniser visuellement les deux.
+  Nécessite d'**extraire l'audio du fichier vidéo** avant de le passer à
+  `wavesurfer.js` (pas un simple fichier audio en entrée) — via `ffmpeg` en
+  **sous-processus externe** (pas lié/embarqué dans notre code : sa licence
+  ne concerne alors que le binaire appelé, pas notre produit — voir §12.16
+  pour la recherche de bases NLE open source, toutes écartées pour licence).
+- **Trim du clip vidéo** (rogner le début) et **positionnement en temps
+  négatif** sur la timeline, si la vidéo tournait déjà avant le début réel
+  du projet.
+- **Volume par piste** (fader de niveau, monitoring local uniquement — ne
+  part jamais en PSN) pour toute piste porteuse d'audio (projet + vidéo de
+  référence).
