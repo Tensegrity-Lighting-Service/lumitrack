@@ -1,24 +1,37 @@
-# Stancz → PSN — Dossier de conception
+# Éditeur de chorégraphie lumière — Dossier de conception
 
-Document de référence pour construire une appli compatible Stancz qui lit les
-projets `.stancz` et diffuse les positions en **PosiStageNet (PSN)** vers
-Capture / Depence / grandMA3.
+Document de référence de l'application qui programme la lumière en prévisu à
+partir d'un plan de déplacement de porteurs, et diffuse leurs positions en
+**PosiStageNet (PSN)** vers Capture / Depence / grandMA3.
 
-**Contexte** : chaque « danseur » Stancz représente en réalité un **projecteur
-porté par un humain**. L'objectif est de programmer la lumière en prévisu à
-partir d'une chorégraphie dessinée dans Stancz.
+**Contexte** : chaque acteur suivi représente en réalité un **projecteur porté
+par un humain**. L'objectif est de programmer la lumière en prévisu, ce n'est
+pas un outil de chorégraphie de danse.
 
-**État actuel** : l'application **v0.1 existe et fonctionne**
-(`stancz-psn-editor.zip`) — éditeur desktop natif Python/PySide6, import
-`.stancz`, timeline, entrée timecode, sortie PSN v2, 34 tests au vert.
-Voir **§11 — Ce qui est déjà construit** pour la passation.
+**État actuel** : une première version **v0.1 existe et fonctionne** — éditeur
+desktop natif Python/PySide6, import `.stancz` (un format tiers pris en charge
+en entrée, voir §1), timeline, entrée timecode, sortie PSN v2, 34 tests au
+vert. Voir **§11 — Ce qui est déjà construit** pour la passation.
+
+**§12 définit la V2**, un projet nettement plus complet que cette première
+version : scène 3D/2D unifiée, groupes et animations relatives, modèle de cue
+façon console lumière, validation de trajectoires, etc. L'import `.stancz` n'y
+est plus qu'une **option d'import initial parmi d'autres formats possibles** —
+plus la référence de conception du produit.
 
 Ce document reste la référence : format de fichier, protocole, décisions
 d'architecture, et ce qui n'est pas encore validé.
 
+⚠️ **Nom de code provisoire** : le nom actuel du dépôt/paquet (`stancz-psn-editor`
+/ `stanczpsn`) vient du point de départ historique et ne reflète plus le
+projet. Renommage pas encore fait, voir §12.15.
+
 ---
 
-## 1. Le format `.stancz` (rétro-ingénierie complète)
+## 1. Format d'import pris en charge : `.stancz` (rétro-ingénierie complète)
+
+Cette section documente un **format d'entrée pris en charge**, pas une
+référence de conception — voir §12 pour le produit.
 
 Un `.stancz` est un **fichier ZIP** (compression `store`). Vérifié sur
 `Hockey-World-Cup.stancz` (44 Mo, dont l'audio).
@@ -326,116 +339,29 @@ Le découplage **interpolateur / transformation / encodeur** est important :
 il permet de tester chaque étage isolément, et de remplacer la sortie PSN par
 autre chose (OSC, Art-Net vers DMX Movers) sans toucher au reste.
 
-### 5.1 Bases open source existantes (timeline + gestion d'objets)
+### 5.1 Historique — bases open source évaluées puis écartées
 
-Le travail coûteux n'est ni le parsing ni le PSN — c'est **l'éditeur** :
-canvas avec sélection/déplacement/snap/groupes, timeline avec keyframes et
-formes d'onde, undo/redo, gestion de projet. Quatre pistes pour ne pas le
-réécrire.
+Des bases open source tierces ont été évaluées à un stade antérieur du projet
+pour accélérer l'éditeur (canvas, timeline, gestion de projet). Toutes
+écartées : soit en licence **AGPL-3.0** (incompatible avec un futur produit
+fermé/commercial, voir §12.11), soit trop spécialisées pour un autre métier,
+soit d'une vitalité incertaine. **Décision actuelle : assemblage de briques
+permissives (MIT/BSD), détaillé en §12.11-12.12.**
 
-#### A. OpenMarch — le plus proche du besoin
+### 5.2 Remarque de fond
 
-<https://github.com/OpenMarch/OpenMarch> · <https://openmarch.com/>
+L'avantage différenciant de ce projet n'est pas l'éditeur 2D/3D en tant que
+tel — c'est **l'intégration lumière** : PSN, timecode, calage sur la prévisu,
+notion de projecteur porté plutôt que de danseur/exécutant. C'est ce qui
+justifie d'investir dans un éditeur complet plutôt que de se limiter à un
+convertisseur de format.
 
-Logiciel d'écriture de **drill** (marching band) : un terrain, des exécutants,
-des « sets » (= nos formations), une timeline calée sur la musique. C'est
-littéralement le même problème que Stancz, en open source.
+### 5.3 Choix de stack pour le moteur
 
-- **Licence** : AGPL-3.0. ⚠️ Il existe **aussi** un `LICENSE-internal.md` aux
-  termes non identifiés, un `CONTRIBUTOR_LICENSE_AGREEMENT.md` et un
-  `TRADEMARK.md` → **à lire avant tout fork**, ça sent le double-licensing.
-- **Stack** : Electron · React · Zustand · Radix + Tailwind · **fabric.js**
-  (canvas) · SQLite · monorepo Turbo/pnpm · Vitest/Playwright.
-- **Vitalité** : ~2 200 commits, version 0.0.22 (février 2026), 85 étoiles,
-  50 forks, Discord actif.
-- ✅ **Pour** : le canvas et la timeline existent et sont éprouvés par de vrais
-  utilisateurs ; TypeScript moderne ; architecture propre.
-- ⚠️ **Contre** : très **orienté marching band** — repères en yards, comptes
-  et mesures musicales plutôt que timecode libre. Adapter ça vers une scène
-  métrique + timecode SMPTE n'est pas cosmétique. Le projet annonce
-  explicitement qu'il ne fera **jamais de 3D**. Et 0.0.22 = jeune.
-
-#### B. Blender + BlenderDMX — le plus rapide à mettre en œuvre
-
-<https://blenderdmx.eu/> · <https://github.com/open-stage/blender-dmx>
-
-Blender est probablement le meilleur gestionnaire d'objets + timeline
-existant, et tu l'as déjà installé, avec le modèle du stade dedans.
-
-- BlenderDMX gère déjà **GDTF/MVR**, **Art-Net/sACN**, l'animation par
-  keyframes, et **reçoit** du PSN (jusqu'à 10 slots). Il faudrait écrire
-  l'**émission** PSN — soit exactement le module que j'ai déjà validé.
-- Les **F-curves** de Blender donnent gratuitement toutes les courbes
-  d'easing, en bien plus fin que les 6 courbes de Stancz.
-- ⚠️ Licence annoncée **GPLv3** sur leur site mais **MIT** sur la fiche
-  Blender Extensions → **à vérifier**. Les libs sous-jacentes (`pypsn`,
-  `pyGDTF`, `pyMVR`) sont en MIT.
-- ⚠️ **Ce n'est pas une appli « end user »** : un chorégraphe ne touchera pas
-  à Blender. Valable si l'utilisateur final, c'est toi.
-
-#### C. Theatre.js — la timeline pro à embarquer
-
-<https://www.theatrejs.com/> · <https://github.com/theatre-js/theatre>
-
-Éditeur de motion design pour le web : séquenceur à keyframes + éditeur de
-courbes, qui anime **n'importe quelle variable JS**. Nos points sont des
-objets `{x, y}` → on récupère toute l'UI de timeline sans l'écrire.
-
-- **Licence** : `@theatre/studio` est en **AGPL-3.0** ; le cœur est sous une
-  licence plus permissive. Les sources secondaires se contredisent (certaines
-  annoncent du MIT) → **vérifier le `LICENSE.md` du dépôt** avant de s'engager.
-- ⚠️ Le développement a été **déplacé dans un dépôt privé** « temporairement »
-  pour la 1.0, et ça date. **Vitalité à vérifier** avant de bâtir dessus.
-
-#### D. Assemblage de briques — le plus de contrôle
-
-| Besoin | Brique | Licence |
-|---|---|---|
-| Canvas 2D, objets, sélection, transformation | **fabric.js** ou **Konva.js** | MIT |
-| Forme d'onde + segments colorés par formation | **wavesurfer.js** ou **Peaks.js** (BBC) | BSD / LGPL |
-| Transport, BPM, calage au beat | **Tone.js** | MIT |
-| Appli desktop | **Electron** ou **Tauri** | MIT / Apache-2.0 |
-| PSN | module déjà écrit (Python) ou portage TS | — |
-
-Plus de travail, mais **aucune contrainte de licence** et un ajustement exact
-au besoin. C'est d'ailleurs à peu près la stack d'OpenMarch, reconstruite.
-
-### 5.2 La question qui tranche : diffusion ou usage interne ?
-
-L'AGPL-3.0 (options A et C) impose de **publier les sources** de toute version
-distribuée — et même simplement rendue accessible par le réseau.
-
-- **Outil interne / pour tes prods** → l'AGPL ne gêne pas. **Forker OpenMarch**
-  est alors la voie la plus rapide vers quelque chose d'utilisable.
-- **Produit à distribuer ou vendre, code fermé** → écarter A et C, partir sur
-  **D** (briques MIT).
-- **Outil personnel avant tout** → **B (Blender)** donne le plus de puissance
-  pour le moins d'effort.
-
-### 5.3 Remarque de fond
-
-Face à Stancz, ton avantage n'est pas l'éditeur — c'est **l'intégration
-lumière** : PSN, timecode, calage sur la prévisu, notion de projecteur porté
-plutôt que de danseur. Refaire un meilleur éditeur 2D est un gros chantier ;
-faire le **seul** éditeur qui parle aux consoles est un chantier plus court et
-sans concurrent. À arbitrer avant d'écrire la première ligne.
-
-### 5.4 Choix de stack pour le moteur — **décidé**
-
-| Option | Pour | Contre |
-|---|---|---|
-| ✅ **Python + PySide6 (Qt)** — *retenu* | vraie appli native Win/Mac, `pypsn` dispo, `core/` sans dépendance à Qt | packaging PyInstaller par plateforme |
-| **TypeScript** (si base OpenMarch) | un seul langage avec l'UI | encodeur PSN à porter (pas de lib TS mûre identifiée) |
-| C++ avec `psn-cpp` | implémentation de référence, timing solide | développement bien plus lourd |
-
-**Raison du choix** : besoin explicite d'une appli **desktop native, pas web**.
-Qt donne des fenêtres système réelles, et tout l'écosystème protocolaire
-(`pypsn`, `mido`, `pyGDTF`, `pyMVR`) est en Python.
-
-⚠️ **Réserve** : si l'interface produite avec Claude Design est du **HTML/CSS**,
-elle n'est pas réutilisable dans Qt. Dans ce cas, basculer sur Electron/Tauri
-et ne reporter que `core/` — qui a été volontairement écrit **sans aucune
-dépendance à Qt** précisément pour rendre ce pivot possible sans tout jeter.
+**Remplacé par §12.11** (scène 3D/2D à parité d'édition ⇒ Tauri + React +
+react-three-fiber, avec le `core/` Python actuel conservé en sidecar). Cette
+section décidait initialement Python + PySide6 seul ; devenu obsolète dès que
+la 3D éditable est passée d'optionnelle à prioritaire.
 
 ---
 
@@ -443,7 +369,7 @@ dépendance à Qt** précisément pour rendre ce pivot possible sans tout jeter.
 
 | Besoin | État | Notes |
 |---|---|---|
-| Lecture `.stancz` | ✅ fait et testé | `core/project.py::import_stancz` |
+| Import `.stancz` (option d'import initial) | ✅ fait et testé | `core/project.py::import_stancz` |
 | Timeline (lecture/pause/scrub) | ✅ fait | widget natif, blocs de formations, playhead |
 | Saisie **timecode** | ✅ fait | `HH:MM:SS.mmm`, `MM:SS`, secondes, virgule décimale |
 | **Timecode entrant** | ✅ Art-Net TC + MTC | LTC toujours non implémenté (§8) |
@@ -453,10 +379,10 @@ dépendance à Qt** précisément pour rendre ce pivot possible sans tout jeter.
 | Édition des positions | ✅ fait | points déplaçables, écrits dans la formation active |
 | Format de projet natif | ✅ `.spsn` | JSON versionné et diffable |
 | Application native Win/Mac | ✅ PySide6 + spec PyInstaller | **binaires jamais compilés ni testés** |
-| Forme d'onde audio sur la timeline | ❌ à faire | Stancz l'a ; utile pour caler à l'oreille |
-| Vue 3D | ❌ | Capture fait déjà la 3D — probablement inutile |
-| Undo / redo | ❌ à faire | manque criant dès le premier usage réel |
-| Groupes de points | ❌ à faire | `groups[]` de Stancz jamais observé rempli |
+| Forme d'onde audio sur la timeline | ❌ à faire | utile pour caler à l'oreille ; voir §12.11 (`wavesurfer.js`) |
+| Vue 3D | ↻ reclassé | plan initial "probablement inutile" révisé — voir §12.4 (3D prioritaire, 4 caméras) |
+| Undo / redo | ❌ à faire | manque criant dès le premier usage réel — confirmé obligatoire en §12.8 |
+| Groupes de points | ↻ reclassé | conception complète en §12.2 (appartenance multiple, animation relative, LTP) |
 
 ---
 
@@ -590,7 +516,7 @@ réécrire le moteur. À ne pas casser.
 
 ### 11.2 Décisions d'implémentation à connaître
 
-- **Unités internes = centimètres**, origine coin haut-gauche, comme Stancz.
+- **Unités internes = centimètres**, origine coin haut-gauche.
   La conversion en mètres n'a lieu **qu'à la sortie**, dans `OutputTransform`.
 - **La scène du canvas est en centimètres** : `QGraphicsView` fait le zoom, on
   raisonne toujours en dimensions réelles.
@@ -636,19 +562,22 @@ timeline évaluée, 92 trackers PSN construits et redécodés.
 
 ### 11.5 Chantiers suivants, par ordre de valeur
 
+⚠️ Liste historique (état v0.1). **La feuille de route à jour est le §12**,
+qui remplace et dépasse largement ce qui suit.
+
 1. **Undo / redo** — absent, et ça se sentira dès la première session
    d'édition sérieuse. `QUndoStack` s'intègre naturellement à Qt.
-2. **Forme d'onde audio sur la timeline** — l'audio est déjà extrait du
-   `.stancz` (`Project.audio_path`) mais n'est ni lu ni affiché. C'est le
-   principal manque face à Stancz pour caler à l'oreille.
+2. **Forme d'onde audio sur la timeline** — l'audio est déjà extrait de
+   l'import (`Project.audio_path`) mais n'est ni lu ni affiché. Manque
+   important pour caler les transitions à l'oreille.
 3. **Lecture audio synchronisée** — `QtMultimedia` (exclu du spec PyInstaller
    pour l'instant : à réintégrer si on l'utilise).
 4. **Sélection multiple et outils de formation** — aligner, répartir, cercle,
-   ligne, V, grille. C'est ce qui fait gagner du temps dans Stancz.
+   ligne, V, grille. Fait gagner beaucoup de temps en édition.
 5. **Sélecteur d'interface réseau par liste** plutôt que saisie d'IP à la main.
 6. **Groupes de points** — dépend de la question 3 du §9.
-7. **Export `.stancz`** — pour l'aller-retour avec Stancz. L'import existe,
-   l'export non.
+7. **Export `.stancz`** — pour l'aller-retour avec ce format d'import.
+   L'import existe, l'export non.
 
 ### 11.6 Pièges connus dans le code actuel
 
@@ -669,17 +598,18 @@ timeline évaluée, 92 trackers PSN construits et redécodés.
 
 ---
 
-## 12. Session de conception fonctionnelle (2026-07) — V2, au-delà de l'import Stancz
+## 12. Session de conception fonctionnelle (2026-07) — V2
 
 **Contexte** : session de planification pure (aucun code écrit) menée pour définir
-ce que doit devenir l'outil au-delà de "importer un `.stancz` et sortir du PSN".
-Objectif affiché : un livrable en 24h — jugé irréaliste pour le périmètre complet
-ci-dessous (voir §12.13) ; on vise un **MVP restreint**, le reste devient feuille de
-route.
+ce que doit devenir l'outil — un produit nettement plus complet que la V1, pour
+lequel l'import `.stancz` du §1 n'est plus qu'une option d'entrée parmi d'autres,
+plus la référence de conception. Objectif affiché : un livrable en 24h — jugé
+irréaliste pour le périmètre complet ci-dessous (voir §12.13) ; on vise un
+**MVP restreint**, le reste devient feuille de route.
 
 ### 12.1 Modèle de données : cue/activation (remplace la "Formation" pure)
 
-Le modèle séquentiel cumulatif de Stancz (§1.4) est **insuffisant** dès qu'on veut
+Le modèle séquentiel cumulatif du format d'import (§1.4) est **insuffisant** dès qu'on veut
 des mouvements décalés/parallèles (l'équivalent de plusieurs playbacks de console
 qui tournent en même temps, un `Go` n'attendant pas la fin du précédent). Nouveau
 modèle, pensé comme une **cue lumière** :
@@ -786,15 +716,15 @@ leur position.
      automatiquement la tangente du déplacement.
   3. **Manuel/fixe** (hypothèse, non confirmée explicitement) — un cap choisi à la
      main, indépendant d'un point de focus ou d'une trajectoire.
-- **Tracé vectoriel des trajectoires** — étend la "poignée de mi-parcours" de
-  Stancz (une seule courbure) vers un vrai outil façon Illustrator : plusieurs
+- **Tracé vectoriel des trajectoires** — dépasse la simple courbe à un point
+  médian du format d'import vers un vrai outil façon Illustrator : plusieurs
   points de contrôle/Bézier. Rend le mode "suivi de trajectoire" du sens
   réellement utile, la tangente variant le long d'un tracé riche.
 
 ### 12.6 Visualisation des trajectoires
 
 - **Mode piloté par la sélection de bloc**, pas par un bouton séparé : aucun bloc
-  sélectionné → vue live (temps réel, comme Stancz). Un bloc sélectionné → mode
+  sélectionné → vue live (temps réel). Un bloc sélectionné → mode
   édition de ce bloc, trajectoires statiques disponibles.
 - **Calcul du point de départ d'une trajectoire = résoudre la vraie chaîne de
   tracking** de cet acteur (le dernier bloc qui l'a réellement activé), **pas**
@@ -822,9 +752,9 @@ leur position.
 
 - Sélection multiple par **lasso**, **copier/coller**, drag.
 - **Snap/magnet** sur la grille + sur des **repères/guides spatiaux** (distinct
-  des "Repères" de timeline du §12.8) — Stancz a déjà un champ `snapDistance`
-  dans son format, dont le comportement exact reste à observer (§9, question
-  ouverte non traitée dans cette session).
+  des "Repères" de timeline du §12.8) — le format d'import a déjà un champ
+  `snapDistance` (§1.2), dont le comportement exact reste à observer (§9,
+  question ouverte non traitée dans cette session).
 - **Alignement/distribution façon Illustrator + Capture** :
   - référence : bounding box de la sélection, centre de la scène/terrain, un
     acteur "ancre" (dernier sélectionné), ou le pivot manuel façon compas
@@ -832,8 +762,8 @@ leur position.
   - axes X (gauche/centre/droite), Y-profondeur (haut/centre/bas), Z-hauteur en
     3D (bas/milieu/haut) ;
   - distribution par espacement égal, ou par nombre le long d'une ligne/arc/
-    cercle — recoupe directement les formations prédéfinies déjà vues chez
-    Stancz (ligne, cercle, V, grille), même moteur des deux côtés ;
+    cercle (ligne, cercle, V, grille) — même moteur que les formations
+    prédéfinies ;
   - miroir/flip de sélection, rotation autour du pivot ;
   - snap au sol/grille en plus du snap 2D.
 - **Saisie numérique de la taille du terrain** (largeur/profondeur) + application
@@ -859,9 +789,9 @@ leur position.
 - **Vue tableau / feuille de conduite** façon "Table view" de Myelin Director ou
   feuille de cue de console : liste plate de tous les blocs/activations, éditable
   en grille, exportable en PDF pour la régie — complète la vue graphique, ne la
-  remplace pas. Recoupe l'export "Scene sheets (PDF)" déjà vu chez Stancz.
-- **Export vidéo** (recoupe l'export MP4 de Stancz), voir §12.6 pour le
-  comportement des trajectoires pendant l'export.
+  remplace pas.
+- **Export vidéo** (MP4), voir §12.6 pour le comportement des trajectoires
+  pendant l'export.
 - **Export "feuille perso" par acteur** — un document montrant uniquement le
   trajet d'UN acteur à travers tout le show, pour les porteurs de projecteurs pas
   forcément entraînés à lire un plan de scène global. **Reporté, pas prioritaire
@@ -883,8 +813,7 @@ vérification en direct qui rend la vue 3D libre secondaire non-critique (§12.4
 
 ### 12.10 Interface générale — disposition
 
-Inspirée de Myelin Director (lui-même inspiré de Logic Pro) et de la capture
-d'écran de l'éditeur Stancz réel :
+Inspirée de Myelin Director (lui-même inspiré de Logic Pro) :
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -903,16 +832,14 @@ d'écran de l'éditeur Stancz réel :
 ```
 
 - **Roster à gauche** (recherche/filtre, statut sur scène/hors scène, pastille
-  d'état mauve/vert cyan, Créer/Importer) — confirmé conforme à l'UI Stancz
-  réelle vue en capture d'écran.
+  d'état mauve/vert cyan, Créer/Importer).
 - **Inspecteur contextuel à droite** — palette d'objets quand rien n'est
-  sélectionné, propriétés dès qu'un objet est sélectionné (confirmé conforme à
-  Stancz : couleur, largeur, profondeur, hauteur 3D, rotation pour un accessoire).
+  sélectionné, propriétés dès qu'un objet est sélectionné (couleur, largeur,
+  profondeur, hauteur 3D, rotation pour un accessoire).
 - **Timeline multi-pistes** façon Logic/Myelin (pistes empilées par nature
-  d'objet), plutôt qu'une seule piste fourre-tout comme Stancz. Pistes de groupe
-  repliables/colorées, nesting limité à 2 niveaux (repris de Myelin).
-  Easing sélectionnable directement sur le bloc, pas seulement dans l'inspecteur
-  (confirmé conforme à Stancz).
+  d'objet, pas une seule piste fourre-tout). Pistes de groupe repliables/
+  colorées, nesting limité à 2 niveaux (repris de Myelin). Easing sélectionnable
+  directement sur le bloc, pas seulement dans l'inspecteur.
 - **Panneau Output (PSN)** en dock séparé, pas toujours visible pendant
   l'édition — sauf que l'envoi lui-même doit pouvoir rester actif en tâche de
   fond pendant l'édition (§12.9), indépendamment de la visibilité du panneau.
@@ -993,3 +920,61 @@ matures et éprouvées, pas d'un template complet.
   noms des courbes d'easing, `stageFloorTexture`, `groups[]`, comportement d'un
   point absent des formations précédentes) reste entièrement d'actualité et n'a
   pas été traité dans cette session.**
+
+### 12.14 Sauvegarde de projet — bundle incrémental (médias dédoublonnés)
+
+Le format `.spsn` actuel (v0.1) est un unique fichier JSON. Insuffisant dès que
+les sauvegardes deviennent fréquentes (autosave, undo/redo persistant,
+versions successives) si les médias (audio, terrain 3D glTF, images de sol)
+sont recopiés à chaque sauvegarde — un show avec plusieurs dizaines de Mo
+d'audio ne doit pas être dupliqué à chaque enregistrement.
+
+**Principe : séparer l'état de projet (léger, texte) des médias (lourds,
+binaires), ces derniers stockés une seule fois par contenu.**
+
+```
+MonShow.bundle/
+├── manifest.json          format, version, métadonnées projet
+├── media/
+│   ├── <sha256>.m4a        audio, stocké une seule fois
+│   ├── <sha256>.gltf       terrain 3D importé, stocké une seule fois
+│   └── <sha256>.png        image de sol, stockée une seule fois
+└── versions/
+    ├── 0001.json            snapshot complet de l'état (positions, cues,
+    │                        groupes, orientation...), référence les médias
+    │                        par hash — ne les embarque jamais
+    ├── 0002.json
+    └── latest -> 0002.json  pointeur vers la version courante
+```
+
+- **Médias adressés par contenu (hash SHA-256)** : importer deux fois le même
+  fichier audio, ou ré-enregistrer sans changer l'audio, n'en stocke jamais
+  deux copies.
+- **L'état de projet reste un JSON léger et textuel** — c'est lui qui est
+  versionné à chaque sauvegarde, pas les médias. Petit et diffable (propriété
+  déjà visée pour `.spsn` en v0.1), garder des dizaines de versions ne coûte
+  presque rien en disque.
+- **Undo/redo persistant et autosave "gratuits"** en conséquence : chaque
+  version est une capture bon marché ; seuls les médias sont coûteux, et ils
+  ne sont jamais dupliqués.
+- **Nettoyage non détaillé ici** : une opération de purge (supprimer les
+  médias non référencés par aucune version conservée) sera nécessaire à terme
+  pour éviter une croissance illimitée de `media/` — dépend d'une politique de
+  rétention des versions pas encore définie (combien en garder ? pendant
+  combien de temps ?).
+- **Export en fichier unique** : un mode "empaqueter en un seul fichier" (zip
+  du bundle complet, sur le même principe que `.stancz`) resterait utile pour
+  le partage/la sauvegarde externe, en plus du dossier actif utilisé pendant
+  l'édition.
+
+### 12.15 Renommage du projet — pas encore fait
+
+Le nom de code actuel (dépôt `stancz-psn-editor`, paquet Python `stanczpsn`,
+titre du présent document jusqu'à cette session) vient du point de départ
+historique. Cette session l'a retiré de la **conception** (§1-12 ci-dessus ne
+présentent plus le format `.stancz` que comme une option d'import), mais **le
+code et le nom du dépôt n'ont pas été renommés** — ça reste `stancz-psn-editor`
+/ `stanczpsn` partout dans `pyproject.toml`, les imports, le CLI
+(`stanczpsn`), `packaging/stanczpsn.spec`, et l'URL du dépôt GitHub. Renommer
+ça touche des identifiants réels (pas que de la prose) et suppose un nom de
+remplacement — pas encore choisi.
