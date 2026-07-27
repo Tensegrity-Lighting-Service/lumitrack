@@ -22,6 +22,13 @@ plus la référence de conception du produit.
 Ce document reste la référence : format de fichier, protocole, décisions
 d'architecture, et ce qui n'est pas encore validé.
 
+**L'esprit du produit, en une phrase** : un mélange **Logic Pro / Myelin
+Director** (structure de la timeline — pistes empilées, blocs à durée réelle,
+waveform + repères) × **After Effects** (système de trajectoires — chemin
+spatial séparé du timing temporel, auto-orientation le long du chemin) ×
+**grandMA** (vocabulaire et sémantique de cue — activation, tracking/LTP,
+focus, fade/dwell, groupes). Détaillé en §12.
+
 ---
 
 ## 1. Format d'import pris en charge : `.stancz` (rétro-ingénierie complète)
@@ -979,3 +986,72 @@ détachée de Stancz (§12 ci-dessus). Renommé en **Lumitrack** :
 - L'ancien nom ne subsiste que là où il désigne factuellement autre chose :
   le format d'import `.stancz` lui-même (§1), et l'ancien prototype web
   archivé `stancz-psn.zip` (§10, obsolète, gardé pour mémoire).
+
+---
+
+## 13. Périmètre du v1 (MVP) — tranché
+
+Résout l'item laissé ouvert en §12.13 ("contenu exact du MVP non défini").
+
+### 13.1 Dans le v1
+
+1. **Modèle cue/activation intégral (§12.1)**, y compris les **activations
+   relatives** (translation/rotation autour d'un pivot manuel, appliquées à
+   une sélection ad hoc). Chaque acteur de la sélection obtient sa **propre
+   position absolue** à chaque instant — une rotation de groupe produit donc
+   un **arc individuel par acteur** (rayon différent selon la distance au
+   pivot), pas un déplacement rigide partagé.
+2. **Système de groupes complet (§12.2) reporté en v1.1** : pas de groupes
+   nommés réutilisables, pas d'appartenance multiple persistante, pas de
+   résolution LTP entre groupes dans le v1. Seules les activations relatives
+   ad hoc du point 1 sont disponibles.
+3. **Vue Dessus uniquement** pour l'édition : déplacement + rotation (lacet).
+   Face/Côté/3D libre (§12.4) reportées.
+4. **Import glTF obligatoire pour le terrain** — fichier de test fourni :
+   `Sources/Belfius_Hockey_Arena.glb` (glTF 2.0 binaire valide, vérifié).
+   Le terrain générique par défaut n'est pas nécessaire pour ce jalon.
+5. **Timeline** : blocs éditables (créer/déplacer/redimensionner), audio +
+   waveform, entrée timecode (Art-Net TC / MTC, déjà écrit en v0.1).
+6. **Heure de départ TC configurable sur le projet**, plus un **switch
+   d'affichage** dans la timeline/transport entre **temps projet** (relatif,
+   00:00:00 au démarrage) et **temps TC** (horloge réelle du show, décalée de
+   l'heure de départ).
+7. **Synchronisation backend-autoritaire obligatoire** (§12.11) : le `core/`
+   Python reste seul maître de l'horloge et de l'interpolation
+   (`Transport`/`PsnBroadcaster`, déjà écrit et testé) ; le frontend affiche
+   ce qu'on lui pousse, il ne recalcule jamais indépendamment. Élimine par
+   construction le risque de dérive entre ce qui s'affiche et ce qui part
+   réellement en PSN.
+8. **Sauvegarde/chargement en bundle incrémental (§12.14), obligatoire.**
+   Tous les médias — **audio ET terrain glTF** — adressés par contenu (hash),
+   embarqués dans le bundle, jamais dupliqués, jamais reconvertis dans un
+   format propriétaire (stockés tels quels). *(Corrige la piste "terrain en
+   référence externe" envisagée puis abandonnée dans cette même session.)*
+9. **Répartition des réglages** :
+   - **Dans le bundle** (voyage avec le projet) : heure de départ TC,
+     réglages de transformation de repère (origine, inversion d'axes), nom
+     système PSN, IP/port multicast cible.
+   - **Hors bundle**, préférences locales machine (§12.7) : device audio/
+     MIDI, interface réseau à utiliser.
+10. **Undo/redo** — reconfirmé obligatoire.
+11. **Représentation des trajectoires** : chemin spatial (Bézier à points de
+    contrôle pour un tracé dessiné à la main, **ou formule paramétrique
+    exacte** pour un arc généré par une activation relative en rotation) —
+    jamais convertir un arc généré en Bézier tant qu'on n'y touche pas
+    manuellement. Timing temporel (courbe d'automation de fade sur le bloc,
+    point 1) toujours séparé du chemin spatial — parallèle direct avec
+    Position path / Graph Editor d'After Effects.
+
+**Esprit de référence** (voir aussi l'intro du document) : Logic Pro/Myelin
+pour la structure de timeline, After Effects pour les trajectoires, grandMA
+pour le vocabulaire de cue.
+
+### 13.2 Hors v1 — non retranché explicitement dans cette session
+
+Ni confirmés ni écartés pour ce jalon précis ; traiter comme **reportés par
+défaut** jusqu'à décision contraire : détection de collision, vérification/
+dégradé de vitesse, outils d'alignement/distribution, lasso/copier-coller,
+snap avancé, export vidéo, vue tableau/feuille de conduite, modes Focus/
+Suivi de trajectoire pour le sens (le v1 couvre au minimum la rotation
+manuelle en vue Dessus, point 1), code couleur d'état des acteurs, export
+"feuille perso" par acteur (déjà noté reporté en §12.8).
