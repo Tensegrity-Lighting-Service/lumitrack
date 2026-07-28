@@ -2,14 +2,27 @@
 // Face/Côté/3D libre (§12.4) are deferred. One react-three-fiber scene
 // reused across future camera presets, per §12.4's "un seul environnement
 // 3D, quatre caméras" — this file only wires up the first of the four.
-import { Suspense, useMemo, useRef } from 'react'
+//
+// Editing model: click an actor to select it (Roster/Inspector follow).
+// With a Cue selected in the timeline, dragging a selected actor writes its
+// new x/y straight into that Cue's Activation (§13.1 point 3, "déplacement
+// + rotation" in Vue Dessus) — there's nowhere else for a position edit to
+// go, since Activations only exist inside a Cue. Without a Cue selected,
+// actors are select-only. MapControls (pan/zoom) is disabled for the
+// duration of a drag so the two gestures never fight over the same mouse
+// movement.
+import { Suspense, useEffect, useMemo, useRef } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
+import type { ThreeEvent } from '@react-three/fiber'
 import { OrthographicCamera, MapControls, Grid, useGLTF } from '@react-three/drei'
+import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { convertFileSrc } from '@tauri-apps/api/core'
+import { sidecar } from '../sidecar'
 import type { Project, Pose } from '../types'
 
 const CM_TO_M = 0.01
+const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
 
 /** Stage (x_cm, y_cm depth, z_cm height) -> three.js world (X, Y up, Z). */
 function stageToWorld(x_cm: number, y_cm: number, z_cm: number): [number, number, number] {
@@ -31,12 +44,24 @@ function GenericFloor({ widthCm, heightCm }: { widthCm: number; heightCm: number
   )
 }
 
-function Actor({ pose, color, selected }: { pose: Pose; color: string; selected: boolean }) {
+function Actor({ pose, color, selected, draggable, onPointerDown }: {
+  pose: Pose
+  color: string
+  selected: boolean
+  draggable: boolean
+  onPointerDown: (e: ThreeEvent<PointerEvent>, worldY: number) => void
+}) {
   const [x_cm, y_cm, z_cm, yaw_deg] = pose
   const [x, y, z] = stageToWorld(x_cm, y_cm, z_cm)
   const yawRad = THREE.MathUtils.degToRad(yaw_deg)
   return (
-    <group position={[x, y, z]} rotation={[0, -yawRad, 0]}>
+    <group
+      position={[x, y, z]}
+      rotation={[0, -yawRad, 0]}
+      onPointerDown={(e) => onPointerDown(e, y)}
+      onPointerOver={() => { document.body.style.cursor = draggable ? 'grab' : 'pointer' }}
+      onPointerOut={() => { document.body.style.cursor = 'auto' }}
+    >
       <mesh>
         <sphereGeometry args={[0.18, 20, 16]} />
         <meshStandardMaterial color={color} emissive={selected ? color : '#000000'} emissiveIntensity={selected ? 0.6 : 0} />
@@ -46,11 +71,16 @@ function Actor({ pose, color, selected }: { pose: Pose; color: string; selected:
         <coneGeometry args={[0.08, 0.28, 12]} />
         <meshStandardMaterial color={color} />
       </mesh>
+      {/* Larger invisible hit target: the visible marker is small, dragging
+          shouldn't require pixel-perfect aim on it. */}
+      <mesh visible={false}>
+        <sphereGeometry args={[0.32, 8, 8]} />
+      </mesh>
     </group>
   )
 }
 
-function Rig({ widthCm, heightCm }: { widthCm: number; heightCm: number }) {
+function CameraRig({ widthCm, heightCm }: { widthCm: number; heightCm: number }) {
   const { camera } = useThree()
   const initialised = useRef(false)
   if (!initialised.current) {
@@ -62,21 +92,85 @@ function Rig({ widthCm, heightCm }: { widthCm: number; heightCm: number }) {
   return null
 }
 
-export function Scene({ project, positions, selectedPointId }: {
+/** Everything that needs useThree() (raycasting against the actual camera)
+ * lives here, as a child of <Canvas>. Owns the one active drag gesture:
+ * pointerdown on an actor arms it, pointermove raycasts against a
+ * horizontal plane at the actor's height and throttles setActivation calls,
+ * pointerup releases MapControls again. */
+function SceneContent({ project, positions, selectedPointId, selectedCueId, onSelectPoint }: {
   project: Project
   positions: Record<string, Pose>
   selectedPointId: string | null
+  selectedCueId: string | null
+  onSelectPoint: (pointId: string) => void
 }) {
   const widthM = project.stageWidthCm * CM_TO_M
   const heightM = project.stageHeightCm * CM_TO_M
   const span = Math.max(widthM, heightM)
 
+  const { camera, raycaster, gl } = useThree()
+  const controlsRef = useRef<MapControlsImpl>(null)
+  const dragRef = useRef<{ pointId: string; planeY: number; lastSent: number } | null>(null)
+
+  useEffect(() => {
+    const dom = gl.domElement
+    const plane = new THREE.Plane()
+    const hit = new THREE.Vector3()
+
+    const toNdc = (e: PointerEvent) => {
+      const rect = dom.getBoundingClientRect()
+      return new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      )
+    }
+
+    const endDrag = () => {
+      if (!dragRef.current) return
+      dragRef.current = null
+      if (controlsRef.current) controlsRef.current.enabled = true
+    }
+
+    const onMove = (e: PointerEvent) => {
+      const drag = dragRef.current
+      if (!drag || !selectedCueId) return
+      const now = performance.now()
+      if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
+      drag.lastSent = now
+      plane.setComponents(0, 1, 0, -drag.planeY)
+      raycaster.setFromCamera(toNdc(e), camera)
+      if (raycaster.ray.intersectPlane(plane, hit)) {
+        sidecar.setActivation(selectedCueId, drag.pointId, {
+          targetXCm: hit.x / CM_TO_M,
+          targetYCm: hit.z / CM_TO_M,
+        })
+      }
+    }
+
+    dom.addEventListener('pointermove', onMove)
+    dom.addEventListener('pointerup', endDrag)
+    dom.addEventListener('pointerleave', endDrag)
+    return () => {
+      dom.removeEventListener('pointermove', onMove)
+      dom.removeEventListener('pointerup', endDrag)
+      dom.removeEventListener('pointerleave', endDrag)
+    }
+  }, [gl, camera, raycaster, selectedCueId])
+
+  const handleActorPointerDown = (e: ThreeEvent<PointerEvent>, worldY: number, pointId: string) => {
+    e.stopPropagation()
+    onSelectPoint(pointId)
+    if (!selectedCueId) return
+    dragRef.current = { pointId, planeY: worldY, lastSent: 0 }
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
   return (
-    <Canvas>
+    <>
       <OrthographicCamera makeDefault position={[widthM / 2, span * 2, heightM / 2]}
         zoom={60} near={0.1} far={span * 20} />
-      <Rig widthCm={project.stageWidthCm} heightCm={project.stageHeightCm} />
-      <MapControls target={[widthM / 2, 0, heightM / 2]} enableRotate={false} screenSpacePanning />
+      <CameraRig widthCm={project.stageWidthCm} heightCm={project.stageHeightCm} />
+      <MapControls ref={controlsRef} target={[widthM / 2, 0, heightM / 2]} enableRotate={false} screenSpacePanning />
       <ambientLight intensity={1.1} />
       <directionalLight position={[widthM, span * 3, heightM]} intensity={0.6} />
 
@@ -101,10 +195,30 @@ export function Scene({ project, positions, selectedPointId }: {
         const pose = positions[point.id]
         if (!pose) return null
         return (
-          <Actor key={point.id} pose={pose} color={point.color}
-            selected={point.id === selectedPointId} />
+          <Actor
+            key={point.id}
+            pose={pose}
+            color={point.color}
+            selected={point.id === selectedPointId}
+            draggable={Boolean(selectedCueId)}
+            onPointerDown={(e, worldY) => handleActorPointerDown(e, worldY, point.id)}
+          />
         )
       })}
+    </>
+  )
+}
+
+export function Scene(props: {
+  project: Project
+  positions: Record<string, Pose>
+  selectedPointId: string | null
+  selectedCueId: string | null
+  onSelectPoint: (pointId: string) => void
+}) {
+  return (
+    <Canvas>
+      <SceneContent {...props} />
     </Canvas>
   )
 }

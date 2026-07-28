@@ -111,7 +111,13 @@
   display: flex; gap: 6px; padding: 6px 10px;
   border-bottom: 1px solid #2b2f38;
 }
-.cue-timeline .timeline-editor { flex: 1; }
+/* The library defaults .timeline-editor to a hardcoded 600x600px box.
+   Left unconstrained, that renders far taller than our dock, gets clipped,
+   and the leftover area (in the widget's own #191b1d background, slightly
+   off from our dock's #17191f) reads as a separate panel/scrollbar below
+   the actual blocks. We size it to content instead via the `style` prop
+   (see CueTimeline.tsx), so this just guarantees it never exceeds the dock. */
+.cue-timeline .timeline-editor { width: 100%; max-height: 100%; }
 
 .cue-block {
   display: flex; align-items: center; justify-content: space-between;

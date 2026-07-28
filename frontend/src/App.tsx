@@ -99,7 +99,13 @@ function App() {
       </aside>
 
       <main className="scene-view">
-        <Scene project={project} positions={positions} selectedPointId={selectedPointId} />
+        <Scene
+          project={project}
+          positions={positions}
+          selectedPointId={selectedPointId}
+          selectedCueId={selectedCueId}
+          onSelectPoint={setSelectedPointId}
+        />
       </main>
 
       <aside className="inspector">

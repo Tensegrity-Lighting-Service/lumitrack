@@ -139,6 +139,13 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
     msg_type = msg.get("type")
 
     if msg_type == "transport":
+        # Never falls through to a project broadcast: `seek` fires on every
+        # pointer-move of a cursor drag, and none of play/pause/seek touch
+        # project data (points/cues/activations) — the tick loop already
+        # pushes the new playhead position on its own. Broadcasting the full
+        # project here too turned a mouse drag into a request storm that
+        # tripped React's "Maximum update depth exceeded" guard in practice
+        # (observed 2026-07-28).
         action = msg.get("action")
         if action == "play":
             session.transport.play()
@@ -148,7 +155,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             session.transport.seek(float(msg.get("tMs", 0.0)))
         else:
             return {"type": "error", "message": f"Unknown transport action {action!r}"}
-        return None
+        return {"type": "ack"}
 
     if msg_type == "psn_start":
         if not session.broadcaster.start():

@@ -50,6 +50,9 @@ class SidecarClient {
       } else if (msg.type === 'error') {
         this.lastError = msg.message
         console.error('[sidecar]', msg.message)
+      } else {
+        // 'ack' / 'saved': no exposed state changed, skip the re-render.
+        return
       }
       this.emit()
     }

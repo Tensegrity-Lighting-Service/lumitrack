@@ -82,4 +82,8 @@ export interface SavedMessage {
   path: string
 }
 
-export type ServerMessage = ProjectMessage | TickMessage | ErrorMessage | SavedMessage
+export interface AckMessage {
+  type: 'ack'
+}
+
+export type ServerMessage = ProjectMessage | TickMessage | ErrorMessage | SavedMessage | AckMessage
