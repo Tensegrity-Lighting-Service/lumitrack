@@ -6,6 +6,7 @@
 //! aucun comportement n'est "amélioré" pendant le port — d'abord la parité,
 //! ensuite seulement les évolutions.
 
+pub mod curve;
 pub mod easing;
 pub mod model;
 pub mod psn;

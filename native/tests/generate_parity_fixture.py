@@ -16,6 +16,28 @@ def rand_project(n_points, n_cues):
     p.points = [Point(id=f"p{i}", name=f"P{i}", default_height_cm=random.choice([0.0, 120.0]))
                 for i in range(n_points)]
     easings = ["linear", "smooth", "ease-in", "ease-out", "bounce", "spring", "exponential"]
+
+    def rand_curve():
+        """Courbe du graph editor à 2-4 nœuds, poignées aléatoires (parfois
+        absentes), overshoot possible — couvre le chemin eval_curve."""
+        n = random.choice([2, 2, 3, 4])
+        ts = sorted({0.0, 1.0, *(round(random.uniform(0.1, 0.9), 2) for _ in range(n - 2))})
+        nodes = []
+        for i, t in enumerate(ts):
+            v = 0.0 if i == 0 else (1.0 if i == len(ts) - 1 else round(random.uniform(-0.2, 1.3), 2))
+            def handle(direction):
+                if random.random() < 0.3:
+                    return None, None
+                span = (ts[min(i + 1, len(ts) - 1)] - ts[max(i - 1, 0)]) or 0.3
+                return (round(t + direction * random.uniform(0.0, span / 2), 3),
+                        round(v + random.uniform(-0.4, 0.4), 3))
+            in_t, in_v = handle(-1)
+            out_t, out_v = handle(+1)
+            nodes.append({"t": t, "v": v, "inT": in_t, "inV": in_v,
+                          "outT": out_t, "outV": out_v,
+                          "mode": random.choice(["smooth", "symmetric", "corner"])})
+        return nodes
+
     for c in range(n_cues):
         cue = Cue(id=f"c{c}", name=f"C{c}",
                   start_ms=round(random.uniform(0, 20000), 1),
@@ -31,6 +53,12 @@ def rand_project(n_points, n_cues):
                     target_yaw_deg=maybe(-360, 720, 0.4),
                     fade_ms=round(random.uniform(0, 5000), 1),
                     easing=random.choice(easings),
+                    # ~40 % des activations portent des courbes sur un
+                    # sous-ensemble d'axes (le reste teste le repli easing).
+                    curves=({axis: rand_curve()
+                             for axis in random.sample(["x", "y", "z", "yaw"],
+                                                       random.randint(1, 3))}
+                            if random.random() < 0.4 else None),
                 )
         p.cues.append(cue)
     p.sort_cues()

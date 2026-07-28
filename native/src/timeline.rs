@@ -32,6 +32,7 @@ struct Keyframe {
     fade_end_ms: f64,
     value: f64,
     easing: String,
+    curve: Option<Vec<crate::curve::CurveNode>>,
     cue_id: String,
 }
 
@@ -49,6 +50,10 @@ fn axis_keyframes(project: &Project, point_id: &str, axis: Axis) -> Vec<Keyframe
                 fade_end_ms: cue.start_ms + act.fade_ms,
                 value,
                 easing: act.easing.clone(),
+                curve: act.curves.as_ref()
+                    .and_then(|c| c.get(axis.key()))
+                    .filter(|nodes| !nodes.is_empty())
+                    .cloned(),
                 cue_id: cue.id.clone(),
             })
         })
@@ -75,7 +80,12 @@ fn resolve_axis(kfs: &[Keyframe], t_ms: f64) -> Option<f64> {
         return Some(kf.value);
     }
     let progress = (t_ms - kf.start_ms) / (kf.fade_end_ms - kf.start_ms);
-    let eased = apply_easing(&kf.easing, progress);
+    // Port de `axis_progress` : courbe personnalisée si présente, sinon
+    // easing nommé.
+    let eased = match &kf.curve {
+        Some(nodes) => crate::curve::eval_curve(nodes, progress.clamp(0.0, 1.0)),
+        None => apply_easing(&kf.easing, progress),
+    };
     Some(origin + (kf.value - origin) * eased)
 }
 

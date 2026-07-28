@@ -12,6 +12,18 @@ export interface Point {
   defaultHeightCm: number
 }
 
+// Nœud de courbe du graph editor — même format que core/timeline.py
+// eval_curve et native/src/curve.rs (poignées Bézier absolues).
+export interface CurveNode {
+  t: number
+  v: number
+  inT: number | null
+  inV: number | null
+  outT: number | null
+  outV: number | null
+  mode: 'smooth' | 'symmetric' | 'corner'
+}
+
 export interface Activation {
   targetXCm: number | null
   targetYCm: number | null
@@ -20,6 +32,8 @@ export interface Activation {
   fadeMs: number
   easing: string
   orientationMode: 'manual' | 'path'
+  /** Courbes par axe (graph editor) ; axe absent = easing nommé. */
+  curves?: Partial<Record<'x' | 'y' | 'z' | 'yaw', CurveNode[]>> | null
 }
 
 export interface Cue {

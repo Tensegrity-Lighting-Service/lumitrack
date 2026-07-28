@@ -38,6 +38,10 @@ pub struct Activation {
     pub fade_ms: f64,
     #[serde(default = "default_easing")]
     pub easing: String,
+    /// Courbes du graph editor, par axe ("x"/"y"/"z"/"yaw") — absentes,
+    /// l'easing nommé s'applique (bundles existants inchangés).
+    #[serde(default)]
+    pub curves: Option<std::collections::HashMap<String, Vec<crate::curve::CurveNode>>>,
 }
 
 fn default_fade_ms() -> f64 { 1000.0 }

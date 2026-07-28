@@ -303,3 +303,89 @@ def test_bundle_roundtrip_dedupes_media_by_hash(tmp_path):
     assert back.audio_path and back.audio_path.endswith(".m4a")
     with open(back.audio_path, "rb") as fh:
         assert fh.read() == b"fake-audio-bytes"
+
+
+# ------------------------------------------------- courbes (graph editor) --
+
+def _curve_linear():
+    return [{"t": 0.0, "v": 0.0, "inT": None, "inV": None, "outT": None, "outV": None, "mode": "corner"},
+            {"t": 1.0, "v": 1.0, "inT": None, "inV": None, "outT": None, "outV": None, "mode": "corner"}]
+
+
+def _curve_ease_in_out():
+    # cubic-bezier(0.42, 0, 0.58, 1) en poignées absolues.
+    return [{"t": 0.0, "v": 0.0, "outT": 0.42, "outV": 0.0, "inT": None, "inV": None, "mode": "smooth"},
+            {"t": 1.0, "v": 1.0, "inT": 0.58, "inV": 1.0, "outT": None, "outV": None, "mode": "smooth"}]
+
+
+def test_eval_curve_linear_is_identity():
+    from lumitrack.core.timeline import eval_curve
+    for u in (0.0, 0.25, 0.5, 0.99, 1.0):
+        assert abs(eval_curve(_curve_linear(), u) - u) < 1e-6
+
+
+def test_eval_curve_endpoints_and_monotonic_ease():
+    from lumitrack.core.timeline import eval_curve
+    c = _curve_ease_in_out()
+    assert abs(eval_curve(c, 0.0)) < 1e-6
+    assert abs(eval_curve(c, 1.0) - 1.0) < 1e-6
+    # ease-in-out : lent au départ, rapide au milieu, symétrique.
+    assert eval_curve(c, 0.1) < 0.1
+    assert eval_curve(c, 0.9) > 0.9
+    assert abs(eval_curve(c, 0.5) - 0.5) < 1e-3
+    prev = -1.0
+    for i in range(21):
+        v = eval_curve(c, i / 20.0)
+        assert v >= prev - 1e-9
+        prev = v
+
+
+def test_eval_curve_multi_node_with_overshoot():
+    from lumitrack.core.timeline import eval_curve
+    # 3 nœuds : montée au-dessus de 1 (overshoot) puis redescente sur 1.
+    c = [{"t": 0.0, "v": 0.0, "outT": 0.1, "outV": 0.6, "inT": None, "inV": None, "mode": "corner"},
+         {"t": 0.5, "v": 1.2, "inT": 0.35, "inV": 1.2, "outT": 0.65, "outV": 1.2, "mode": "smooth"},
+         {"t": 1.0, "v": 1.0, "inT": 0.9, "inV": 1.0, "outT": None, "outV": None, "mode": "corner"}]
+    assert abs(eval_curve(c, 0.5) - 1.2) < 1e-6  # passe par le nœud central
+    assert eval_curve(c, 0.45) > 1.0             # dépassement effectif
+    assert abs(eval_curve(c, 1.0) - 1.0) < 1e-6
+
+
+def test_eval_curve_defensive():
+    from lumitrack.core.timeline import eval_curve
+    assert eval_curve([], 0.4) == 0.4            # pas de courbe -> identité
+    assert eval_curve([{"t": 0, "v": 5}], 0.4) == 0.4
+
+
+def test_resolution_uses_per_axis_curve():
+    from lumitrack.core.project import Project, Point, Cue, Activation
+    from lumitrack.core.timeline import resolve_positions
+    p = Project(name="t")
+    p.points.append(Point(id="p1", name="P1"))
+    # Courbe "tout de suite à la cible" sur X seulement ; Y reste linéaire.
+    fast = [{"t": 0.0, "v": 0.0, "outT": 0.0, "outV": 1.0, "inT": None, "inV": None, "mode": "corner"},
+            {"t": 1.0, "v": 1.0, "inT": 0.3, "inV": 1.0, "outT": None, "outV": None, "mode": "corner"}]
+    p.cues.append(Cue(id="c1", name="A", start_ms=0, duration_ms=1000, activations={
+        "p1": Activation(target_x_cm=0.0, target_y_cm=0.0, fade_ms=0.0)}))
+    p.cues.append(Cue(id="c2", name="B", start_ms=1000, duration_ms=1000, activations={
+        "p1": Activation(target_x_cm=100.0, target_y_cm=100.0, fade_ms=1000.0,
+                         easing="linear", curves={"x": fast})}))
+    pose = resolve_positions(p, 1500.0)["p1"]
+    assert pose.y_cm == 50.0                     # linéaire nommé sur Y
+    assert pose.x_cm > 85.0                      # courbe rapide sur X
+    assert resolve_positions(p, 2000.0)["p1"].x_cm == 100.0  # cible atteinte
+
+
+def test_curves_survive_bundle_roundtrip(tmp_path):
+    from lumitrack.core.project import Project, Point, Cue, Activation, save_bundle, load_bundle
+    p = Project(name="rt")
+    p.points.append(Point(id="p1", name="P1"))
+    curve = _curve_ease_in_out()
+    p.cues.append(Cue(id="c1", name="A", start_ms=0, duration_ms=500, activations={
+        "p1": Activation(target_x_cm=10.0, curves={"x": curve, "yaw": _curve_linear()})}))
+    path = str(tmp_path / "rt.lumitrack")
+    save_bundle(p, path)
+    p2 = load_bundle(path)
+    act = p2.cues[0].activations["p1"]
+    assert act.curves is not None and set(act.curves.keys()) == {"x", "yaw"}
+    assert act.curves["x"][0]["outT"] == 0.42

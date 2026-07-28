@@ -363,3 +363,61 @@
   outline: 2px solid #fff;
   outline-offset: -1px;
 }
+
+/* ---- Graph editor (courbes des blocs, spec KeysView de Friction) ---- */
+.tl-btn-active { background: #3a3f52; color: #cfd6ff; }
+.graph-track {
+  position: relative;
+  border-top: 1px solid #26262e;
+  background: #131318;
+}
+.graph-hint {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  color: #7a7a88; font-size: 12px; white-space: nowrap;
+}
+.graph-toolbar {
+  position: absolute; top: 6px; z-index: 6;
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 6px; border-radius: 6px;
+  background: rgba(22, 22, 28, 0.92); border: 1px solid #2c2c36;
+  font-size: 11px;
+}
+.graph-toolbar button {
+  font-size: 11px; padding: 2px 7px; border-radius: 4px;
+  background: #1f1f27; color: #b9b9c6; border: 1px solid #30303c;
+  cursor: pointer;
+}
+.graph-toolbar button:hover { background: #2a2a35; }
+.graph-toolbar button:disabled { opacity: 0.4; cursor: default; }
+.graph-select {
+  font-size: 11px; background: #1f1f27; color: #b9b9c6;
+  border: 1px solid #30303c; border-radius: 4px; padding: 2px 4px;
+}
+.graph-sep { width: 1px; height: 14px; background: #30303c; margin: 0 2px; }
+.graph-chip {
+  border-color: transparent !important;
+  color: var(--axis-color) !important;
+  font-weight: 600;
+}
+.graph-chip-active {
+  background: color-mix(in srgb, var(--axis-color) 22%, #1f1f27) !important;
+  border-color: var(--axis-color) !important;
+}
+.graph-chip-hidden { opacity: 0.35; }
+.graph-pointname { color: #7a7a88; margin-left: 4px; font-style: italic; }
+.graph-svg { display: block; }
+.graph-fade-zone { fill: rgba(79, 245, 224, 0.045); }
+.graph-hold-zone { fill: rgba(255, 255, 255, 0.02); }
+.graph-ref-line { stroke: #34343f; stroke-dasharray: 4 4; }
+.graph-ref-label { fill: #62626e; font-size: 9.5px; }
+.graph-curve {
+  fill: none; stroke-width: 1.4; opacity: 0.55; cursor: pointer;
+}
+.graph-curve-active { stroke-width: 2; opacity: 1; }
+.graph-curve-baked { stroke-dasharray: 5 4; }
+.graph-node {
+  fill: #131318; stroke-width: 2; cursor: grab;
+}
+.graph-node-selected { fill: #fff; }
+.graph-handle { cursor: grab; }
+.graph-handle-line { stroke: #56566a; stroke-width: 1; }

@@ -287,6 +287,32 @@ La suite pytest Python (58 tests) reste l'ORACLE du port. L'app actuelle
   Undo/redo s'implémente directement dans le moteur Rust (historique
   d'états), les dialogues natifs Tauri remplacent les window.prompt.
 
+### Mission graph editor + lien blocs (2026-07-29) — LIVRÉE
+
+Décision de Florian après l'examen du code de Friction
+(rapport-friction-code.md) : Friction/Natron restent écartés comme base de
+code ; leur graph editor (KeysView, ~3 900 l. mesurées) devient le CAHIER
+DES CHARGES du nôtre. Réalisé :
+
+- **Moteur** : courbes d'easing PAR AXE sur les activations (`curves`
+  {x|y|z|yaw: [nœuds]}, nœud = t/v + poignées Bézier absolues + mode).
+  Évaluation par bissection façon CSS cubic-bezier (`eval_curve`), repli sur
+  l'easing nommé — bundles existants inchangés. Python (`timeline.py`) ET
+  Rust (`native/src/curve.rs`) ; fixture de parité régénérée avec 40
+  activations à courbes — Rust identique à 1e-6. 64 tests pytest + 30 cargo.
+- **UI** : piste « Courbes » DANS la timeline (bouton quand un bloc est
+  sélectionné) — même pxPerMs/scroll/playhead que les blocs, zone de fade
+  teintée, zone de maintien, lignes départ/cible. Multi-courbes par axe
+  (couleurs X/Y/Z/Lacet), axe actif éditable : drag de nœuds et de poignées
+  (modes coin/lisse/symétrique), double-clic = insertion de nœud (découpe de
+  Casteljau, forme préservée), Suppr = retrait, easing prédéfini appliqué à
+  l'axe (les 4 classiques exacts, les autres échantillonnés puis lissés),
+  Linéaire/Lisser, copier/coller de courbe, « → tout le bloc », Réinit
+  (retour à l'easing nommé). Édition optimiste, commit au lâcher via
+  `set_activation {curves}` (§13.1.7 respecté).
+- Le port N2 devra brancher ces courbes telles quelles (déjà dans le moteur
+  Rust). À tester à la relance : timeline+son (reste dû) + graph editor.
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).

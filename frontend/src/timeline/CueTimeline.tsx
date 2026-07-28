@@ -17,11 +17,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Cue, Project } from '../types'
 import { sidecar } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
+import { GraphEditor } from './GraphEditor'
 
 const MS_PER_S = 1000
 const RULER_H = 26
 const AUDIO_H = 52
 const LANE_H = 36
+const GRAPH_H = 190
 const MIN_CUE_MS = 100
 const SNAP_PX = 8
 const SEEK_THROTTLE_MS = 33
@@ -86,16 +88,33 @@ interface DragState {
   moved: boolean
 }
 
-export function CueTimeline({ project, tMs, playing, durationMs, selectedCueId, onSelectCue }: {
+export function CueTimeline({ project, tMs, playing, durationMs, selectedCueId, selectedPointId, onSelectCue }: {
   project: Project
   tMs: number
   playing: boolean
   durationMs: number
   selectedCueId: string | null
+  selectedPointId: string | null
   onSelectCue: (cueId: string | null) => void
 }) {
   const cues = project.cues
   const lanes = useMemo(() => packLanes(cues), [cues])
+  const [showGraph, setShowGraph] = useState(false)
+
+  // Le graph editor édite l'activation du point sélectionné dans le bloc
+  // sélectionné ; sans sélection de point, repli sur le premier point activé
+  // par le bloc (l'utilisateur voit lequel dans la barre du graphe).
+  const selectedCue = cues.find((c) => c.id === selectedCueId) ?? null
+  const graphPointId = selectedCue
+    ? (selectedPointId && selectedCue.activations[selectedPointId]
+        ? selectedPointId
+        : Object.keys(selectedCue.activations)[0] ?? null)
+    : null
+  const graphAct = selectedCue && graphPointId ? selectedCue.activations[graphPointId] ?? null : null
+  const graphPointName = graphPointId
+    ? project.points.find((p) => p.id === graphPointId)?.name ?? graphPointId
+    : null
+  const graphVisible = showGraph && selectedCue !== null
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const [viewportWidth, setViewportWidth] = useState(0)
@@ -342,6 +361,15 @@ export function CueTimeline({ project, tMs, playing, durationMs, selectedCueId, 
       <div className="tl-toolbar">
         <button onClick={addCue}>+ Cue</button>
         {selectedCueId && <button onClick={deleteSelected}>Supprimer</button>}
+        {selectedCueId && (
+          <button
+            className={showGraph ? 'tl-btn-active' : ''}
+            title="Éditeur de courbes du bloc sélectionné"
+            onClick={() => setShowGraph((v) => !v)}
+          >
+            Courbes
+          </button>
+        )}
         <span className="tl-toolbar-spacer" />
         <button title="Zoom arrière (Ctrl+molette)" onClick={() => zoomAt(0.8)}>−</button>
         <button title="Zoom avant (Ctrl+molette)" onClick={() => zoomAt(1.25)}>+</button>
@@ -360,6 +388,12 @@ export function CueTimeline({ project, tMs, playing, durationMs, selectedCueId, 
             <span className="tl-header-chip" style={{ background: '#f5734f' }} />
             Cues
           </div>
+          {graphVisible && (
+            <div className="tl-header tl-header-graph" style={{ height: GRAPH_H }}>
+              <span className="tl-header-chip" style={{ background: '#4ff5e0' }} />
+              Courbes
+            </div>
+          )}
         </div>
         <div
           className="tl-scroll"
@@ -434,6 +468,19 @@ export function CueTimeline({ project, tMs, playing, durationMs, selectedCueId, 
                 }),
               )}
             </div>
+
+            {graphVisible && selectedCue && (
+              <GraphEditor
+                cue={selectedCue}
+                act={graphAct}
+                pointId={graphPointId}
+                pointName={graphPointName}
+                pxPerMs={effPxPerMs}
+                height={GRAPH_H}
+                contentWidth={contentWidth}
+                scrollLeft={scrollLeft}
+              />
+            )}
 
             <div className="tl-playhead" style={{ left: playheadPx }} />
           </div>

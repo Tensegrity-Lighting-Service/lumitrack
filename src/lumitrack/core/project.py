@@ -88,6 +88,13 @@ class Activation:
     # "path" is accepted here so the engine doesn't need another migration
     # once trajectory-tangent orientation ships.
     orientation_mode: str = "manual"
+    # Graph editor (mission 2026-07-29, spec = KeysView de Friction) :
+    # courbes d'easing personnalisées PAR AXE. {"x"|"y"|"z"|"yaw": [node]}.
+    # node = {"t": 0..1, "v": progrès, "inT"/"inV"/"outT"/"outV": poignées
+    # Bézier ABSOLUES (ou None), "mode": "smooth"|"symmetric"|"corner"}.
+    # Un axe absent du dict retombe sur l'easing nommé — les bundles
+    # existants restent valides sans migration.
+    curves: Optional[dict] = None
 
     def touches(self) -> bool:
         return any(v is not None for v in
@@ -99,6 +106,7 @@ class Activation:
             "targetZCm": self.target_z_cm, "targetYawDeg": self.target_yaw_deg,
             "fadeMs": self.fade_ms, "easing": self.easing,
             "orientationMode": self.orientation_mode,
+            "curves": self.curves,
         }
 
     @classmethod
@@ -108,6 +116,7 @@ class Activation:
             target_z_cm=d.get("targetZCm"), target_yaw_deg=d.get("targetYawDeg"),
             fade_ms=float(d.get("fadeMs", 1000.0)), easing=d.get("easing", "linear"),
             orientation_mode=d.get("orientationMode", "manual"),
+            curves=d.get("curves"),
         )
 
 

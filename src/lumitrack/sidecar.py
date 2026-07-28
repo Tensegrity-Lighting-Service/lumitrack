@@ -284,6 +284,20 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             act.fade_ms = float(msg["fadeMs"])
         if "easing" in msg:
             act.easing = msg["easing"]
+        if "curves" in msg:
+            # Dict {axe: [nœuds]} du graph editor, ou None pour tout effacer.
+            # Un axe portant [] ou None est retiré (retour à l'easing nommé).
+            curves = msg["curves"]
+            if curves is None:
+                act.curves = None
+            else:
+                merged = dict(act.curves or {})
+                for axis, nodes in curves.items():
+                    if nodes:
+                        merged[axis] = nodes
+                    else:
+                        merged.pop(axis, None)
+                act.curves = merged or None
         cue.activations[point_id] = act
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)

@@ -428,6 +428,7 @@ function App() {
           playing={playing}
           durationMs={durationMs}
           selectedCueId={selectedCueId}
+          selectedPointId={selectedPointId}
           onSelectCue={setSelectedCueId}
         />
       </footer>

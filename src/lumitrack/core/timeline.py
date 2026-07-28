@@ -110,6 +110,64 @@ def apply_easing(name: str, t: float) -> float:
     return EASING_FUNCS.get(key, _linear)(t)
 
 
+# ------------------------------------------------------- courbes (graph) ---
+# Graph editor (spec KeysView de Friction) : une courbe est une liste de
+# nœuds {t, v, inT, inV, outT, outV, mode} triés par t, t et poignées en
+# coordonnées ABSOLUES normalisées (t: 0..1 = progression du fade, v: 0..1 =
+# progrès, dépassements autorisés pour l'overshoot). Chaque segment est une
+# Bézier cubique ; le temps étant l'abscisse, on résout s tel que Bx(s) = u
+# par bissection (Bx est rendu monotone en serrant les poignées dans
+# [t0, t3] à l'évaluation, comme le fait CSS cubic-bezier).
+
+
+def _bezier_component(p0: float, p1: float, p2: float, p3: float, s: float) -> float:
+    m = 1.0 - s
+    return m * m * m * p0 + 3 * m * m * s * p1 + 3 * m * s * s * p2 + s * s * s * p3
+
+
+def eval_curve(nodes: list, u: float) -> float:
+    """Progrès (v) à la fraction de temps u pour une courbe du graph editor.
+    Défensif : < 2 nœuds valides -> identité (linéaire)."""
+    if not nodes or len(nodes) < 2:
+        return max(0.0, min(1.0, u))
+    pts = sorted(nodes, key=lambda n: float(n.get("t", 0.0)))
+    u = max(float(pts[0].get("t", 0.0)), min(float(pts[-1].get("t", 1.0)), u))
+    for a, b in zip(pts, pts[1:]):
+        t0, t3 = float(a.get("t", 0.0)), float(b.get("t", 1.0))
+        if not (t0 <= u <= t3):
+            continue
+        v0, v3 = float(a.get("v", 0.0)), float(b.get("v", 1.0))
+        if t3 <= t0:
+            return v3
+        # Poignées absolues ; absentes -> segment linéaire (tiers de corde).
+        t1 = a.get("outT");  v1 = a.get("outV")
+        t2 = b.get("inT");   v2 = b.get("inV")
+        t1 = t0 + (t3 - t0) / 3.0 if t1 is None else max(t0, min(t3, float(t1)))
+        v1 = v0 + (v3 - v0) / 3.0 if v1 is None else float(v1)
+        t2 = t3 - (t3 - t0) / 3.0 if t2 is None else max(t0, min(t3, float(t2)))
+        v2 = v3 - (v3 - v0) / 3.0 if v2 is None else float(v2)
+        # Bissection sur s : Bx(s) est monotone croissante (poignées serrées).
+        lo, hi = 0.0, 1.0
+        for _ in range(48):
+            mid = (lo + hi) / 2.0
+            if _bezier_component(t0, t1, t2, t3, mid) < u:
+                lo = mid
+            else:
+                hi = mid
+        s = (lo + hi) / 2.0
+        return _bezier_component(v0, v1, v2, v3, s)
+    return float(pts[-1].get("v", 1.0))
+
+
+def axis_progress(act, axis: str, progress: float) -> float:
+    """Progrès effectif d'un axe : courbe personnalisée si présente, sinon
+    easing nommé de l'activation."""
+    curves = getattr(act, "curves", None)
+    if curves and curves.get(axis):
+        return eval_curve(curves[axis], max(0.0, min(1.0, progress)))
+    return apply_easing(act.easing, progress)
+
+
 # --------------------------------------------------------- axis resolver ---
 
 _AXIS_FIELDS = {
@@ -121,10 +179,11 @@ _AXIS_FIELDS = {
 
 
 def _axis_keyframes(project: Project, point_id: str, axis: str):
-    """-> [(start_ms, fade_end_ms, value, easing, cue_id), ...] sorted by
-    start_ms, one entry per Cue whose Activation for this point sets this
-    axis. The cue id rides along so `resolve_block_context` can name which
-    cue a trajectory's start value tracks from; `_resolve_axis` ignores it."""
+    """-> [(start_ms, fade_end_ms, value, activation, cue_id, axis), ...]
+    sorted by start_ms, one entry per Cue whose Activation for this point
+    sets this axis. The activation rides along so `_resolve_axis` can apply
+    its per-axis curve (graph editor) or named easing; the cue id (index 4)
+    lets `resolve_block_context` name which cue a start value tracks from."""
     field_name = _AXIS_FIELDS[axis]
     kfs = []
     for cue in project.cues:
@@ -134,7 +193,7 @@ def _axis_keyframes(project: Project, point_id: str, axis: str):
         value = getattr(act, field_name)
         if value is None:
             continue
-        kfs.append((cue.start_ms, cue.start_ms + act.fade_ms, value, act.easing, cue.id))
+        kfs.append((cue.start_ms, cue.start_ms + act.fade_ms, value, act, cue.id, axis))
     kfs.sort(key=lambda k: k[0])
     return kfs
 
@@ -151,7 +210,7 @@ def _resolve_axis(kfs, t_ms: float) -> Optional[float]:
     if governing is None:
         return None  # point hasn't reached its first keyframe on this axis yet
 
-    start, fade_end, target, easing = governing[:4]
+    start, fade_end, target, act, _cue_id, axis = governing
     if governing_index == 0:
         origin = target  # first appearance: no prior value, snap to target
     else:
@@ -160,7 +219,7 @@ def _resolve_axis(kfs, t_ms: float) -> Optional[float]:
     if fade_end <= start or t_ms >= fade_end:
         return target
     progress = (t_ms - start) / (fade_end - start)
-    eased = apply_easing(easing, progress)
+    eased = axis_progress(act, axis, progress)
     return origin + (target - origin) * eased
 
 

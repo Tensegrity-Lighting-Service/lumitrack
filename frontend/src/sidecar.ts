@@ -103,10 +103,13 @@ class SidecarClient {
   }
   // null sur un axe = le "détoucher" : le sidecar écrit None et l'axe
   // repasse en tracking (§12.1). undefined = champ non modifié.
+  // `curves`: dict {axe: nœuds} fusionné par le backend — un axe portant
+  // [] est retiré (retour à l'easing nommé), null efface tout.
   setActivation(cueId: string, pointId: string, patch: {
     targetXCm?: number | null; targetYCm?: number | null
     targetZCm?: number | null; targetYawDeg?: number | null
     fadeMs?: number; easing?: string
+    curves?: Partial<Record<'x' | 'y' | 'z' | 'yaw', unknown[]>> | null
   }) {
     this.send({ type: 'set_activation', cueId, pointId, ...patch })
   }
