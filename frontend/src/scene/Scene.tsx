@@ -23,7 +23,7 @@
 // the placement once, rather than every child re-deriving it.
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber'
-import { OrthographicCamera, MapControls, Grid, useGLTF } from '@react-three/drei'
+import { OrthographicCamera, MapControls, Grid, useGLTF, Line } from '@react-three/drei'
 import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -122,17 +122,29 @@ function ZoneOutline({ widthM, heightM, editing }: { widthM: number; heightM: nu
     new THREE.Vector3(0, 0.01, heightM),
     new THREE.Vector3(0, 0.01, 0),
   ], [widthM, heightM])
-  const geometry = useMemo(() => new THREE.BufferGeometry().setFromPoints(points), [points])
   return (
     <>
-      <line>
-        <primitive object={geometry} attach="geometry" />
-        <lineBasicMaterial color={editing ? '#ffffff' : '#4f6df5'} linewidth={2} transparent opacity={editing ? 0.9 : 0.4} />
-      </line>
+      {/* renderOrder + depthTest=false: this is a 2D editing overlay, not
+          part of the 3D scene proper — it must stay visible on top of the
+          terrain (grandstands, LED boards etc. sit above y=0 in a real
+          venue survey) rather than being occluded like normal geometry.
+          drei's <Line>, not the bare <line> primitive: plain JSX `<line>`
+          resolves to the DOM/SVG element's TypeScript type in this project
+          rather than react-three-fiber's, which happened not to matter
+          until a prop (renderOrder) only the 3D one has was added. */}
+      <Line
+        points={points}
+        color={editing ? '#ffffff' : '#4f6df5'}
+        lineWidth={2}
+        transparent
+        opacity={editing ? 0.9 : 0.4}
+        depthTest={false}
+        renderOrder={1000}
+      />
       {editing && (
-        <mesh position={[widthM / 2, 0.005, heightM / 2]} rotation={[-Math.PI / 2, 0, 0]}>
+        <mesh position={[widthM / 2, 0.005, heightM / 2]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={999}>
           <planeGeometry args={[widthM, heightM]} />
-          <meshBasicMaterial color="#4f6df5" transparent opacity={0.12} depthWrite={false} />
+          <meshBasicMaterial color="#4f6df5" transparent opacity={0.12} depthWrite={false} depthTest={false} />
         </mesh>
       )}
     </>
@@ -248,39 +260,46 @@ function ZoneHandles({ project, widthM, heightM, stageGroupRef, controlsRef }: {
 
   return (
     <>
-      {/* Move: drag the whole filled zone. */}
+      {/* Move: drag the whole filled zone. renderOrder + depthTest=false on
+          every handle here: this is a 2D editing overlay, it must stay
+          visible/on top of the terrain rather than being occluded like
+          normal 3D geometry (grandstands, LED boards etc. sit above y=0 in
+          a real venue survey). */}
       <mesh
         position={[widthM / 2, 0.02, heightM / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
+        renderOrder={1001}
         onPointerDown={(e) => beginDrag(e, 'move')}
         onPointerOver={() => { document.body.style.cursor = 'move' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
       >
         <planeGeometry args={[widthM, heightM]} />
-        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} depthTest={false} />
       </mesh>
 
       {/* Resize: bottom-right corner (local width, height). */}
       <mesh
         position={[widthM, 0.03, heightM]}
+        renderOrder={1002}
         onPointerDown={(e) => beginDrag(e, 'resize')}
         onPointerOver={() => { document.body.style.cursor = 'nwse-resize' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
       >
         <boxGeometry args={[HANDLE_SIZE_M, HANDLE_SIZE_M, HANDLE_SIZE_M]} />
-        <meshStandardMaterial color="#f5734f" />
+        <meshStandardMaterial color="#f5734f" depthTest={false} />
       </mesh>
 
       {/* Rotate: offset outward from the top edge (screen-up is -Z, since
           the camera's `up` is set to (0,0,-1) for the top-down view). */}
       <mesh
         position={[widthM / 2, 0.03, -ROTATE_HANDLE_OFFSET_M]}
+        renderOrder={1002}
         onPointerDown={(e) => beginDrag(e, 'rotate')}
         onPointerOver={() => { document.body.style.cursor = 'grab' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
       >
         <sphereGeometry args={[HANDLE_SIZE_M * 0.5, 16, 12]} />
-        <meshStandardMaterial color="#4ff58c" />
+        <meshStandardMaterial color="#4ff58c" depthTest={false} />
       </mesh>
     </>
   )
@@ -435,11 +454,16 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
       controlsRef.current.target.set(fit.centerX, 0, fit.centerZ)
       controlsRef.current.update()
     }
-    // Depend on size.width/height (primitives), not the `size` object: r3f
-    // may publish a new size object on store updates even when the actual
-    // pixel dimensions haven't changed, which would silently re-run this
-    // fit every such update and could look like the view fighting itself.
-  }, [camera, size.width, size.height, fit, span, fitToken, cameraLocked])
+    // Depend on primitives (size.width/height, fit.centerX/centerZ/spanX/
+    // spanZ), not the `size`/`fit` objects: both can get a fresh reference
+    // on unrelated updates even when the actual numbers haven't changed —
+    // `fit` in particular is recomputed (new object) every time the zone's
+    // origin moves, even though its own useMemo ignores that value once a
+    // terrain is loaded. Depending on the object itself re-ran this effect
+    // on every zone drag and snapped the camera back to the fit position,
+    // discarding whatever pan/zoom the user had done in between (reported
+    // as "the view changes place and zoom" while moving the zone).
+  }, [camera, size.width, size.height, fit.centerX, fit.centerZ, fit.spanX, fit.spanZ, span, fitToken, cameraLocked])
 
   useEffect(() => {
     const dom = gl.domElement
