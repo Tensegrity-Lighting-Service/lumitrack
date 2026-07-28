@@ -86,10 +86,10 @@ class SidecarClient {
   addPoint(name: string, number?: number) {
     this.send({ type: 'add_point', name, number })
   }
-  addCue(name: string, startMs: number, durationMs: number) {
-    this.send({ type: 'add_cue', name, startMs, durationMs })
+  addCue(name: string, startMs: number, durationMs: number, color?: string) {
+    this.send({ type: 'add_cue', name, startMs, durationMs, color })
   }
-  updateCue(cueId: string, patch: { name?: string; startMs?: number; durationMs?: number }) {
+  updateCue(cueId: string, patch: { name?: string; startMs?: number; durationMs?: number; color?: string }) {
     this.send({ type: 'update_cue', cueId, ...patch })
   }
   deleteCue(cueId: string) {

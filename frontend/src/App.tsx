@@ -170,7 +170,15 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint }: {
 
   return (
     <div className="cue-inspector">
-      <h3>{cue.name}</h3>
+      <div className="cue-inspector-title">
+        <input
+          type="color"
+          value={cue.color}
+          onChange={(e) => sidecar.updateCue(cue.id, { color: e.target.value })}
+          title="Couleur du bloc"
+        />
+        <h3>{cue.name}</h3>
+      </div>
       <table>
         <thead>
           <tr><th>Point</th><th>X</th><th>Y</th><th>Fade (ms)</th></tr>

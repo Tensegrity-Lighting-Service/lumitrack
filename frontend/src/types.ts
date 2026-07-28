@@ -25,6 +25,7 @@ export interface Activation {
 export interface Cue {
   id: string
   name: string
+  color: string
   startMs: number
   durationMs: number
   activations: Record<string, Activation>

@@ -1,6 +1,9 @@
-// "Piste Blocs/Cue" of CONCEPTION.md §12.10. Repères/Groupes/LED tracks are
-// deferred (§13.2); this first pass wires exactly one row: one block per
-// Cue, draggable/resizable, backed by the sidecar's update_cue command.
+// "Piste Blocs/Cue" of CONCEPTION.md §12.10, styled after Myelin Director's
+// track/region look (colored track header, two-tone region blocks). Cues
+// are free to overlap in time (§12.1) — packed into as many visual lanes as
+// needed so overlapping blocks never collide; lanes are a display-only
+// packing, not a semantic "track" (Repères/Groupes/LED tracks from §12.10
+// remain deferred, §13.2).
 //
 // The engine's own clock is never started (`autoReRender` covers repaint,
 // we drive the cursor by hand): playback time always comes from the
@@ -25,8 +28,24 @@ const MS_PER_S = 1000
 const ROW_HEIGHT = 40
 const TIME_AREA_HEIGHT = 32 // matches the library's own .timeline-editor-time-area CSS
 
+const CUE_PALETTE = ['#4F6DF5', '#F5734F', '#B06FE0', '#4FF58C', '#4FF5E0', '#F5C84F']
+
 const effects = {
   cue: { id: 'cue', name: 'Cue' },
+}
+
+/** Greedy interval packing: each cue goes in the first lane whose last cue
+ * has already ended by the time this one starts, else it opens a new lane.
+ * Same idea as packing overlapping events onto columns in a calendar. */
+function packLanes(cues: Cue[]): Cue[][] {
+  const sorted = [...cues].sort((a, b) => a.startMs - b.startMs)
+  const lanes: Cue[][] = []
+  for (const cue of sorted) {
+    const lane = lanes.find((l) => l[l.length - 1].startMs + l[l.length - 1].durationMs <= cue.startMs)
+    if (lane) lane.push(cue)
+    else lanes.push([cue])
+  }
+  return lanes.length ? lanes : [[]]
 }
 
 export function CueTimeline({ project, tMs, selectedCueId, onSelectCue }: {
@@ -38,9 +57,11 @@ export function CueTimeline({ project, tMs, selectedCueId, onSelectCue }: {
   const stateRef = useRef<TimelineState>(null)
   const cues = project.cues
 
-  const editorData: TimelineRow[] = useMemo(() => [{
-    id: 'cues',
-    actions: cues.map((cue) => ({
+  const lanes = useMemo(() => packLanes(cues), [cues])
+
+  const editorData: TimelineRow[] = useMemo(() => lanes.map((laneCues, i) => ({
+    id: `lane-${i}`,
+    actions: laneCues.map((cue) => ({
       id: cue.id,
       start: cue.startMs / MS_PER_S,
       end: (cue.startMs + cue.durationMs) / MS_PER_S,
@@ -49,7 +70,7 @@ export function CueTimeline({ project, tMs, selectedCueId, onSelectCue }: {
       flexible: true,
       selected: cue.id === selectedCueId,
     })),
-  }], [cues, selectedCueId])
+  })), [lanes, selectedCueId])
 
   // The sidecar pushes ~30 ticks/s while playing; keep the cursor locked to
   // that instead of letting the widget's own clock run.
@@ -59,11 +80,15 @@ export function CueTimeline({ project, tMs, selectedCueId, onSelectCue }: {
 
   const getActionRender = useCallback((action: { id: string }) => {
     const cue = cues.find((c) => c.id === action.id)
-    const count = cue ? Object.keys(cue.activations).length : 0
+    if (!cue) return null
+    const count = Object.keys(cue.activations).length
     return (
-      <div className="cue-block">
-        <span className="cue-block-name">{cue?.name ?? action.id}</span>
-        <span className="cue-block-count">{count}</span>
+      <div className="cue-block" style={{ '--cue-color': cue.color } as React.CSSProperties}>
+        <div className="cue-block-header">
+          <span className="cue-block-name">{cue.name}</span>
+          <span className="cue-block-count">{count}</span>
+        </div>
+        <div className="cue-block-body" />
       </div>
     )
   }, [cues])
@@ -94,7 +119,8 @@ export function CueTimeline({ project, tMs, selectedCueId, onSelectCue }: {
   }, [cues])
 
   const addCue = useCallback(() => {
-    sidecar.addCue('Cue', cues.length ? totalEndMs(cues) : 0, 2000)
+    const color = CUE_PALETTE[cues.length % CUE_PALETTE.length]
+    sidecar.addCue('Cue', cues.length ? totalEndMs(cues) : 0, 2000, color)
   }, [cues])
 
   const deleteSelected = useCallback(() => {
@@ -104,31 +130,40 @@ export function CueTimeline({ project, tMs, selectedCueId, onSelectCue }: {
     }
   }, [selectedCueId, onSelectCue])
 
+  const widgetHeight = TIME_AREA_HEIGHT + editorData.length * ROW_HEIGHT
+
   return (
     <div className="cue-timeline">
       <div className="cue-timeline-toolbar">
         <button onClick={addCue}>+ Cue</button>
         {selectedCueId && <button onClick={deleteSelected}>Supprimer</button>}
       </div>
-      <TimelineEditor
-        ref={stateRef}
-        style={{ height: TIME_AREA_HEIGHT + editorData.length * ROW_HEIGHT }}
-        editorData={editorData}
-        effects={effects}
-        scale={1}
-        scaleWidth={120}
-        scaleSplitCount={10}
-        startLeft={20}
-        rowHeight={ROW_HEIGHT}
-        gridSnap
-        autoScroll
-        getActionRender={getActionRender}
-        onClickActionOnly={onClickActionOnly}
-        onClickTimeArea={onClickTimeArea}
-        onCursorDrag={onCursorDrag}
-        onActionMoveEnd={onActionMoveEnd}
-        onActionResizeEnd={onActionResizeEnd}
-      />
+      <div className="cue-timeline-body">
+        <div className="cue-track-header" style={{ top: TIME_AREA_HEIGHT, height: editorData.length * ROW_HEIGHT }}>
+          <span>Cues</span>
+        </div>
+        <div className="cue-timeline-editor-wrap">
+          <TimelineEditor
+            ref={stateRef}
+            style={{ height: widgetHeight }}
+            editorData={editorData}
+            effects={effects}
+            scale={1}
+            scaleWidth={120}
+            scaleSplitCount={10}
+            startLeft={10}
+            rowHeight={ROW_HEIGHT}
+            gridSnap
+            autoScroll
+            getActionRender={getActionRender}
+            onClickActionOnly={onClickActionOnly}
+            onClickTimeArea={onClickTimeArea}
+            onCursorDrag={onCursorDrag}
+            onActionMoveEnd={onActionMoveEnd}
+            onActionResizeEnd={onActionResizeEnd}
+          />
+        </div>
+      </div>
     </div>
   )
 }

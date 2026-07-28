@@ -45,19 +45,25 @@ def _demo_project() -> Project:
         Point(id="p2", name="Astera 2", number=2, color="#F5734F"),
         Point(id="p3", name="Astera 3", number=3, color="#4FF58C"),
     ]
-    cue_a = Cue(id=str(uuid.uuid4()), name="Entree", start_ms=0, duration_ms=4000)
+    cue_a = Cue(id=str(uuid.uuid4()), name="Entree", start_ms=0, duration_ms=4000, color="#4F6DF5")
     cue_a.activations = {
         "p1": Activation(target_x_cm=1000, target_y_cm=1000, target_yaw_deg=0, fade_ms=4000),
         "p2": Activation(target_x_cm=3000, target_y_cm=1000, target_yaw_deg=90, fade_ms=4000),
         "p3": Activation(target_x_cm=5000, target_y_cm=1000, target_yaw_deg=180, fade_ms=4000),
     }
-    cue_b = Cue(id=str(uuid.uuid4()), name="Rassemblement", start_ms=4000, duration_ms=4000)
+    cue_b = Cue(id=str(uuid.uuid4()), name="Rassemblement", start_ms=4000, duration_ms=4000, color="#F5734F")
     cue_b.activations = {
         "p1": Activation(target_x_cm=2500, target_y_cm=2500, target_yaw_deg=45, fade_ms=3000),
         "p2": Activation(target_x_cm=3000, target_y_cm=2500, target_yaw_deg=45, fade_ms=3000),
         "p3": Activation(target_x_cm=3500, target_y_cm=2500, target_yaw_deg=45, fade_ms=3000),
     }
-    project.cues = [cue_a, cue_b]
+    # Overlaps cue_b on purpose: demonstrates that overlapping cues need
+    # their own timeline lane rather than sharing one row (§12.1).
+    cue_c = Cue(id=str(uuid.uuid4()), name="Contre-jour", start_ms=5000, duration_ms=2000, color="#B06FE0")
+    cue_c.activations = {
+        "p2": Activation(target_yaw_deg=225, fade_ms=1500),
+    }
+    project.cues = [cue_a, cue_b, cue_c]
     project.transform_origin_x_cm = project.stage_width_cm / 2
     project.transform_origin_y_cm = project.stage_height_cm / 2
     return project
@@ -180,6 +186,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             name=msg.get("name", "Cue"),
             start_ms=float(msg.get("startMs", session.project.next_start_ms())),
             duration_ms=float(msg.get("durationMs", 1000.0)),
+            color=msg.get("color", "#4F6DF5"),
         )
         session.project.cues.append(cue)
         session.project.sort_cues()
@@ -197,6 +204,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             cue.start_ms = float(msg["startMs"])
         if "durationMs" in msg:
             cue.duration_ms = float(msg["durationMs"])
+        if "color" in msg:
+            cue.color = msg["color"]
         session.project.sort_cues()
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)

@@ -121,6 +121,7 @@ class Cue:
     start_ms: float
     duration_ms: float
     activations: dict = field(default_factory=dict)  # point_id -> Activation
+    color: str = "#4F6DF5"
 
     def activation_end_ms(self) -> float:
         """Latest moment any activation in this cue is still fading."""
@@ -252,7 +253,7 @@ class Project:
             "points": [p.to_dict() for p in self.points],
             "cues": [
                 {
-                    "id": c.id, "name": c.name,
+                    "id": c.id, "name": c.name, "color": c.color,
                     "startMs": c.start_ms, "durationMs": c.duration_ms,
                     "activations": {
                         pid: a.to_dict() for pid, a in c.activations.items()
@@ -300,6 +301,7 @@ class Project:
                 start_ms=float(c.get("startMs", 0)),
                 duration_ms=float(c.get("durationMs", 0)),
                 activations=activations,
+                color=c.get("color", "#4F6DF5"),
             ))
         proj.sort_cues()
         return proj
