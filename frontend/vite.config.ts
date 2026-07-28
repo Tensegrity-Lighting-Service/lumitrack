@@ -8,5 +8,10 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: {
+      // Cargo writes/locks files under src-tauri/target while compiling;
+      // watching them too causes EBUSY on Windows.
+      ignored: ['**/src-tauri/**'],
+    },
   },
 })
