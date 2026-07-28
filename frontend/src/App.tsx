@@ -72,6 +72,61 @@ function HorizontalResizer({ area, onDeltaY }: { area: string; onDeltaY: (dy: nu
   return <div className="resizer resizer-h" style={{ gridArea: area }} onPointerDown={onPointerDown} />
 }
 
+// Classic Windows-style dropdown menu bar (File/View/...), replacing the
+// earlier ad hoc <details> dropdown and loose buttons per user feedback:
+// "un bandeau de menu déroulant... truc classique à la Windows".
+type MenuItemDef =
+  | { label: string; onClick: () => void; checked?: boolean; disabled?: boolean }
+  | { separator: true }
+
+function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (openIndex === null) return
+    const close = () => setOpenIndex(null)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [openIndex])
+
+  return (
+    <nav className="menu-bar">
+      {menus.map((menu, i) => (
+        <div key={menu.label} className="menu">
+          <button
+            type="button"
+            className={`menu-label${openIndex === i ? ' open' : ''}`}
+            onClick={(e) => { e.stopPropagation(); setOpenIndex(openIndex === i ? null : i) }}
+            onMouseEnter={() => { if (openIndex !== null) setOpenIndex(i) }}
+          >
+            {menu.label}
+          </button>
+          {openIndex === i && (
+            <div className="menu-dropdown" onClick={(e) => e.stopPropagation()}>
+              {menu.items.map((item, j) => (
+                'separator' in item
+                  ? <div key={j} className="menu-separator" />
+                  : (
+                    <button
+                      key={j}
+                      type="button"
+                      className="menu-item"
+                      disabled={item.disabled}
+                      onClick={() => { item.onClick(); setOpenIndex(null) }}
+                    >
+                      <span className="menu-item-check">{item.checked ? '✓' : ''}</span>
+                      <span>{item.label}</span>
+                    </button>
+                  )
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </nav>
+  )
+}
+
 function formatTimecode(ms: number): string {
   const totalMs = Math.max(0, Math.floor(ms))
   const h = Math.floor(totalMs / 3_600_000)
@@ -94,6 +149,8 @@ function App() {
   const [rosterWidth, setRosterWidth] = useState(220)
   const [inspectorWidth, setInspectorWidth] = useState(300)
   const [timelineHeight, setTimelineHeight] = useState(220)
+  const [cameraLocked, setCameraLocked] = useState(false)
+  const [fitToken, setFitToken] = useState(0)
 
   const tMs = tick?.tMs ?? 0
   const playing = tick?.playing ?? false
@@ -148,14 +205,59 @@ function App() {
     )
   }
 
+  const menus = [
+    {
+      label: 'Fichier',
+      items: [
+        { label: 'Nouveau', onClick: () => {
+          const name = window.prompt('Nom du nouveau projet ?', 'Untitled')
+          if (name) sidecar.newProject(name)
+        } },
+        { label: 'Importer .stancz…', onClick: () => {
+          const path = window.prompt('Chemin du fichier .stancz à importer :')
+          if (path) sidecar.importStancz(path)
+        } },
+        { separator: true } as const,
+        { label: 'Enregistrer (bundle)…', onClick: () => {
+          const path = window.prompt('Dossier .bundle où enregistrer :')
+          if (path) sidecar.saveBundle(path)
+        } },
+        { label: 'Ouvrir (bundle)…', onClick: () => {
+          const path = window.prompt('Dossier .bundle à ouvrir :')
+          if (path) sidecar.loadBundle(path)
+        } },
+      ],
+    },
+    {
+      label: 'Affichage',
+      items: [
+        { label: 'Ajuster la vue 3D à la fenêtre', onClick: () => setFitToken((t) => t + 1) },
+        { separator: true } as const,
+        { label: 'Verrouiller la caméra 3D', checked: cameraLocked, onClick: () => setCameraLocked((v) => !v) },
+      ],
+    },
+    {
+      label: 'Sortie',
+      items: [
+        {
+          label: psnRunning ? 'Arrêter PSN' : 'Démarrer PSN',
+          checked: psnRunning,
+          onClick: () => (psnRunning ? sidecar.psnStop() : sidecar.psnStart()),
+        },
+      ],
+    },
+  ]
+
   return (
     <div
       className="app"
       style={{
         gridTemplateColumns: `${rosterWidth}px 6px 1fr 6px ${inspectorWidth}px`,
-        gridTemplateRows: `40px 1fr 6px ${timelineHeight}px`,
+        gridTemplateRows: `26px 40px 1fr 6px ${timelineHeight}px`,
       }}
     >
+      <MenuBar menus={menus} />
+
       <header className="transport-bar">
         <span className={`conn-dot ${connected ? 'conn-ok' : 'conn-bad'}`} title={connected ? 'Sidecar connecté' : 'Sidecar déconnecté'} />
         <button onClick={() => (playing ? sidecar.pause() : sidecar.play())}>
@@ -171,13 +273,6 @@ function App() {
         />
         <span className="timecode">{formatTimecode(tMs)}</span>
         <span className="project-name">{project.name}</span>
-        <FileMenu />
-        <button
-          className={psnRunning ? 'psn-on' : ''}
-          onClick={() => (psnRunning ? sidecar.psnStop() : sidecar.psnStart())}
-        >
-          {psnRunning ? 'PSN actif' : 'Démarrer PSN'}
-        </button>
       </header>
 
       <aside className="roster">
@@ -210,6 +305,8 @@ function App() {
           selectedPointId={selectedPointId}
           selectedCueId={selectedCueId}
           onSelectPoint={setSelectedPointId}
+          cameraLocked={cameraLocked}
+          fitToken={fitToken}
         />
       </main>
 
@@ -236,35 +333,6 @@ function App() {
         <CueTimeline project={project} tMs={tMs} selectedCueId={selectedCueId} onSelectCue={setSelectedCueId} />
       </footer>
     </div>
-  )
-}
-
-// Bundle path entry via window.prompt for now — no native file dialog
-// plugin wired up yet (would need @tauri-apps/plugin-dialog + a capability
-// entry); the sidecar itself only needs a plain filesystem path either way.
-function FileMenu() {
-  return (
-    <details className="file-menu">
-      <summary>Fichier</summary>
-      <div className="file-menu-items">
-        <button onClick={() => {
-          const name = window.prompt('Nom du nouveau projet ?', 'Untitled')
-          if (name) sidecar.newProject(name)
-        }}>Nouveau</button>
-        <button onClick={() => {
-          const path = window.prompt('Chemin du fichier .stancz à importer :')
-          if (path) sidecar.importStancz(path)
-        }}>Importer .stancz…</button>
-        <button onClick={() => {
-          const path = window.prompt('Dossier .bundle où enregistrer :')
-          if (path) sidecar.saveBundle(path)
-        }}>Enregistrer (bundle)…</button>
-        <button onClick={() => {
-          const path = window.prompt('Dossier .bundle à ouvrir :')
-          if (path) sidecar.loadBundle(path)
-        }}>Ouvrir (bundle)…</button>
-      </div>
-    </details>
   )
 }
 

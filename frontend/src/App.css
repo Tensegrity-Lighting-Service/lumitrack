@@ -11,6 +11,7 @@
   /* grid-template-columns/rows are set inline (App.tsx) from resizable
      panel state; only the area layout is static here. */
   grid-template-areas:
+    "menubar   menubar   menubar    menubar   menubar"
     "transport transport transport transport transport"
     "roster    vhandle1  scene      vhandle2  inspector"
     "hhandle   hhandle   hhandle    hhandle   hhandle"
@@ -25,6 +26,56 @@
 .resizer-h { cursor: row-resize; }
 .resizer:hover, .resizer:active { background: #4f6df5; }
 
+/* Classic Windows-style dropdown menu bar. */
+.menu-bar {
+  grid-area: menubar;
+  display: flex;
+  align-items: stretch;
+  background: #1b1e26;
+  border-bottom: 1px solid #2b2f38;
+  font-size: 12px;
+  position: relative;
+  z-index: 20;
+}
+.menu { position: relative; }
+.menu-label {
+  height: 100%;
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 0 10px;
+  color: #e8e8ec;
+}
+.menu-label:hover, .menu-label.open { background: #2a2e37; }
+.menu-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 220px;
+  background: #1b1e26;
+  border: 1px solid #2b2f38;
+  border-radius: 0 4px 4px 4px;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+  padding: 3px;
+  display: flex;
+  flex-direction: column;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  padding: 5px 10px;
+  text-align: left;
+  justify-content: flex-start;
+}
+.menu-item:hover:not(:disabled) { background: #4f6df5; }
+.menu-item:disabled { color: #5a6270; cursor: default; }
+.menu-item-check { width: 1em; flex-shrink: 0; }
+.menu-separator { height: 1px; background: #2b2f38; margin: 4px 2px; }
+
 .transport-bar {
   grid-area: transport;
   display: flex;
@@ -38,21 +89,6 @@
 .transport-bar .timecode { font-family: ui-monospace, Consolas, monospace; min-width: 9ch; }
 .transport-bar .project-name { color: #8a92a6; margin-left: auto; }
 .psn-on { background: #4f6df5; border-color: #4f6df5; }
-
-.file-menu { position: relative; }
-.file-menu summary {
-  list-style: none; cursor: pointer;
-  background: #2a2e37; border: 1px solid #3a3f4a; border-radius: 5px;
-  padding: 5px 12px; font-size: 12px;
-}
-.file-menu summary::-webkit-details-marker { display: none; }
-.file-menu-items {
-  position: absolute; top: 110%; left: 0; z-index: 10;
-  display: flex; flex-direction: column; gap: 2px;
-  background: #1b1e26; border: 1px solid #2b2f38; border-radius: 6px;
-  padding: 6px; min-width: 170px;
-}
-.file-menu-items button { text-align: left; }
 
 .conn-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;

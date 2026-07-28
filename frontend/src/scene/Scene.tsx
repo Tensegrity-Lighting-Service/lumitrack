@@ -23,6 +23,8 @@ import type { Project, Pose } from '../types'
 
 const CM_TO_M = 0.01
 const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
+const ACTOR_RADIUS_M = 0.4 // was 0.18 — too small to read against a full-size stage
+const FIT_PADDING = 0.9 // leaves a small margin around the stage on zoom-to-fit
 
 /** Stage (x_cm, y_cm depth, z_cm height) -> three.js world (X, Y up, Z). */
 function stageToWorld(x_cm: number, y_cm: number, z_cm: number): [number, number, number] {
@@ -63,18 +65,18 @@ function Actor({ pose, color, selected, draggable, onPointerDown }: {
       onPointerOut={() => { document.body.style.cursor = 'auto' }}
     >
       <mesh>
-        <sphereGeometry args={[0.18, 20, 16]} />
+        <sphereGeometry args={[ACTOR_RADIUS_M, 20, 16]} />
         <meshStandardMaterial color={color} emissive={selected ? color : '#000000'} emissiveIntensity={selected ? 0.6 : 0} />
       </mesh>
       {/* Directional pointer: shows which way the carried fixture faces (§12.5). */}
-      <mesh position={[0, 0, 0.32]}>
-        <coneGeometry args={[0.08, 0.28, 12]} />
+      <mesh position={[0, 0, ACTOR_RADIUS_M * 1.8]}>
+        <coneGeometry args={[ACTOR_RADIUS_M * 0.45, ACTOR_RADIUS_M * 1.6, 12]} />
         <meshStandardMaterial color={color} />
       </mesh>
       {/* Larger invisible hit target: the visible marker is small, dragging
           shouldn't require pixel-perfect aim on it. */}
       <mesh visible={false}>
-        <sphereGeometry args={[0.32, 8, 8]} />
+        <sphereGeometry args={[ACTOR_RADIUS_M * 1.8, 8, 8]} />
       </mesh>
     </group>
   )
@@ -108,20 +110,36 @@ function CameraRig({ widthCm, heightCm }: { widthCm: number; heightCm: number })
  * pointerdown on an actor arms it, pointermove raycasts against a
  * horizontal plane at the actor's height and throttles setActivation calls,
  * pointerup releases MapControls again. */
-function SceneContent({ project, positions, selectedPointId, selectedCueId, onSelectPoint }: {
+function SceneContent({ project, positions, selectedPointId, selectedCueId, onSelectPoint, cameraLocked, fitToken }: {
   project: Project
   positions: Record<string, Pose>
   selectedPointId: string | null
   selectedCueId: string | null
   onSelectPoint: (pointId: string) => void
+  cameraLocked: boolean
+  fitToken: number
 }) {
   const widthM = project.stageWidthCm * CM_TO_M
   const heightM = project.stageHeightCm * CM_TO_M
   const span = Math.max(widthM, heightM)
 
-  const { camera, raycaster, gl } = useThree()
+  const { camera, raycaster, gl, size } = useThree()
   const controlsRef = useRef<MapControlsImpl>(null)
   const dragRef = useRef<{ pointId: string; planeY: number; lastSent: number } | null>(null)
+
+  // Zoom-to-fit: on by default (mount + whenever the stage's own size
+  // changes, e.g. a new/imported project) and re-triggerable from the View
+  // menu via `fitToken`. Orthographic zoom scales the base frustum (which
+  // r3f sizes to the canvas's pixel dimensions), so world-units-per-pixel
+  // fitting the stage into the viewport is just viewport-px / stage-m.
+  useEffect(() => {
+    if (widthM <= 0 || heightM <= 0) return
+    const cam = camera as THREE.OrthographicCamera
+    const zoomX = (size.width * FIT_PADDING) / widthM
+    const zoomY = (size.height * FIT_PADDING) / heightM
+    cam.zoom = Math.min(zoomX, zoomY)
+    cam.updateProjectionMatrix()
+  }, [camera, size, widthM, heightM, fitToken])
 
   useEffect(() => {
     const dom = gl.domElement
@@ -139,7 +157,9 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
     const endDrag = () => {
       if (!dragRef.current) return
       dragRef.current = null
-      if (controlsRef.current) controlsRef.current.enabled = true
+      // Restore to the *locked* state, not unconditionally true — otherwise
+      // finishing an actor drag would silently re-enable a locked camera.
+      if (controlsRef.current) controlsRef.current.enabled = !cameraLocked
     }
 
     const onMove = (e: PointerEvent) => {
@@ -166,7 +186,7 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
       dom.removeEventListener('pointerup', endDrag)
       dom.removeEventListener('pointerleave', endDrag)
     }
-  }, [gl, camera, raycaster, selectedCueId])
+  }, [gl, camera, raycaster, selectedCueId, cameraLocked])
 
   const handleActorPointerDown = (e: ThreeEvent<PointerEvent>, worldY: number, pointId: string) => {
     e.stopPropagation()
@@ -178,9 +198,15 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
 
   return (
     <>
-      <OrthographicCamera makeDefault zoom={60} near={0.1} far={span * 20} />
+      <OrthographicCamera makeDefault near={0.1} far={span * 20} />
       <CameraRig widthCm={project.stageWidthCm} heightCm={project.stageHeightCm} />
-      <MapControls ref={controlsRef} target={[widthM / 2, 0, heightM / 2]} enableRotate={false} screenSpacePanning />
+      <MapControls
+        ref={controlsRef}
+        target={[widthM / 2, 0, heightM / 2]}
+        enabled={!cameraLocked}
+        enableRotate={false}
+        screenSpacePanning
+      />
       <ambientLight intensity={1.1} />
       <directionalLight position={[widthM, span * 3, heightM]} intensity={0.6} />
 
@@ -225,6 +251,8 @@ export function Scene(props: {
   selectedPointId: string | null
   selectedCueId: string | null
   onSelectPoint: (pointId: string) => void
+  cameraLocked: boolean
+  fitToken: number
 }) {
   return (
     <Canvas>
