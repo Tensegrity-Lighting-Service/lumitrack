@@ -629,14 +629,16 @@ function SceneContent({
   const [snapPoints, setSnapPoints] = useState<SnapPoint[]>([])
   const onSnapPoints = useCallback((p: SnapPoint[]) => setSnapPoints(p), [])
 
-  // Fit region: the union of the terrain's real footprint (when one is
-  // loaded) and the zone's own *mapped* world-space footprint — so "zoom to
-  // fit" always shows the zone as actually placed, not just the raw venue
-  // survey. Safe now that the zone has a real placement transform: earlier,
-  // unioning against a zone always assumed stuck at the world origin added
-  // a slab of empty space wherever it didn't overlap the terrain (that's
-  // why fit briefly used terrain bounds alone). Falls back to the zone's
-  // footprint on its own when there's no terrain.
+  // Fit region: the zone's own *mapped* world-space footprint — the actual
+  // work area, which is what "zoom to fit" should frame tightly around.
+  // Deliberately *not* the terrain's own bounding box: a full venue survey
+  // includes grandstands/roof/rigging, and unioning against it (an earlier
+  // attempt) meant the union was dominated by the terrain whenever the zone
+  // sits inside it (the normal case once properly mapped) — "zoom to fit"
+  // then showed the whole arena with the zone as a barely-visible rectangle
+  // inside it, not actually fit to the zone at all. The terrain is still
+  // fully reachable by panning/zooming out manually; this only decides
+  // where the *default*/explicit-fit framing lands.
   const fit = useMemo(() => {
     const rotRad = THREE.MathUtils.degToRad(project.stageMapRotationDeg)
     const cos = Math.cos(rotRad), sin = Math.sin(rotRad)
@@ -646,18 +648,12 @@ function SceneContent({
     const toWorldZ = (lx: number, lz: number) => project.stageMapOriginZM + (-lx * sin + lz * cos)
     const corners = [[0, 0], [widthM, 0], [widthM, heightM], [0, heightM]]
       .map(([lx, lz]) => [toWorldX(lx, lz), toWorldZ(lx, lz)])
-    let minX = Math.min(...corners.map((c) => c[0]))
-    let maxX = Math.max(...corners.map((c) => c[0]))
-    let minZ = Math.min(...corners.map((c) => c[1]))
-    let maxZ = Math.max(...corners.map((c) => c[1]))
-    if (terrainBounds) {
-      minX = Math.min(minX, terrainBounds.minX)
-      maxX = Math.max(maxX, terrainBounds.maxX)
-      minZ = Math.min(minZ, terrainBounds.minZ)
-      maxZ = Math.max(maxZ, terrainBounds.maxZ)
-    }
+    const minX = Math.min(...corners.map((c) => c[0]))
+    const maxX = Math.max(...corners.map((c) => c[0]))
+    const minZ = Math.min(...corners.map((c) => c[1]))
+    const maxZ = Math.max(...corners.map((c) => c[1]))
     return { centerX: (minX + maxX) / 2, centerZ: (minZ + maxZ) / 2, spanX: maxX - minX, spanZ: maxZ - minZ }
-  }, [widthM, heightM, terrainBounds, project.stageMapOriginXM, project.stageMapOriginZM, project.stageMapRotationDeg])
+  }, [widthM, heightM, project.stageMapOriginXM, project.stageMapOriginZM, project.stageMapRotationDeg])
 
   // Always current for the effect below to read without depending on it
   // (see that effect's comment for why).
