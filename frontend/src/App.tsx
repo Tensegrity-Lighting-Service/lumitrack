@@ -4,6 +4,7 @@ import { Scene } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import { Waveform } from './audio/Waveform'
 import { sidecar, useBlockContext, useConnected, useProject, usePsnRunning, useTick } from './sidecar'
+import { NumericInput } from './ui/NumericInput'
 import type { Activation, Cue, Point, Project } from './types'
 
 const ROSTER_MIN = 160
@@ -383,9 +384,9 @@ function App() {
                 </label>
                 <label>
                   Taille de la grille (cm)
-                  <input
-                    type="number" step={10} min={1} value={project.gridSizeCm}
-                    onChange={(e) => sidecar.updateStageMap({ gridSizeCm: Number(e.target.value) })}
+                  <NumericInput
+                    value={project.gridSizeCm} step={10}
+                    onCommit={(v) => { if (v !== null && v >= 1) sidecar.updateStageMap({ gridSizeCm: v }) }}
                   />
                 </label>
               </div>
@@ -430,24 +431,24 @@ function StagePlacementPanel({ project }: { project: Project }) {
       <h3>Zone de jeu</h3>
       <div className="stage-placement-grid">
         <label>Origine X (m)
-          <input type="number" step="0.1" value={project.stageMapOriginXM}
-            onChange={(e) => sidecar.updateStageMap({ originXM: Number(e.target.value) })} />
+          <NumericInput value={project.stageMapOriginXM} step={0.1}
+            onCommit={(v) => { if (v !== null) sidecar.updateStageMap({ originXM: v }) }} />
         </label>
         <label>Origine Z (m)
-          <input type="number" step="0.1" value={project.stageMapOriginZM}
-            onChange={(e) => sidecar.updateStageMap({ originZM: Number(e.target.value) })} />
+          <NumericInput value={project.stageMapOriginZM} step={0.1}
+            onCommit={(v) => { if (v !== null) sidecar.updateStageMap({ originZM: v }) }} />
         </label>
         <label>Rotation (°)
-          <input type="number" step="1" value={project.stageMapRotationDeg}
-            onChange={(e) => sidecar.updateStageMap({ rotationDeg: Number(e.target.value) })} />
+          <NumericInput value={project.stageMapRotationDeg} step={1}
+            onCommit={(v) => { if (v !== null) sidecar.updateStageMap({ rotationDeg: v }) }} />
         </label>
         <label>Largeur (cm)
-          <input type="number" step="10" value={project.stageWidthCm}
-            onChange={(e) => sidecar.updateStageMap({ widthCm: Number(e.target.value) })} />
+          <NumericInput value={project.stageWidthCm} step={10}
+            onCommit={(v) => { if (v !== null && v >= 1) sidecar.updateStageMap({ widthCm: v }) }} />
         </label>
         <label>Profondeur (cm)
-          <input type="number" step="10" value={project.stageHeightCm}
-            onChange={(e) => sidecar.updateStageMap({ heightCm: Number(e.target.value) })} />
+          <NumericInput value={project.stageHeightCm} step={10}
+            onCommit={(v) => { if (v !== null && v >= 1) sidecar.updateStageMap({ heightCm: v }) }} />
         </label>
       </div>
       <p className="hint">Ou fais glisser directement dans la vue 3D : centre = déplacer, coin orange = redimensionner, poignée verte = pivoter.</p>
@@ -475,27 +476,22 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint }: {
         />
         <h3>{cue.name}</h3>
       </div>
-      <table>
-        <thead>
-          <tr><th>Point</th><th>X</th><th>Y</th><th>Fade (ms)</th></tr>
-        </thead>
-        <tbody>
-          {Object.entries(cue.activations).map(([pointId, act]) => {
-            const point = projectPoints.find((p) => p.id === pointId)
-            return (
-              <ActivationRow
-                key={pointId}
-                cueId={cue.id}
-                pointId={pointId}
-                pointName={point?.name ?? pointId}
-                activation={act}
-                selected={pointId === selectedPointId}
-                onSelect={() => onSelectPoint(pointId === selectedPointId ? null : pointId)}
-              />
-            )
-          })}
-        </tbody>
-      </table>
+      <div className="activation-list">
+        {Object.entries(cue.activations).map(([pointId, act]) => {
+          const point = projectPoints.find((p) => p.id === pointId)
+          return (
+            <ActivationCard
+              key={pointId}
+              cueId={cue.id}
+              pointId={pointId}
+              point={point}
+              activation={act}
+              selected={pointId === selectedPointId}
+              onSelect={() => onSelectPoint(pointId === selectedPointId ? null : pointId)}
+            />
+          )
+        })}
+      </div>
       {availablePoints.length > 0 && (
         <select
           defaultValue=""
@@ -513,30 +509,64 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint }: {
   )
 }
 
-function ActivationRow({ cueId, pointId, pointName, activation, selected, onSelect }: {
+// Mirror of core/timeline.py EASING_NAMES — keep in sync by hand (same
+// caveat as types.ts: no shared schema yet).
+const EASING_NAMES = ['linear', 'smooth', 'ease-in', 'ease-out', 'bounce', 'spring', 'exponential']
+
+/** One activation of the selected cue: every field the model supports
+ * (X/Y/Z/lacet/fade/courbe, mission 2), each through NumericInput so a
+ * mid-typing backend echo can never rewrite the field (constat n°1). A
+ * cleared X/Y/Z/lacet commits null = axe détouché, il repasse en tracking
+ * (§12.1) ; le fade, lui, est toujours défini. */
+function ActivationCard({ cueId, pointId, point, activation, selected, onSelect }: {
   cueId: string
   pointId: string
-  pointName: string
+  point: Point | undefined
   activation: Activation
   selected: boolean
   onSelect: () => void
 }) {
+  const set = (patch: Partial<{
+    targetXCm: number | null; targetYCm: number | null; targetZCm: number | null
+    targetYawDeg: number | null; fadeMs: number; easing: string
+  }>) => sidecar.setActivation(cueId, pointId, patch)
+
   return (
-    <tr className={selected ? 'selected' : ''} onClick={onSelect}>
-      <td>{pointName}</td>
-      <td>
-        <input type="number" value={activation.targetXCm ?? ''} placeholder="—"
-          onChange={(e) => sidecar.setActivation(cueId, pointId, { targetXCm: Number(e.target.value) })} />
-      </td>
-      <td>
-        <input type="number" value={activation.targetYCm ?? ''} placeholder="—"
-          onChange={(e) => sidecar.setActivation(cueId, pointId, { targetYCm: Number(e.target.value) })} />
-      </td>
-      <td>
-        <input type="number" value={activation.fadeMs}
-          onChange={(e) => sidecar.setActivation(cueId, pointId, { fadeMs: Number(e.target.value) })} />
-      </td>
-    </tr>
+    <div className={`activation-card${selected ? ' selected' : ''}`} onClick={onSelect}>
+      <div className="activation-card-head">
+        <span className="swatch" style={{ background: point?.color ?? '#666' }} />
+        <span className="activation-card-name">{point?.name ?? pointId}</span>
+      </div>
+      {/* stopPropagation : cliquer dans un champ ne doit pas basculer la
+          sélection de l'acteur portée par la carte entière. */}
+      <div className="activation-grid" onClick={(e) => e.stopPropagation()}>
+        <label>X (cm)
+          <NumericInput value={activation.targetXCm} step={10} nullable
+            onCommit={(v) => set({ targetXCm: v })} />
+        </label>
+        <label>Y (cm)
+          <NumericInput value={activation.targetYCm} step={10} nullable
+            onCommit={(v) => set({ targetYCm: v })} />
+        </label>
+        <label>Z (cm)
+          <NumericInput value={activation.targetZCm} step={10} nullable
+            onCommit={(v) => set({ targetZCm: v })} />
+        </label>
+        <label>Lacet (°)
+          <NumericInput value={activation.targetYawDeg} step={5} nullable
+            onCommit={(v) => set({ targetYawDeg: v })} />
+        </label>
+        <label>Fade (ms)
+          <NumericInput value={activation.fadeMs} step={100}
+            onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v }) }} />
+        </label>
+        <label>Courbe
+          <select value={activation.easing} onChange={(e) => set({ easing: e.target.value })}>
+            {EASING_NAMES.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
+      </div>
+    </div>
   )
 }
 

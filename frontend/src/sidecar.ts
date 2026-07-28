@@ -101,8 +101,11 @@ class SidecarClient {
   deleteCue(cueId: string) {
     this.send({ type: 'delete_cue', cueId })
   }
+  // null sur un axe = le "détoucher" : le sidecar écrit None et l'axe
+  // repasse en tracking (§12.1). undefined = champ non modifié.
   setActivation(cueId: string, pointId: string, patch: {
-    targetXCm?: number; targetYCm?: number; targetZCm?: number; targetYawDeg?: number
+    targetXCm?: number | null; targetYCm?: number | null
+    targetZCm?: number | null; targetYawDeg?: number | null
     fadeMs?: number; easing?: string
   }) {
     this.send({ type: 'set_activation', cueId, pointId, ...patch })

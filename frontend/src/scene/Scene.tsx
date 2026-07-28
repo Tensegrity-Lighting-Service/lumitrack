@@ -911,7 +911,11 @@ function SceneContent({
   }
 
   const emphasisFor = (pointId: string): Emphasis => {
-    if (!selectedPointId) return 'normal'
+    // Un acteur sélectionné qui n'est PAS activé dans le bloc ne doit pas
+    // tout atténuer (verdict Mission 1, point c) : sans rien à mettre en
+    // avant, l'atténuation générale ressemble à un état désactivé. On
+    // traite ce cas comme "aucune sélection" : tout en normal.
+    if (!selectedPointId || !editEntries?.[selectedPointId]) return 'normal'
     return pointId === selectedPointId ? 'highlight' : 'dim'
   }
 

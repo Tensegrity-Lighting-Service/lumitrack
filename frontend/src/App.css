@@ -185,6 +185,57 @@
 .cue-inspector tr.selected td { background: #2a3352; }
 .cue-inspector input { width: 60px; }
 .cue-inspector select { width: 100%; margin-top: 8px; }
+
+/* Cartes d'activation (mission 2) : une carte par point activé, tous les
+   champs du modèle (X/Y/Z/lacet/fade/courbe). Remplace l'ancienne table
+   4 colonnes qui ne pouvait pas exposer Z/lacet/courbe sans déborder. */
+.activation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  overflow-y: auto;
+}
+.activation-card {
+  border: 1px solid #262b38;
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  background: #161a24;
+}
+.activation-card:hover { border-color: #34405e; }
+.activation-card.selected {
+  border-color: #4f6df5;
+  background: #1c2338;
+}
+.activation-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.activation-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px 8px;
+  margin-top: 6px;
+  cursor: default;
+}
+.activation-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10px;
+  color: #8a92a6;
+}
+.activation-grid input,
+.activation-grid select {
+  width: 100%;
+  min-width: 0;
+  font-size: 11px;
+  margin-top: 0;
+}
 .cue-inspector-title {
   display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
 }
