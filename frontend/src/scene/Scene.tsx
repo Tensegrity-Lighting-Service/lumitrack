@@ -172,7 +172,11 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
       controlsRef.current.target.set(fit.centerX, 0, fit.centerZ)
       controlsRef.current.update()
     }
-  }, [camera, size, fit, span, fitToken, cameraLocked])
+    // Depend on size.width/height (primitives), not the `size` object: r3f
+    // may publish a new size object on store updates even when the actual
+    // pixel dimensions haven't changed, which would silently re-run this
+    // fit every such update and could look like the view fighting itself.
+  }, [camera, size.width, size.height, fit, span, fitToken, cameraLocked])
 
   useEffect(() => {
     const dom = gl.domElement
