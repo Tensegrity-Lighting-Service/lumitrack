@@ -1145,7 +1145,9 @@ lumitrack/
 │   └── ui/                   supprimé
 ├── tests/
 │   ├── test_core.py           hérité de v0.1
-│   └── test_sidecar.py        NOUVEAU — couvre le fix transport/ack (§14.4)
+│   ├── test_sidecar.py        NOUVEAU — couvre le fix transport/ack (§14.4)
+│   └── test_block_context.py  NOUVEAU — chaîne de tracking du mode édition
+│                             de bloc (§14.3, mission 1 de DIRECTIVES.md)
 └── frontend/                  NOUVEAU — app Tauri complète
     ├── src-tauri/             coquille Rust (src/lib.rs, main.rs) : lance
     │                         `python -m lumitrack` en sous-processus au
@@ -1161,9 +1163,9 @@ lumitrack/
         └── audio/Waveform.tsx
 ```
 
-`PYTHONPATH=src python -m pytest -q` → **46 passed** (34 hérités de v0.1 +
-12 nouveaux). `npm run build` (dans `frontend/`) → `tsc` + `vite build`
-propres.
+`PYTHONPATH=src python -m pytest -q` → **57 passed** (34 hérités de v0.1 +
+12 sidecar/v2 + 11 contexte de bloc). `npm run build` (dans `frontend/`) →
+`tsc` + `vite build` propres.
 
 ### 14.3 Décisions d'implémentation à connaître
 
@@ -1204,6 +1206,23 @@ propres.
 - **`Cue.color`**, **`Point`/`Activation.to_dict()`/`from_dict()`** en
   camelCase — format fil cohérent entre `core/project.py` (snake_case côté
   Python) et le frontend TypeScript (camelCase).
+- **Mode édition de bloc (§12.6), backend-autoritaire de bout en bout**
+  (mission 1 de DIRECTIVES.md) : `resolve_block_context` (`core/timeline.py`)
+  résout, pour chaque activation d'un cue, le **départ réel par axe** — la
+  cible du keyframe précédent sur cet axe dans le même ordre LTP que
+  `_resolve_axis`, donc le dernier cue qui a *vraiment* touché le point, pas
+  le bloc voisin ; première apparition = snap sur sa propre cible, axe non
+  touché = valeur trackée au départ du bloc — plus la cible, une **polyline
+  spatiale échantillonnée côté Python** (paramètre uniforme, aucun easing
+  incorporé) et un **`timing` séparé** (startMs/fadeMs/easing, §13.1.11).
+  Le sidecar répond `block_context` **au seul demandeur** (lecture seule,
+  jamais de broadcast) ; le frontend re-demande le contexte à chaque
+  snapshot `project` tant qu'un bloc est sélectionné (`App.tsx`), et la
+  scène affiche trajectoires + **ghosts de cible draggables** (taille écran
+  constante, même technique que les poignées de zone), acteurs live
+  atténués. Drag d'acteur *et* drag de ghost écrivent la cible de
+  l'activation — aucune édition sans feedback visible (constat n°2 de
+  l'inspection du 2026-07-28).
 - **Zoom-to-fit cible uniquement le footprint mappé de la zone de jeu**, pas
   le terrain entier (corrigé le 2026-07-28, voir le commit
   `3aa2cca`/l'historique git) : le terrain peut être un relevé complet

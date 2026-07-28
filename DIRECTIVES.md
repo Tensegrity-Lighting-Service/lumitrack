@@ -1,0 +1,168 @@
+# DIRECTIVES.md — Supervision du développement Lumitrack
+
+**Qui écrit ici** : le superviseur (session Claude/Cowork pilotée par Florian),
+qui relit le code, teste l'application **en vrai** (souris/clavier sur la
+fenêtre Lumitrack) et confronte chaque livraison à la barre de qualité du
+projet : **timeline Logic Pro / Myelin Director, manipulation 2D/3D After
+Effects, vocabulaire grandMA** (CONCEPTION.md, intro + §12/§13).
+
+**À qui ce fichier s'adresse** : au Claude qui code dans VSCode. Quand Florian
+te dit « lis DIRECTIVES.md et exécute », prends la **première mission non
+terminée** ci-dessous, dans l'ordre. Ne saute pas de mission sans instruction
+explicite de Florian.
+
+**Boucle de travail** :
+
+1. Tu exécutes la mission en cours (commits ciblés, messages clairs).
+2. À la fin : `pytest` vert, `npm run build` propre, mise à jour de
+   CONCEPTION.md §14 si l'état documenté change, et coche la mission dans la
+   section « État » ci-dessous. Puis **arrête-toi** et demande la revue.
+3. Le superviseur relit le diff, teste l'UI en conditions réelles, et écrit
+   son verdict ici (✅ validé / 🔴 corrections demandées + détail).
+
+**Règles invariantes** (jamais négociables, quelle que soit la mission) :
+
+- Backend-autoritaire (§13.1.7) : aucune interpolation ni horloge côté
+  frontend ; toute résolution temporelle/spatiale se fait dans `core/` Python.
+- `core/` reste sans dépendance UI, couvert par des tests.
+- Positions jamais clampées aux limites de la scène ; point sans position
+  connue jamais envoyé en PSN.
+- Licences permissives uniquement (MIT/BSD/Apache) — rien de GPL/AGPL, pas de
+  Remotion (§12.16).
+
+---
+
+## Inspection UI du 2026-07-28 (superviseur) — constats
+
+Première vraie session d'usage humain-supervisé de l'app (la priorité n°1 du
+§14.5). Lecture, seek par la règle, sélection de cue, drag d'acteur, saisie
+inspecteur, zoom viewport : tout fonctionne de bout en bout — bravo pour le
+socle. Quatre écarts sérieux avec la barre visée, par gravité décroissante :
+
+1. **🔴 BUG — Les champs numériques de l'inspecteur se font écraser par le
+   round-trip WebSocket pendant la saisie.** Taper `5000` dans X donne `50` ;
+   retenter dans Y a produit `10100` (caret déplacé par le re-render, saisie
+   insérée au mauvais endroit). Cause : `onChange` à chaque frappe →
+   `setActivation` → broadcast `project` → l'input contrôlé est réécrit en
+   pleine frappe. Reproduit à 100 % sur la table d'activations du CueInspector.
+2. **🔴 PIÈGE UX — Édition muette hors du contexte temporel du bloc.** Bloc
+   « Entree » (0→4 s) sélectionné, playhead à 8 s : un drag d'acteur écrit la
+   cible dans le cue (visible dans l'inspecteur) mais **rien ne bouge à
+   l'écran** — l'instant affiché est gouverné par un autre cue. Aucun feedback,
+   modification silencieuse de données invisibles. C'est l'anti-pattern exact
+   que le mode d'édition de bloc du §12.6 doit empêcher : dans After Effects on
+   ne modifie jamais un keyframe qu'on ne voit pas.
+3. **🟠 Lisibilité des acteurs.** Au zoom « fit » sur l'arène, un acteur fait
+   ~5 px : à peine visible, et la pointe directionnelle (cône vu de dessus =
+   un petit rond) est illisible. Les poignées de zone ont déjà résolu ce
+   problème (taille écran constante via `useFrame`/`camera.zoom`) ; les
+   acteurs doivent bénéficier de la même technique (taille écran minimale),
+   avec un marqueur de direction plat type flèche/triangle au sol, lisible du
+   dessus (convention movers des logiciels de prévisu, §12.5).
+4. **🟠 Transport/timeline en dessous de la barre Logic/Myelin.** Scrub =
+   `<input type="range">` natif ; timecode non éditable ni cliquable ; pas de
+   retour-à-zéro ; règle en secondes nues (pas de HH:MM:SS) ; aucun zoom
+   horizontal de timeline ; waveform (quand il y a de l'audio) dans un
+   composant séparé, sans règle ni zoom partagés avec la piste de cues.
+
+---
+
+## Missions
+
+### Mission 1 — Mode édition de bloc + trajectoires (barre After Effects)
+
+Réfs : §12.6, §13.1.11, constat n°2. C'est le chantier prioritaire choisi par
+Florian (« Trajectoires qualité AE »).
+
+- **Sélectionner un bloc fait entrer la scène en mode édition de ce bloc**
+  (§12.6) : la scène affiche les **cibles** des activations du bloc et les
+  **trajectoires statiques** de chaque acteur activé — chemin du point de
+  départ réel à la cible.
+- **Point de départ = résolution de la vraie chaîne de tracking** côté Python
+  (le dernier cue qui a réellement activé l'acteur avant ce bloc — pas le bloc
+  voisin) : nouvelle commande sidecar du type `resolve_block_context`, jamais
+  de calcul dans le frontend. Tests pytest sur cette résolution (acteur sauté
+  par un bloc intermédiaire, chevauchements, LTP).
+- **Drag d'acteur en mode édition = déplacer la cible, avec preview visible** :
+  ghost/marqueur à la position cible + trajectoire mise à jour en direct. Plus
+  aucune édition sans retour visuel possible.
+- Acteurs sélectionnés en **surbrillance**, le reste atténué mais visible
+  (§12.6) ; l'état live (positions à l'instant du playhead) reste affiché en
+  parallèle, discret.
+- Trajectoires : polyline échantillonnée par le backend suffit pour cette
+  mission (l'éditeur Bézier/tracé vectoriel du §12.5 viendra après) — mais la
+  structure de données envoyée doit déjà distinguer chemin spatial et timing
+  (§13.1.11).
+
+**Acceptation** : le scénario du constat n°2 devient impossible à reproduire
+(toute édition a un feedback immédiat dans la scène) ; trajectoires visibles
+et correctes pour un projet avec cues chevauchants ; `pytest` couvre la chaîne
+de tracking ; aucune interpolation frontend.
+
+### Mission 2 — Inspecteur fiable + saisie numérique pro
+
+Réfs : constat n°1, §12.7.
+
+- Inputs numériques avec **état local d'édition** : commit sur Enter/blur,
+  Échap annule, plus jamais écrasés par un broadcast en cours de frappe.
+- Incréments clavier (flèches haut/bas, Maj = ×10) et, si raisonnable, drag
+  horizontal sur le label façon After Effects.
+- Exposer dans l'inspecteur ce que le modèle supporte déjà : **Z (hauteur)**,
+  **lacet (yaw)**, **easing par activation**.
+
+**Acceptation** : taper `5000` donne toujours `5000`, quelle que soit la
+cadence des ticks ; Échap restaure la valeur d'avant ; Z/yaw/easing éditables
+et pris en compte dans la lecture.
+
+### Mission 3 — Finitions desktop
+
+Réfs : constat n°4 (transport), §13.1.10, choix « Finitions desktop ».
+
+- **Dialogues fichiers natifs Tauri** (plugin dialog) pour : nouveau projet,
+  import `.stancz`, ouvrir/enregistrer le bundle, import glTF/audio.
+  Suppression de tous les `window.prompt`.
+- **Undo/redo** — le « non négociable » du §13.1.10, toujours absent :
+  historique côté **sidecar** (backend-autoritaire oblige), commande
+  `undo`/`redo` exposée, Ctrl+Z / Ctrl+Maj+Z au frontend, menu Édition.
+  Couvrir par des tests (édition → undo → état identique à l'original).
+- **Rotation (lacet) à la souris** sur l'acteur sélectionné en mode édition
+  de bloc (poignée de rotation, cohérente avec celle de la zone de jeu).
+- Transport : timecode cliquable/éditable, bouton retour-à-zéro, scrub stylé
+  (pas le `<input range>` natif).
+
+**Acceptation** : plus un seul `window.prompt` ; Ctrl+Z fonctionne sur drag
+d'acteur, saisie inspecteur, création/suppression/déplacement de cue ; la
+rotation d'un acteur est éditable à la souris et part en PSN (`TRACKER_ORI`).
+
+### Mission 4 — Timeline pro (barre Logic Pro / Myelin Director)
+
+Réfs : constat n°4, §12.10, §12.1.
+
+- **Zoom horizontal** (Ctrl+molette + boutons) et scroll, **règle en
+  HH:MM:SS** avec graduations adaptatives.
+- **Waveform et cues sous la même règle** : zoom/scroll partagés, alignement
+  au pixel (aujourd'hui deux composants indépendants).
+- **Piste Repères** (markers nommés, posables au playhead — §12.10).
+- **Courbe de fade dessinée sur le bloc** (automation à points clés, §12.1) —
+  au minimum l'affichage de la courbe d'easing existante sur le bloc.
+- **Avant d'implémenter** : livrer dans DIRECTIVES.md un court verdict —
+  `@xzdarcy/react-timeline-editor` peut-il porter tout ça (zoom dynamique,
+  règle custom, pistes hétérogènes, rendu de courbes sur blocs), ou faut-il
+  une timeline canvas maison ? Décision supervisée avant le gros du code.
+
+**Acceptation** : zoomer/scroller garde waveform, blocs, repères et playhead
+alignés au pixel ; les repères sont sauvegardés dans le bundle ; verdict
+timeline documenté et validé par le superviseur.
+
+---
+
+## État
+
+- [x] Mission 1 — Mode édition de bloc + trajectoires *(2026-07-28, en
+  attente de revue : `resolve_block_context` + tests, ghosts/trajectoires
+  dans la scène, live atténué — voir CONCEPTION.md §14.3)*
+- [ ] Mission 2 — Inspecteur fiable
+- [ ] Mission 3 — Finitions desktop (dialogues natifs, undo/redo, rotation)
+- [ ] Mission 4 — Timeline pro
+
+*Verdicts du superviseur : (à venir après chaque mission)*
