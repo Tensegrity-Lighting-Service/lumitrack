@@ -239,3 +239,49 @@ d) Non bloquant, à garder en tête : le conflit LTP à départ strictement
 - **Règle** : ne jamais fermer la fenêtre de terminal du .bat pendant
   l'utilisation — elle héberge Vite + Tauri + sidecar ; la fermer tue tout
   en laissant la fenêtre Lumitrack zombie à l'écran.
+
+
+---
+
+## Décision d'architecture — 2026-07-28 (soir) : refonte native intégrale
+
+Décision de Florian, actée après discussion : **Lumitrack devient une
+application 100 % native** — un seul processus, un seul exe, zéro webview,
+zéro serveur local. Chemin retenu : **Rust intégral** (egui pour l'UI, wgpu
+pour la scène 3D, cpal + ffmpeg externe pour l'audio, PSN/timecode portés) —
+seule voie native qui conserve la logique validée : la suite Python (58
+tests) sert d'ORACLE au port. Friction (friction.graphics) est retenu comme
+**référence UX** (timeline/graph editor) mais écarté comme base de code :
+GPL-3.0 (critère §12.16) et moteur 2D vectoriel sans rapport avec le métier.
+
+L'app Tauri/Python actuelle reste l'application de travail jusqu'à parité de
+la native — on ne casse rien pendant la transition.
+
+### Phases
+
+- [x] **N0 — Moteur : modèle + résolution** *(fait 2026-07-28 : crate
+  `native/lumitrack-engine` — modèle serde au format fil camelCase (les
+  bundles existants restent lisibles), easing, résolution LTP 4 axes,
+  contexte de bloc. 14 tests unitaires portés + **test de parité contre
+  l'oracle Python** : fixture générée par `native/tests/
+  generate_parity_fixture.py` (3 projets aléatoires, 120 instants, tous les
+  contextes de bloc), identité à 1e-6. `cargo test` : 14 verts.)*
+- [ ] **N1 — Moteur : PSN + timecode + transport** (encodeur PSN v2 +
+  découpage MTU validés contre les captures pypsn des tests Python,
+  récepteurs Art-Net TC/MTC, horloge de transport)
+- [ ] **N2 — Coquille native + vue Dessus** (winit/egui/wgpu : fenêtre,
+  caméra ortho, terrain glTF, acteurs, ghosts/trajectoires)
+- [ ] **N3 — Timeline native + audio** (portage egui de la timeline maison
+  écrite ce soir — zoom curseur, règle adaptative, waveform ; décodage via
+  ffmpeg externe, lecture cpal)
+- [ ] **N4 — Inspecteur/roster/menus + undo/redo + dialogues natifs**
+- [ ] **N5 — Parité prononcée : retrait du sidecar Python et du frontend
+  web, exe unique, installeur**
+
+### Boucle de dev pendant la refonte
+
+Le superviseur code et teste le moteur dans son cloud (`cargo test`) ; les
+builds fenêtrés se font sur la machine de Florian via un `.bat` (à créer en
+N2) ou par cross-compilation depuis le cloud. Le test UI de la mission
+« timeline + son » de l'app actuelle reste à faire à la prochaine relance —
+elle demeure l'app de production pendant la transition.
