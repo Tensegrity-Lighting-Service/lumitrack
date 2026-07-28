@@ -174,6 +174,24 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             return {"type": "error", "message": str(exc)}
         return {"type": "block_context", **context}
 
+    if msg_type == "set_audio":
+        # Piste audio du projet (mission timeline+son). `path` charge/retire
+        # le fichier ; `durationS` arrive du frontend une fois le fichier
+        # decode (WebAudio/wavesurfer) — le backend n'embarque aucun codec,
+        # mais c'est lui qui integre la duree au transport
+        # (Project.duration_ms = max(cues, audio), deja en place).
+        project = session.project
+        if "path" in msg:
+            project.audio_path = msg["path"] or None
+            if project.audio_path is None:
+                project.audio_duration_s = None
+        if "durationS" in msg:
+            d = msg["durationS"]
+            project.audio_duration_s = float(d) if d else None
+        session.timeline.rebuild()
+        session.transport.set_duration(session.timeline.duration_ms)
+        return None
+
     if msg_type == "psn_start":
         if not session.broadcaster.start():
             return {"type": "error", "message": session.broadcaster.last_error or "PSN start failed"}

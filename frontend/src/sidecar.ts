@@ -110,6 +110,12 @@ class SidecarClient {
   }) {
     this.send({ type: 'set_activation', cueId, pointId, ...patch })
   }
+  // Piste audio : `path` charge/retire le fichier, `durationS` est envoyé
+  // par le frontend une fois le fichier décodé — le backend intègre la
+  // durée au transport (duration = max(cues, audio)) mais ne décode rien.
+  setAudio(patch: { path?: string | null; durationS?: number | null }) {
+    this.send({ type: 'set_audio', ...patch })
+  }
   // Block-edit context (§12.6). Requested again after every fresh
   // `project` snapshot while a cue is selected (see App.tsx), so the
   // displayed trajectories always describe the current project state —

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { Scene } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
-import { Waveform } from './audio/Waveform'
 import { sidecar, useBlockContext, useConnected, useProject, usePsnRunning, useTick } from './sidecar'
 import { NumericInput } from './ui/NumericInput'
 import type { Activation, Cue, Point, Project } from './types'
@@ -260,6 +259,14 @@ function App() {
           if (path) sidecar.importStancz(path)
         } },
         { separator: true } as const,
+        { label: 'Importer un audio…', onClick: () => {
+          const path = window.prompt('Chemin du fichier audio (mp3, m4a, wav…) :')
+          if (path) sidecar.setAudio({ path })
+        } },
+        { label: 'Retirer l’audio', disabled: !project.audioPath, onClick: () => {
+          sidecar.setAudio({ path: null })
+        } },
+        { separator: true } as const,
         { label: 'Enregistrer (bundle)…', onClick: () => {
           const path = window.prompt('Dossier .bundle où enregistrer :')
           if (path) sidecar.saveBundle(path)
@@ -415,8 +422,14 @@ function App() {
       <HorizontalResizer area="hhandle" onDeltaY={(dy) => setTimelineHeight((h) => clamp(h - dy, TIMELINE_MIN, TIMELINE_MAX))} />
 
       <footer className="timeline-dock">
-        {project.audioPath && <Waveform audioPath={project.audioPath} tMs={tMs} playing={playing} />}
-        <CueTimeline project={project} tMs={tMs} selectedCueId={selectedCueId} onSelectCue={setSelectedCueId} />
+        <CueTimeline
+          project={project}
+          tMs={tMs}
+          playing={playing}
+          durationMs={durationMs}
+          selectedCueId={selectedCueId}
+          onSelectCue={setSelectedCueId}
+        />
       </footer>
     </div>
   )

@@ -53,3 +53,25 @@ def test_unknown_transport_action_is_reported_as_error():
     session = Session()
     reply = _run(_handle_message(session, {"type": "transport", "action": "rewind"}))
     assert reply is not None and reply["type"] == "error"
+
+
+def test_set_audio_updates_path_duration_and_transport():
+    """Mission timeline+son : `set_audio` porte le chemin et/ou la durée
+    décodée par le frontend ; la durée du transport doit suivre
+    (Project.duration_ms = max(cues, audio)) et retirer l'audio doit
+    ramener la durée aux cues."""
+    session = Session()
+    cue_end = session.project.total_cue_ms
+
+    reply = _run(_handle_message(session, {"type": "set_audio", "path": "C:/x/show.m4a"}))
+    assert reply is None  # commande mutante → broadcast projet
+    assert session.project.audio_path == "C:/x/show.m4a"
+
+    _run(_handle_message(session, {"type": "set_audio", "durationS": 120.0}))
+    assert session.project.audio_duration_s == pytest.approx(120.0)
+    assert session.transport.duration_ms == pytest.approx(120_000.0)
+
+    _run(_handle_message(session, {"type": "set_audio", "path": None}))
+    assert session.project.audio_path is None
+    assert session.project.audio_duration_s is None
+    assert session.transport.duration_ms == pytest.approx(cue_end)

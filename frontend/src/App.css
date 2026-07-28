@@ -271,52 +271,75 @@
   flex-direction: column;
   overflow: hidden;
 }
-.cue-timeline { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
-.waveform { border-bottom: 1px solid #2b2f38; flex-shrink: 0; }
-.cue-timeline-toolbar {
-  display: flex; gap: 6px; padding: 6px 10px;
+/* ---- Timeline maison (mission "timeline pro + son") ----
+   Une seule surface scrollable horizontale : la règle, la piste audio, les
+   lanes de blocs et le playhead partagent pxPerMs + scrollLeft — alignement
+   au pixel structurel. Colonne d'en-têtes de piste à gauche, façon Myelin
+   (chip colorée), hors du scroll. */
+.tl { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.tl-toolbar {
+  display: flex; gap: 6px; padding: 6px 10px; align-items: center;
   border-bottom: 1px solid #2b2f38;
 }
-
-/* Myelin Director-style layout: a colored track-header column to the left
-   of the ruler+blocks widget (docs.myelindirector.com/Myelin Director/
-   Tracks/Regions). Cues can overlap (§12.1) and are packed into as many
-   lanes as needed (CueTimeline.tsx); the header spans all of them since
-   it's still conceptually one "Blocs/Cue" track, not one header per lane. */
-.cue-timeline-body { display: flex; position: relative; }
-.cue-track-header {
-  position: absolute;
-  left: 0;
-  width: 74px;
-  flex-shrink: 0;
-  background: #4f6df5;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: 600;
-  font-size: 11px;
-  z-index: 1;
+.tl-toolbar-spacer { flex: 1; }
+.tl-main { display: flex; flex: 1; min-height: 0; }
+.tl-headers {
+  width: 86px; flex-shrink: 0;
+  border-right: 1px solid #2b2f38;
+  display: flex; flex-direction: column;
+  overflow: hidden;
 }
-.cue-timeline-editor-wrap { flex: 1; min-width: 0; margin-left: 78px; }
-
-/* The library defaults .timeline-editor to a hardcoded 600x600px box.
-   Left unconstrained, that renders far taller than our dock, gets clipped,
-   and the leftover area (in the widget's own #191b1d background, slightly
-   off from our dock's #17191f) reads as a separate panel/scrollbar below
-   the actual blocks. We size it to content instead via the `style` prop
-   (see CueTimeline.tsx), so this just guarantees it never exceeds the dock. */
-.cue-timeline .timeline-editor { width: 100%; max-height: 100%; }
+.tl-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 8px; font-size: 11px; font-weight: 600; color: #d5d9e4;
+  border-bottom: 1px solid #22252e;
+}
+.tl-header-chip { width: 4px; height: 60%; border-radius: 2px; flex-shrink: 0; }
+.tl-header-spacer { border-bottom: 1px solid #22252e; flex-shrink: 0; }
+.tl-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: auto; position: relative; }
+.tl-content { position: relative; min-height: 100%; }
+.tl-ruler {
+  position: relative; border-bottom: 1px solid #22252e;
+  cursor: ew-resize; overflow: hidden;
+  background: #14161c;
+}
+.tl-tick {
+  position: absolute; bottom: 0; width: 1px; height: 6px; background: #3a4052;
+  pointer-events: none;
+}
+.tl-tick-major { height: 10px; background: #545c74; }
+.tl-tick-major span {
+  position: absolute; bottom: 9px; left: 3px;
+  font-size: 10px; color: #8a92a6; white-space: nowrap;
+}
+.tl-track-audio {
+  position: relative; border-bottom: 1px solid #22252e;
+  background: #121419;
+  overflow: hidden;
+}
+.tl-audio-canvas { position: sticky; left: 0; display: block; }
+.tl-lanes { position: relative; }
+.tl-playhead {
+  position: absolute; top: 0; bottom: 0; width: 1px;
+  background: #e8e8ec; pointer-events: none; z-index: 5;
+}
 
 /* Two-tone region block (colored title strip + darker tinted body),
    matching Myelin's region look. --cue-color is set inline per block. */
 .cue-block {
+  position: absolute;
   display: flex; flex-direction: column;
-  width: 100%; height: 100%;
   border-radius: 4px; overflow: hidden;
   font-size: 11px; color: white;
+  cursor: grab; user-select: none;
 }
+.cue-block-dragging { cursor: grabbing; opacity: 0.9; }
+.cue-resize {
+  position: absolute; top: 0; bottom: 0; width: 6px;
+  cursor: ew-resize;
+}
+.cue-resize-l { left: 0; }
+.cue-resize-r { right: 0; }
 .cue-block-header {
   display: flex; align-items: center; justify-content: space-between;
   height: 16px; flex-shrink: 0; padding: 0 6px;

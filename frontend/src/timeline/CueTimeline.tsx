@@ -1,38 +1,35 @@
-// "Piste Blocs/Cue" of CONCEPTION.md §12.10, styled after Myelin Director's
-// track/region look (colored track header, two-tone region blocks). Cues
-// are free to overlap in time (§12.1) — packed into as many visual lanes as
-// needed so overlapping blocks never collide; lanes are a display-only
-// packing, not a semantic "track" (Repères/Groupes/LED tracks from §12.10
-// remain deferred, §13.2).
+// Timeline maison (mission "timeline pro + son", barre Logic Pro / Myelin
+// Director). Remplace @xzdarcy/react-timeline-editor — verdict de la
+// Mission 4 : la lib imposait un zoom figé, ses rows virtualisées et son
+// CSS, et ne pouvait porter ni la règle partagée avec la waveform, ni les
+// courbes sur blocs à venir (§12.1). Ici, règle, piste audio, blocs et
+// playhead vivent dans UN seul système de coordonnées : `pxPerMs` (zoom) et
+// le scrollLeft du conteneur. L'alignement au pixel est structurel, pas un
+// réglage.
 //
-// The engine's own clock is never started (`autoReRender` covers repaint,
-// we drive the cursor by hand): playback time always comes from the
-// sidecar's `tick` messages (§13.1.7, backend-autoritaire). A local drag
-// gesture is allowed to move the cursor optimistically for feel, but it
-// immediately calls `sidecar.seek()` so the backend stays the source of
-// truth and the next tick corrects any drift.
-//
-// All callback props below are wrapped in useCallback: `CueTimeline`
-// re-renders on every tick (~30/s), and passing a fresh function identity
-// each time to <TimelineEditor> — which mounts react-virtualized internals
-// with their own effects — was enough to push it into a real "Maximum
-// update depth exceeded" render loop in practice (observed 2026-07-28).
-import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { Timeline as TimelineEditor, type TimelineState } from '@xzdarcy/react-timeline-editor'
-import type { TimelineRow } from '@xzdarcy/timeline-engine'
-import '@xzdarcy/react-timeline-editor/dist/react-timeline-editor.css'
+// Le temps reste backend-autoritaire (§13.1.7) : la position de lecture
+// vient exclusivement des ticks du sidecar ; le scrub/seek envoie des
+// commandes. Pendant un drag de bloc, le déplacement est optimiste et
+// purement visuel (delta local), la vraie écriture (`update_cue`) part au
+// relâchement — même modèle que la lib remplacée, sans tempête de
+// broadcasts pendant le geste.
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Cue, Project } from '../types'
 import { sidecar } from '../sidecar'
+import { AudioTrack } from './AudioTrack'
 
 const MS_PER_S = 1000
-const ROW_HEIGHT = 40
-const TIME_AREA_HEIGHT = 32 // matches the library's own .timeline-editor-time-area CSS
+const RULER_H = 26
+const AUDIO_H = 52
+const LANE_H = 36
+const MIN_CUE_MS = 100
+const SNAP_PX = 8
+const SEEK_THROTTLE_MS = 33
+const MIN_PX_PER_MS = 0.001 // ~16 min par 1000 px
+const MAX_PX_PER_MS = 2 // 0.5 s par 1000 px
+const CONTENT_PAD_PX = 160
 
 const CUE_PALETTE = ['#4F6DF5', '#F5734F', '#B06FE0', '#4FF58C', '#4FF5E0', '#F5C84F']
-
-const effects = {
-  cue: { id: 'cue', name: 'Cue' },
-}
 
 /** Greedy interval packing: each cue goes in the first lane whose last cue
  * has already ended by the time this one starts, else it opens a new lane.
@@ -48,82 +45,279 @@ function packLanes(cues: Cue[]): Cue[][] {
   return lanes.length ? lanes : [[]]
 }
 
-export function CueTimeline({ project, tMs, selectedCueId, onSelectCue }: {
+// Pas de graduation adaptatif : le plus petit pas qui laisse >= ~80 px
+// entre deux labels. Les sous-graduations (step/5) apparaissent dès 12 px.
+const TICK_STEPS_MS = [
+  50, 100, 250, 500,
+  1000, 2000, 5000, 10_000, 15_000, 30_000,
+  60_000, 120_000, 300_000, 600_000,
+]
+
+function chooseTickStep(pxPerMs: number): number {
+  for (const step of TICK_STEPS_MS) {
+    if (step * pxPerMs >= 80) return step
+  }
+  return TICK_STEPS_MS[TICK_STEPS_MS.length - 1]
+}
+
+function formatTick(ms: number, stepMs: number): string {
+  const totalS = ms / MS_PER_S
+  const h = Math.floor(totalS / 3600)
+  const m = Math.floor((totalS % 3600) / 60)
+  const s = Math.floor(totalS % 60)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  const base = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
+  if (stepMs < 1000) {
+    const millis = Math.round(ms % 1000)
+    return `${base}.${millis.toString().padStart(3, '0')}`
+  }
+  return base
+}
+
+interface DragState {
+  cueId: string
+  mode: 'move' | 'resize-l' | 'resize-r'
+  startClientX: number
+  origStartMs: number
+  origDurationMs: number
+  /** Proposition courante (affichée pendant le geste, committée au lâcher). */
+  startMs: number
+  durationMs: number
+  moved: boolean
+}
+
+export function CueTimeline({ project, tMs, playing, durationMs, selectedCueId, onSelectCue }: {
   project: Project
   tMs: number
+  playing: boolean
+  durationMs: number
   selectedCueId: string | null
   onSelectCue: (cueId: string | null) => void
 }) {
-  const stateRef = useRef<TimelineState>(null)
   const cues = project.cues
-
   const lanes = useMemo(() => packLanes(cues), [cues])
 
-  const editorData: TimelineRow[] = useMemo(() => lanes.map((laneCues, i) => ({
-    id: `lane-${i}`,
-    actions: laneCues.map((cue) => ({
-      id: cue.id,
-      start: cue.startMs / MS_PER_S,
-      end: (cue.startMs + cue.durationMs) / MS_PER_S,
-      effectId: 'cue',
-      movable: true,
-      flexible: true,
-      selected: cue.id === selectedCueId,
-    })),
-  })), [lanes, selectedCueId])
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [viewportWidth, setViewportWidth] = useState(0)
+  const [scrollLeft, setScrollLeft] = useState(0)
+  const [pxPerMs, setPxPerMs] = useState<number | null>(null)
+  const [drag, setDrag] = useState<DragState | null>(null)
+  const dragRef = useRef<DragState | null>(null)
+  const lastSeekRef = useRef(0)
 
-  // The sidecar pushes ~30 ticks/s while playing; keep the cursor locked to
-  // that instead of letting the widget's own clock run.
+  const effPxPerMs = pxPerMs ?? 0.05
+
   useEffect(() => {
-    stateRef.current?.setTime(tMs / MS_PER_S)
-  }, [tMs])
-
-  const getActionRender = useCallback((action: { id: string; selected?: boolean }) => {
-    const cue = cues.find((c) => c.id === action.id)
-    if (!cue) return null
-    const count = Object.keys(cue.activations).length
-    return (
-      <div
-        className={`cue-block${action.selected ? ' cue-block-selected' : ''}`}
-        style={{ '--cue-color': cue.color } as React.CSSProperties}
-      >
-        <div className="cue-block-header">
-          <span className="cue-block-name">{cue.name}</span>
-          <span className="cue-block-count">{count}</span>
-        </div>
-        <div className="cue-block-body" />
-      </div>
-    )
-  }, [cues])
-
-  const onClickActionOnly = useCallback((_e: unknown, { action }: { action: { id: string } }) => {
-    onSelectCue(action.id)
-  }, [onSelectCue])
-
-  const onClickTimeArea = useCallback((time: number) => {
-    sidecar.seek(time * MS_PER_S)
-    return true
+    const el = scrollRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setViewportWidth(el.clientWidth))
+    ro.observe(el)
+    setViewportWidth(el.clientWidth)
+    return () => ro.disconnect()
   }, [])
 
-  const onCursorDrag = useCallback((time: number) => {
-    sidecar.seek(time * MS_PER_S)
+  const fit = useCallback(() => {
+    const el = scrollRef.current
+    if (!el || durationMs <= 0) return
+    const px = Math.min(MAX_PX_PER_MS, Math.max(MIN_PX_PER_MS, (el.clientWidth - 60) / durationMs))
+    setPxPerMs(px)
+    el.scrollLeft = 0
+  }, [durationMs])
+
+  // Premier cadrage automatique, une seule fois (ne pas re-cadrer à chaque
+  // changement de durée : ça volerait le zoom choisi par l'utilisateur).
+  const didFitRef = useRef(false)
+  useEffect(() => {
+    if (!didFitRef.current && viewportWidth > 0 && durationMs > 0) {
+      didFitRef.current = true
+      fit()
+    }
+  }, [viewportWidth, durationMs, fit])
+
+  const zoomAt = useCallback((factor: number, clientX?: number) => {
+    const el = scrollRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const offsetX = clientX !== undefined ? clientX - rect.left : el.clientWidth / 2
+    setPxPerMs((prev) => {
+      const cur = prev ?? 0.05
+      const next = Math.min(MAX_PX_PER_MS, Math.max(MIN_PX_PER_MS, cur * factor))
+      // Garde l'instant sous le curseur immobile pendant le zoom.
+      const tAtCursor = (el.scrollLeft + offsetX) / cur
+      requestAnimationFrame(() => {
+        el.scrollLeft = Math.max(0, tAtCursor * next - offsetX)
+      })
+      return next
+    })
   }, [])
 
-  const onActionMoveEnd = useCallback(({ action, start }: { action: { id: string }; start: number }) => {
-    const cue = cues.find((c) => c.id === action.id)
-    if (!cue) return
-    sidecar.updateCue(cue.id, { startMs: start * MS_PER_S })
-  }, [cues])
+  // Ctrl+molette = zoom au curseur (geste standard DAW) ; molette seule =
+  // défilement horizontal. Listener non-passif obligatoire pour pouvoir
+  // empêcher le zoom navigateur du Ctrl+molette.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        zoomAt(e.deltaY < 0 ? 1.25 : 0.8, e.clientX)
+      } else {
+        const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+        if (d !== 0) {
+          e.preventDefault()
+          el.scrollLeft += d
+        }
+      }
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [zoomAt])
 
-  const onActionResizeEnd = useCallback(({ action, start, end }: { action: { id: string }; start: number; end: number }) => {
-    const cue = cues.find((c) => c.id === action.id)
-    if (!cue) return
-    sidecar.updateCue(cue.id, { startMs: start * MS_PER_S, durationMs: (end - start) * MS_PER_S })
-  }, [cues])
+  // Suivi automatique du playhead pendant la lecture (façon Logic : la vue
+  // saute quand le curseur atteint le bord droit, jamais pendant l'édition).
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !playing) return
+    const px = tMs * effPxPerMs
+    if (px < el.scrollLeft || px > el.scrollLeft + el.clientWidth - 60) {
+      el.scrollLeft = Math.max(0, px - 60)
+    }
+  }, [tMs, playing, effPxPerMs])
+
+  const contentWidth = Math.max(viewportWidth, durationMs * effPxPerMs + CONTENT_PAD_PX)
+
+  // ---- règle : graduations visibles uniquement ----
+  const ticks = useMemo(() => {
+    const step = chooseTickStep(effPxPerMs)
+    const minor = step / 5
+    const showMinor = minor * effPxPerMs >= 12
+    const t0 = Math.max(0, Math.floor(scrollLeft / effPxPerMs / step - 1) * step)
+    const t1 = (scrollLeft + viewportWidth) / effPxPerMs + step
+    const out: { ms: number; label: string | null }[] = []
+    for (let t = t0; t <= t1; t += showMinor ? minor : step) {
+      const isMajor = Math.round(t) % step === 0
+      out.push({ ms: t, label: isMajor ? formatTick(t, step) : null })
+    }
+    return out
+  }, [effPxPerMs, scrollLeft, viewportWidth])
+
+  // ---- seek au clic/drag sur la règle ----
+  const seekTo = useCallback((clientX: number) => {
+    const el = scrollRef.current
+    if (!el) return
+    const now = performance.now()
+    if (now - lastSeekRef.current < SEEK_THROTTLE_MS) return
+    lastSeekRef.current = now
+    const rect = el.getBoundingClientRect()
+    const ms = Math.max(0, (el.scrollLeft + clientX - rect.left) / effPxPerMs)
+    sidecar.seek(ms)
+  }, [effPxPerMs])
+
+  const onRulerPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    lastSeekRef.current = 0
+    seekTo(e.clientX)
+    const onMove = (ev: PointerEvent) => seekTo(ev.clientX)
+    const onUp = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+    }
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+  }, [seekTo])
+
+  // ---- drag de bloc (déplacement / redimensionnement) ----
+  const snapCandidates = useMemo(() => {
+    const out = [0, tMs, durationMs]
+    for (const c of cues) {
+      out.push(c.startMs, c.startMs + c.durationMs)
+    }
+    return out
+  }, [cues, tMs, durationMs])
+
+  const snap = useCallback((ms: number, excludeCueId: string, disable: boolean): number => {
+    if (disable) return ms
+    const threshold = SNAP_PX / effPxPerMs
+    let best = ms
+    let bestDist = threshold
+    const excluded = cues.find((c) => c.id === excludeCueId)
+    for (const cand of snapCandidates) {
+      // Ne pas snapper un bloc sur ses propres bords d'origine.
+      if (excluded && (cand === excluded.startMs || cand === excluded.startMs + excluded.durationMs)) continue
+      const d = Math.abs(cand - ms)
+      if (d < bestDist) { bestDist = d; best = cand }
+    }
+    return best
+  }, [snapCandidates, cues, effPxPerMs])
+
+  const beginBlockDrag = useCallback((e: React.PointerEvent<HTMLDivElement>, cue: Cue, mode: DragState['mode']) => {
+    e.stopPropagation()
+    e.preventDefault()
+    onSelectCue(cue.id)
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    const initial: DragState = {
+      cueId: cue.id, mode, startClientX: e.clientX,
+      origStartMs: cue.startMs, origDurationMs: cue.durationMs,
+      startMs: cue.startMs, durationMs: cue.durationMs, moved: false,
+    }
+    dragRef.current = initial
+    setDrag(initial)
+
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current
+      if (!d) return
+      const deltaMs = (ev.clientX - d.startClientX) / effPxPerMs
+      const noSnap = ev.altKey
+      let startMs = d.origStartMs
+      let dur = d.origDurationMs
+      if (d.mode === 'move') {
+        startMs = Math.max(0, d.origStartMs + deltaMs)
+        const snappedStart = snap(startMs, d.cueId, noSnap)
+        if (snappedStart !== startMs) {
+          startMs = snappedStart
+        } else {
+          const snappedEnd = snap(startMs + dur, d.cueId, noSnap)
+          if (snappedEnd !== startMs + dur) startMs = snappedEnd - dur
+        }
+        startMs = Math.max(0, startMs)
+      } else if (d.mode === 'resize-r') {
+        dur = Math.max(MIN_CUE_MS, d.origDurationMs + deltaMs)
+        const end = snap(d.origStartMs + dur, d.cueId, noSnap)
+        dur = Math.max(MIN_CUE_MS, end - d.origStartMs)
+      } else {
+        const end = d.origStartMs + d.origDurationMs
+        startMs = Math.min(end - MIN_CUE_MS, Math.max(0, d.origStartMs + deltaMs))
+        startMs = Math.min(end - MIN_CUE_MS, Math.max(0, snap(startMs, d.cueId, noSnap)))
+        dur = end - startMs
+      }
+      const moved = d.moved || Math.abs(ev.clientX - d.startClientX) > 3
+      const next = { ...d, startMs, durationMs: dur, moved }
+      dragRef.current = next
+      setDrag(next)
+    }
+    const onUp = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      const d = dragRef.current
+      dragRef.current = null
+      setDrag(null)
+      if (d && d.moved) {
+        sidecar.updateCue(d.cueId, { startMs: d.startMs, durationMs: d.durationMs })
+      }
+    }
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+  }, [effPxPerMs, onSelectCue, snap])
 
   const addCue = useCallback(() => {
     const color = CUE_PALETTE[cues.length % CUE_PALETTE.length]
-    sidecar.addCue('Cue', cues.length ? totalEndMs(cues) : 0, 2000, color)
+    const lastEnd = cues.length ? Math.max(...cues.map((c) => c.startMs + c.durationMs)) : 0
+    sidecar.addCue('Cue', lastEnd, 2000, color)
   }, [cues])
 
   const deleteSelected = useCallback(() => {
@@ -133,44 +327,118 @@ export function CueTimeline({ project, tMs, selectedCueId, onSelectCue }: {
     }
   }, [selectedCueId, onSelectCue])
 
-  const widgetHeight = TIME_AREA_HEIGHT + editorData.length * ROW_HEIGHT
+  const renameCue = useCallback((cue: Cue) => {
+    // window.prompt temporaire — remplacé par un vrai édit inline/dialogue
+    // natif en Mission 3.
+    const name = window.prompt('Nom du bloc :', cue.name)
+    if (name && name !== cue.name) sidecar.updateCue(cue.id, { name })
+  }, [])
+
+  const lanesHeight = lanes.length * LANE_H
+  const playheadPx = tMs * effPxPerMs
 
   return (
-    <div className="cue-timeline">
-      <div className="cue-timeline-toolbar">
+    <div className="tl">
+      <div className="tl-toolbar">
         <button onClick={addCue}>+ Cue</button>
         {selectedCueId && <button onClick={deleteSelected}>Supprimer</button>}
+        <span className="tl-toolbar-spacer" />
+        <button title="Zoom arrière (Ctrl+molette)" onClick={() => zoomAt(0.8)}>−</button>
+        <button title="Zoom avant (Ctrl+molette)" onClick={() => zoomAt(1.25)}>+</button>
+        <button title="Ajuster à la fenêtre" onClick={fit}>Ajuster</button>
       </div>
-      <div className="cue-timeline-body">
-        <div className="cue-track-header" style={{ top: TIME_AREA_HEIGHT, height: editorData.length * ROW_HEIGHT }}>
-          <span>Cues</span>
+      <div className="tl-main">
+        <div className="tl-headers">
+          <div className="tl-header-spacer" style={{ height: RULER_H }} />
+          {project.audioPath && (
+            <div className="tl-header tl-header-audio" style={{ height: AUDIO_H }}>
+              <span className="tl-header-chip" style={{ background: '#4f6df5' }} />
+              Audio
+            </div>
+          )}
+          <div className="tl-header tl-header-cues" style={{ height: lanesHeight }}>
+            <span className="tl-header-chip" style={{ background: '#f5734f' }} />
+            Cues
+          </div>
         </div>
-        <div className="cue-timeline-editor-wrap">
-          <TimelineEditor
-            ref={stateRef}
-            style={{ height: widgetHeight }}
-            editorData={editorData}
-            effects={effects}
-            scale={1}
-            scaleWidth={120}
-            scaleSplitCount={10}
-            startLeft={10}
-            rowHeight={ROW_HEIGHT}
-            gridSnap
-            autoScroll
-            getActionRender={getActionRender}
-            onClickActionOnly={onClickActionOnly}
-            onClickTimeArea={onClickTimeArea}
-            onCursorDrag={onCursorDrag}
-            onActionMoveEnd={onActionMoveEnd}
-            onActionResizeEnd={onActionResizeEnd}
-          />
+        <div
+          className="tl-scroll"
+          ref={scrollRef}
+          onScroll={(e) => setScrollLeft(e.currentTarget.scrollLeft)}
+        >
+          <div className="tl-content" style={{ width: contentWidth }}>
+            <div className="tl-ruler" style={{ height: RULER_H }} onPointerDown={onRulerPointerDown}>
+              {ticks.map((tick) => (
+                <div
+                  key={tick.ms}
+                  className={`tl-tick${tick.label !== null ? ' tl-tick-major' : ''}`}
+                  style={{ left: tick.ms * effPxPerMs }}
+                >
+                  {tick.label !== null && <span>{tick.label}</span>}
+                </div>
+              ))}
+            </div>
+
+            {project.audioPath && (
+              <div className="tl-track-audio" style={{ height: AUDIO_H }}>
+                <AudioTrack
+                  audioPath={project.audioPath}
+                  knownDurationS={project.audioDurationS}
+                  tMs={tMs}
+                  playing={playing}
+                  pxPerMs={effPxPerMs}
+                  scrollLeft={scrollLeft}
+                  viewportWidth={viewportWidth}
+                  height={AUDIO_H}
+                />
+              </div>
+            )}
+
+            <div
+              className="tl-lanes"
+              style={{ height: lanesHeight }}
+              onPointerDown={(e) => {
+                // Clic sur le fond (pas sur un bloc) : désélection.
+                if (e.target === e.currentTarget) onSelectCue(null)
+              }}
+            >
+              {lanes.map((laneCues, laneIndex) =>
+                laneCues.map((cue) => {
+                  const isDragging = drag?.cueId === cue.id
+                  const startMs = isDragging ? drag.startMs : cue.startMs
+                  const dur = isDragging ? drag.durationMs : cue.durationMs
+                  const count = Object.keys(cue.activations).length
+                  return (
+                    <div
+                      key={cue.id}
+                      className={`cue-block${cue.id === selectedCueId ? ' cue-block-selected' : ''}${isDragging ? ' cue-block-dragging' : ''}`}
+                      style={{
+                        '--cue-color': cue.color,
+                        left: startMs * effPxPerMs,
+                        width: Math.max(4, dur * effPxPerMs),
+                        top: laneIndex * LANE_H + 2,
+                        height: LANE_H - 6,
+                      } as React.CSSProperties}
+                      onPointerDown={(e) => beginBlockDrag(e, cue, 'move')}
+                      onDoubleClick={() => renameCue(cue)}
+                    >
+                      <div className="cue-block-header">
+                        <span className="cue-block-name">{cue.name}</span>
+                        <span className="cue-block-count">{count}</span>
+                      </div>
+                      <div className="cue-block-body" />
+                      <div className="cue-resize cue-resize-l" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-l')} />
+                      <div className="cue-resize cue-resize-r" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-r')} />
+                    </div>
+                  )
+                }),
+              )}
+            </div>
+
+            <div className="tl-playhead" style={{ left: playheadPx }} />
+          </div>
         </div>
       </div>
     </div>
   )
-}
-
-function totalEndMs(cues: Cue[]): number {
-  return Math.max(...cues.map((c) => c.startMs + c.durationMs), 0)
 }
