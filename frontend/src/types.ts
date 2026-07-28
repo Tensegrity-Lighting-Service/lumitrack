@@ -52,6 +52,9 @@ export interface Project {
   transformInvertX: boolean
   transformInvertY: boolean
   transformSwapXy: boolean
+  stageMapOriginXM: number
+  stageMapOriginZM: number
+  stageMapRotationDeg: number
   points: Point[]
   cues: Cue[]
 }

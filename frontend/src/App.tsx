@@ -4,7 +4,7 @@ import { Scene } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import { Waveform } from './audio/Waveform'
 import { sidecar, useConnected, useProject, usePsnRunning, useTick } from './sidecar'
-import type { Activation, Cue, Point } from './types'
+import type { Activation, Cue, Point, Project } from './types'
 
 const ROSTER_MIN = 160
 const ROSTER_MAX = 420
@@ -151,6 +151,7 @@ function App() {
   const [timelineHeight, setTimelineHeight] = useState(220)
   const [cameraLocked, setCameraLocked] = useState(false)
   const [fitToken, setFitToken] = useState(0)
+  const [editingZone, setEditingZone] = useState(false)
 
   const tMs = tick?.tMs ?? 0
   const playing = tick?.playing ?? false
@@ -234,6 +235,7 @@ function App() {
         { label: 'Ajuster la vue 3D à la fenêtre', onClick: () => setFitToken((t) => t + 1) },
         { separator: true } as const,
         { label: 'Verrouiller la caméra 3D', checked: cameraLocked, onClick: () => setCameraLocked((v) => !v) },
+        { label: 'Éditer la zone de jeu', checked: editingZone, onClick: () => setEditingZone((v) => !v) },
       ],
     },
     {
@@ -307,6 +309,7 @@ function App() {
           onSelectPoint={setSelectedPointId}
           cameraLocked={cameraLocked}
           fitToken={fitToken}
+          editingZone={editingZone}
         />
       </main>
 
@@ -314,6 +317,7 @@ function App() {
 
       <aside className="inspector">
         <h2>Inspecteur</h2>
+        {editingZone && <StagePlacementPanel project={project} />}
         {selectedCue ? (
           <CueInspector
             cue={selectedCue}
@@ -322,7 +326,7 @@ function App() {
             onSelectPoint={setSelectedPointId}
           />
         ) : (
-          <p className="hint">Sélectionne un bloc dans la timeline.</p>
+          !editingZone && <p className="hint">Sélectionne un bloc dans la timeline.</p>
         )}
       </aside>
 
@@ -332,6 +336,40 @@ function App() {
         {project.audioPath && <Waveform audioPath={project.audioPath} tMs={tMs} playing={playing} />}
         <CueTimeline project={project} tMs={tMs} selectedCueId={selectedCueId} onSelectCue={setSelectedCueId} />
       </footer>
+    </div>
+  )
+}
+
+// Numeric mirror of the drag handles in Scene.tsx (move/resize/rotate) —
+// same underlying sidecar.updateStageMap() calls, for precise values or a
+// mouse-free adjustment. Only shown while "Éditer la zone de jeu" is on.
+function StagePlacementPanel({ project }: { project: Project }) {
+  return (
+    <div className="stage-placement">
+      <h3>Zone de jeu</h3>
+      <div className="stage-placement-grid">
+        <label>Origine X (m)
+          <input type="number" step="0.1" value={project.stageMapOriginXM}
+            onChange={(e) => sidecar.updateStageMap({ originXM: Number(e.target.value) })} />
+        </label>
+        <label>Origine Z (m)
+          <input type="number" step="0.1" value={project.stageMapOriginZM}
+            onChange={(e) => sidecar.updateStageMap({ originZM: Number(e.target.value) })} />
+        </label>
+        <label>Rotation (°)
+          <input type="number" step="1" value={project.stageMapRotationDeg}
+            onChange={(e) => sidecar.updateStageMap({ rotationDeg: Number(e.target.value) })} />
+        </label>
+        <label>Largeur (cm)
+          <input type="number" step="10" value={project.stageWidthCm}
+            onChange={(e) => sidecar.updateStageMap({ widthCm: Number(e.target.value) })} />
+        </label>
+        <label>Profondeur (cm)
+          <input type="number" step="10" value={project.stageHeightCm}
+            onChange={(e) => sidecar.updateStageMap({ heightCm: Number(e.target.value) })} />
+        </label>
+      </div>
+      <p className="hint">Ou fais glisser directement dans la vue 3D : centre = déplacer, coin orange = redimensionner, poignée verte = pivoter.</p>
     </div>
   )
 }

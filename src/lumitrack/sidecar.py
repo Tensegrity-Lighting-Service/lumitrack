@@ -172,6 +172,23 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         session.broadcaster.stop()
         return None
 
+    if msg_type == "update_stage_map":
+        # Where the stage rectangle sits inside the terrain glTF's own world
+        # space (position/rotation), plus the rectangle's own size — driven
+        # by the drag handles on the "zone de jeu" overlay in the 3D view.
+        project = session.project
+        if "originXM" in msg:
+            project.stage_map_origin_x_m = float(msg["originXM"])
+        if "originZM" in msg:
+            project.stage_map_origin_z_m = float(msg["originZM"])
+        if "rotationDeg" in msg:
+            project.stage_map_rotation_deg = float(msg["rotationDeg"])
+        if "widthCm" in msg:
+            project.stage_width_cm = max(1.0, float(msg["widthCm"]))
+        if "heightCm" in msg:
+            project.stage_height_cm = max(1.0, float(msg["heightCm"]))
+        return None
+
     if msg_type == "add_point":
         pid = msg.get("id") or str(uuid.uuid4())
         session.project.points.append(Point(

@@ -153,6 +153,17 @@ class Project:
     transform_invert_x: bool = False
     transform_invert_y: bool = False
     transform_swap_xy: bool = False
+    # Where the stage rectangle (stage_width_cm x stage_height_cm, local
+    # origin at its own top-left corner) sits inside the terrain glTF's own
+    # world space — purely a 3D-view/editing placement, unrelated to
+    # transform_origin_*/invert_*/swap_xy above (those shape the PSN output,
+    # not the on-screen mapping). A terrain survey has no reason to share an
+    # origin or orientation with the stage rectangle (observed 2026-07-28:
+    # defaults leave them stacked at the world origin, which is wrong for
+    # any real venue). Defaults (0,0,0) keep prior behaviour unchanged.
+    stage_map_origin_x_m: float = 0.0
+    stage_map_origin_z_m: float = 0.0
+    stage_map_rotation_deg: float = 0.0
 
     # ---------- helpers ----------
 
@@ -250,6 +261,9 @@ class Project:
             "transformInvertX": self.transform_invert_x,
             "transformInvertY": self.transform_invert_y,
             "transformSwapXy": self.transform_swap_xy,
+            "stageMapOriginXM": self.stage_map_origin_x_m,
+            "stageMapOriginZM": self.stage_map_origin_z_m,
+            "stageMapRotationDeg": self.stage_map_rotation_deg,
             "points": [p.to_dict() for p in self.points],
             "cues": [
                 {
@@ -290,6 +304,9 @@ class Project:
             transform_invert_x=bool(d.get("transformInvertX", False)),
             transform_invert_y=bool(d.get("transformInvertY", False)),
             transform_swap_xy=bool(d.get("transformSwapXy", False)),
+            stage_map_origin_x_m=float(d.get("stageMapOriginXM", 0.0)),
+            stage_map_origin_z_m=float(d.get("stageMapOriginZM", 0.0)),
+            stage_map_rotation_deg=float(d.get("stageMapRotationDeg", 0.0)),
         )
         proj.points = [Point.from_dict(p) for p in d.get("points", [])]
         for c in d.get("cues", []):

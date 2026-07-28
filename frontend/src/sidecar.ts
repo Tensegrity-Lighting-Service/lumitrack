@@ -86,6 +86,9 @@ class SidecarClient {
   addPoint(name: string, number?: number) {
     this.send({ type: 'add_point', name, number })
   }
+  updateStageMap(patch: { originXM?: number; originZM?: number; rotationDeg?: number; widthCm?: number; heightCm?: number }) {
+    this.send({ type: 'update_stage_map', ...patch })
+  }
   addCue(name: string, startMs: number, durationMs: number, color?: string) {
     this.send({ type: 'add_cue', name, startMs, durationMs, color })
   }
