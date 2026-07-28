@@ -121,8 +121,10 @@ _AXIS_FIELDS = {
 
 
 def _axis_keyframes(project: Project, point_id: str, axis: str):
-    """-> [(start_ms, fade_end_ms, value, easing), ...] sorted by start_ms,
-    one entry per Cue whose Activation for this point sets this axis."""
+    """-> [(start_ms, fade_end_ms, value, easing, cue_id), ...] sorted by
+    start_ms, one entry per Cue whose Activation for this point sets this
+    axis. The cue id rides along so `resolve_block_context` can name which
+    cue a trajectory's start value tracks from; `_resolve_axis` ignores it."""
     field_name = _AXIS_FIELDS[axis]
     kfs = []
     for cue in project.cues:
@@ -132,7 +134,7 @@ def _axis_keyframes(project: Project, point_id: str, axis: str):
         value = getattr(act, field_name)
         if value is None:
             continue
-        kfs.append((cue.start_ms, cue.start_ms + act.fade_ms, value, act.easing))
+        kfs.append((cue.start_ms, cue.start_ms + act.fade_ms, value, act.easing, cue.id))
     kfs.sort(key=lambda k: k[0])
     return kfs
 
@@ -149,7 +151,7 @@ def _resolve_axis(kfs, t_ms: float) -> Optional[float]:
     if governing is None:
         return None  # point hasn't reached its first keyframe on this axis yet
 
-    start, fade_end, target, easing = governing
+    start, fade_end, target, easing = governing[:4]
     if governing_index == 0:
         origin = target  # first appearance: no prior value, snap to target
     else:
@@ -187,6 +189,101 @@ def resolve_positions(project: Project, t_ms: float) -> dict:
             yaw_deg=yaw if yaw is not None else 0.0,
         )
     return result
+
+
+# ---------------------------------------------------- block edit context ---
+
+#: Sample count for the spatial polyline sent to the frontend. The path is a
+#: straight segment today, but the wire format is already a polyline so the
+#: Bézier/vector editor (§12.5) won't need a protocol change.
+TRAJECTORY_SAMPLES = 24
+
+
+def resolve_block_context(project: Project, cue_id: str,
+                          samples: int = TRAJECTORY_SAMPLES) -> dict:
+    """Everything the scene needs to enter block-edit mode for one cue
+    (§12.6): for each point the cue activates, where its trajectory really
+    starts, where it ends, a backend-sampled spatial polyline between the
+    two, and which cue each start value tracks from.
+
+    The start of an axis is the target of the previous keyframe on that
+    axis in the same LTP order the playback resolver uses (`_resolve_axis`
+    picks the latest-started activation as governing and interpolates from
+    the previous one's target) — i.e. the last cue that *actually touched
+    this point's axis*, not the neighbouring block on the timeline, so a
+    point skipped by an unrelated in-between block still tracks from the
+    right place. A first appearance snaps to its own target (§7 point 7):
+    start == target and no path.
+
+    Spatial path and timing are deliberately separate structures
+    (§13.1.11): `path` is pure geometry, sampled at uniform parameter with
+    no easing baked in; `timing` (startMs/fadeMs/easing) is what maps time
+    onto that geometry. The frontend never re-derives one from the other.
+    """
+    cue = project.cue_by_id(cue_id)
+    if cue is None:
+        raise ValueError(f"Unknown cue id {cue_id!r}")
+
+    entries = {}
+    for point in project.points:
+        act = cue.activations.get(point.id)
+        if act is None:
+            continue
+
+        axis_start = {}
+        axis_target = {}
+        sources = {}
+        for axis, field_name in _AXIS_FIELDS.items():
+            kfs = _axis_keyframes(project, point.id, axis)
+            value = getattr(act, field_name)
+            if value is None:
+                # Axis untouched by this activation: during the block it
+                # keeps tracking whatever governs it at the block's start.
+                resolved = _resolve_axis(kfs, cue.start_ms)
+                axis_start[axis] = resolved
+                axis_target[axis] = resolved
+                sources[axis] = None
+                continue
+            index = next(i for i, kf in enumerate(kfs) if kf[4] == cue_id)
+            if index == 0:
+                axis_start[axis] = value  # first appearance: snap, no travel
+                sources[axis] = None
+            else:
+                axis_start[axis] = kfs[index - 1][2]
+                sources[axis] = kfs[index - 1][4]
+            axis_target[axis] = value
+
+        def pose_or_none(values):
+            if values["x"] is None or values["y"] is None:
+                return None  # no known position: never invent one (§13.1.7)
+            z = values["z"] if values["z"] is not None else point.default_height_cm
+            yaw = values["yaw"] if values["yaw"] is not None else 0.0
+            return [values["x"], values["y"], z, yaw]
+
+        start_pose = pose_or_none(axis_start)
+        target_pose = pose_or_none(axis_target)
+
+        path = []
+        if (start_pose is not None and target_pose is not None
+                and start_pose[:3] != target_pose[:3]):
+            for i in range(samples + 1):
+                s = i / samples
+                path.append([
+                    start_pose[0] + (target_pose[0] - start_pose[0]) * s,
+                    start_pose[1] + (target_pose[1] - start_pose[1]) * s,
+                    start_pose[2] + (target_pose[2] - start_pose[2]) * s,
+                ])
+
+        entries[point.id] = {
+            "startPose": start_pose,
+            "targetPose": target_pose,
+            "path": path,
+            "timing": {"startMs": cue.start_ms, "fadeMs": act.fade_ms,
+                       "easing": act.easing},
+            "sources": sources,
+        }
+
+    return {"cueId": cue_id, "entries": entries}
 
 
 class Timeline:

@@ -23,7 +23,7 @@ import websockets
 from .core.project import (
     Project, Point, Cue, Activation, import_stancz, save_bundle, load_bundle,
 )
-from .core.timeline import Timeline, OutputTransform
+from .core.timeline import Timeline, OutputTransform, resolve_block_context
 from .core.engine import Transport, PsnBroadcaster
 
 logger = logging.getLogger("lumitrack.sidecar")
@@ -162,6 +162,17 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         else:
             return {"type": "error", "message": f"Unknown transport action {action!r}"}
         return {"type": "ack"}
+
+    if msg_type == "resolve_block_context":
+        # Read-only: replies to the requester, never broadcasts. The
+        # frontend re-requests after every project snapshot while a block
+        # is selected, so the context follows edits without the sidecar
+        # having to track which client is editing which cue.
+        try:
+            context = resolve_block_context(session.project, msg.get("cueId", ""))
+        except ValueError as exc:
+            return {"type": "error", "message": str(exc)}
+        return {"type": "block_context", **context}
 
     if msg_type == "psn_start":
         if not session.broadcaster.start():
