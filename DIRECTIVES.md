@@ -28,8 +28,11 @@ mission non terminée, dans l'ordre.
 - `core/` reste sans dépendance UI, couvert par des tests.
 - Positions jamais clampées aux limites de la scène ; point sans position
   connue jamais envoyé en PSN.
-- Licences permissives uniquement (MIT/BSD/Apache) — rien de GPL/AGPL, pas de
-  Remotion (§12.16).
+- Licences : contrainte « permissif uniquement » **levée le 2026-07-29**
+  (décision Florian : pas de produit commercial fermé, GPL acceptable). La
+  stack actuelle reste tout-MIT/Apache de fait. Friction (GPL-3) demeure
+  écarté comme base de code pour raison purement technique (moteur 2D
+  vectoriel sans rapport avec le métier) — conservé comme référence UX.
 
 ---
 
@@ -267,9 +270,14 @@ La suite pytest Python (58 tests) reste l'ORACLE du port. L'app actuelle
   existants lisibles tels quels), easing, résolution LTP 4 axes, contexte
   de bloc. 14 tests portés + **parité contre l'oracle Python** via fixture
   générée (`native/tests/generate_parity_fixture.py`) : identité à 1e-6.)*
-- [ ] **N1 — Moteur Rust : PSN + timecode + transport** (encodeur PSN v2 +
-  découpage MTU, récepteurs Art-Net TC/MTC, horloge de transport —
-  validation croisée contre les tests Python/pypsn)
+- [x] **N1 — Moteur Rust : PSN + timecode + transport** *(fait 2026-07-29 :
+  encodeur PSN v2 **byte-identique** au Python (fixture hex à timestamp
+  figé : DATA/INFO, découpage MTU, Unicode, 92 trackers, cas vide),
+  émetteur UDP multicast (socket2 pour IP_MULTICAST_IF), parsing/formatage
+  timecode, décodage Art-Net OpTimeCode, décodeur MTC pur (quarter+full
+  frame), Transport à horloge injectable, OutputTransform. `cargo test` :
+  26 verts au total. Les threads d'E/S (socket Art-Net, port MIDI) seront
+  branchés en N2 avec l'intégration Tauri.)*
 - [ ] **N2 — Intégration Tauri** : le crate devient le backend du process
   Tauri (commands + events remplacent le WebSocket) ; `sidecar.ts` garde la
   même interface côté React, seul son transport change. Le sidecar Python
