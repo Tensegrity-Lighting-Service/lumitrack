@@ -8,10 +8,13 @@ leurs positions en **PosiStageNet (PSN)** vers Capture / Depence / grandMA3.
 par un humain**. L'objectif est de programmer la lumière en prévisu, ce n'est
 pas un outil de chorégraphie de danse.
 
-**État actuel** : une première version **v0.1 existe et fonctionne** — éditeur
-desktop natif Python/PySide6, import `.stancz` (un format tiers pris en charge
-en entrée, voir §1), timeline, entrée timecode, sortie PSN v2, 34 tests au
-vert. Voir **§11 — Ce qui est déjà construit** pour la passation.
+**État actuel** : la **v0.1** (éditeur desktop natif Python/PySide6, voir
+**§11**) a été **remplacée** par une **v2** conforme au périmètre MVP du §13 —
+Tauri + React + react-three-fiber, sidecar Python (le `core/` de la v0.1,
+conservé), scène 3D éditable, timeline à blocs, mapping zone de jeu/terrain,
+PSN live pendant l'édition. **Fonctionnelle en dev, jamais utilisée en
+conditions réelles de show.** Voir **§14 — Passation V2** pour l'état exact et
+ce qui reste à faire.
 
 **§12 définit la V2**, un projet nettement plus complet que cette première
 version : scène 3D/2D unifiée, groupes et animations relatives, modèle de cue
@@ -1101,3 +1104,188 @@ v1.1** pour ne pas alourdir le premier jalon (§13.1) :
 - **Volume par piste** (fader de niveau, monitoring local uniquement — ne
   part jamais en PSN) pour toute piste porteuse d'audio (projet + vidéo de
   référence).
+
+---
+
+## 14. Passation V2 (2026-07) — ce qui est construit
+
+Session de développement (pas seulement de conception) qui a implémenté le
+MVP défini en §13 et remplacé la v0.1 (§11) comme application active. **Écrit
+pour transmettre la main à une autre session/un autre modèle** — lire avant
+de continuer.
+
+### 14.1 Statut global
+
+La quasi-totalité du périmètre §13.1 est **codée et se lance proprement en
+dev** : modèle cue/activation avec activations relatives, scène 3D vue
+Dessus, timeline à blocs (react-timeline-editor), audio + waveform, PSN live
+pendant l'édition, sauvegarde/chargement en bundle incrémental, mapping de la
+zone de jeu sur un terrain glTF avec gizmo de transformation.
+
+**Ce qui manque le plus, avant toute chose : une vraie session d'usage
+humain prolongée.** Tout a été vérifié par build (`tsc`, `vite build`), par
+tests (`pytest`), et par lecture de logs de démarrage propres (Vite prêt,
+sidecar `ws://127.0.0.1:17845` à l'écoute, `connection open`, aucune erreur).
+**Aucune de ces vérifications ne remplace un humain qui clique dans
+l'appli** pendant une vraie séance d'édition. Plusieurs bugs réels de cette
+session (caméra qui bascule, boucle de rendu, poignées non cliquables) n'ont
+été trouvés que par un humain qui utilisait l'app — pas par les tests.
+
+### 14.2 Arborescence (ajouts vs §11.1)
+
+```
+lumitrack/
+├── src/lumitrack/
+│   ├── core/                 inchangé (project.py, timeline.py, psn.py,
+│   │                         timecode.py, engine.py) + extensions cue/
+│   │                         activation, Z par acteur, orientation lacet,
+│   │                         stage_map_origin_*/rotation_deg (§14.3)
+│   ├── sidecar.py             NOUVEAU — serveur WebSocket au-dessus de
+│   │                         core/, remplace entièrement ui/ (Qt supprimé)
+│   └── ui/                   supprimé
+├── tests/
+│   ├── test_core.py           hérité de v0.1
+│   └── test_sidecar.py        NOUVEAU — couvre le fix transport/ack (§14.4)
+└── frontend/                  NOUVEAU — app Tauri complète
+    ├── src-tauri/             coquille Rust (src/lib.rs, main.rs) : lance
+    │                         `python -m lumitrack` en sous-processus au
+    │                         démarrage, le tue à la fermeture de fenêtre
+    └── src/
+        ├── App.tsx             layout général (menu, panneaux
+        │                     redimensionnables, transport, inspecteur)
+        ├── sidecar.ts          client WebSocket (useSyncExternalStore)
+        ├── types.ts            types Project/Cue/Activation/... miroir de core/
+        ├── scene/Scene.tsx      la plus grosse pièce : caméra ortho, acteurs,
+        │                     terrain glTF, mapping zone de jeu, gizmo
+        ├── timeline/CueTimeline.tsx
+        └── audio/Waveform.tsx
+```
+
+`PYTHONPATH=src python -m pytest -q` → **46 passed** (34 hérités de v0.1 +
+12 nouveaux). `npm run build` (dans `frontend/`) → `tsc` + `vite build`
+propres.
+
+### 14.3 Décisions d'implémentation à connaître
+
+- **Backend-autoritaire, sans exception** (§12.11/§13.1.7) : `sidecar.ts` ne
+  calcule jamais de position ou de temps ; il affiche le dernier `project`/
+  `tick` poussé par le sidecar. Toute édition part comme commande WebSocket
+  et n'a d'effet visible qu'au retour d'un `project` frais.
+- **`sidecar.py::_handle_message`** : retourner `None` = broadcast du projet
+  complet à tous les clients ; retourner un dict = réponse **au seul
+  émetteur**. Les commandes `transport` (play/pause/**seek**) doivent
+  **toujours** renvoyer `{"type": "ack"}`, jamais `None` — `seek` part sur
+  chaque `pointermove` de scrub, un broadcast à cette fréquence provoque une
+  boucle de rendu (voir bug corrigé, §14.4).
+- **Deux systèmes de transformation de repère bien distincts, ne pas les
+  confondre** :
+  - `stage_map_origin_x_m/z_m/rotation_deg` (`Project`) — **placement/édition
+    3D uniquement** : où la zone de jeu (rectangle abstrait) est posée dans
+    l'espace du terrain glTF importé. N'a aucun effet sur la sortie PSN.
+  - `transform_origin_*`/`invert_*`/`swap_xy` (existant depuis v0.1, §4) —
+    façonnent la **sortie PSN**, indépendamment de comment la zone est
+    affichée à l'écran.
+- **Snap générique, jamais basé sur les noms de mesh** — contrainte
+  explicite de l'utilisateur : le terrain de test (`Belfius_Hockey_Arena.glb`)
+  a des noms de mesh spécifiques (`Marquage_FIH`...), mais le snapping doit
+  fonctionner avec **n'importe quel terrain**. Implémenté par heuristique de
+  hauteur de sol : tous les sommets sous `box.min.y + 0.15m` sont candidats
+  au snap (plafonné à 4000 points), peu importe leur nom.
+- **Poignées à taille d'écran constante** : à l'échelle d'un stade entier
+  (zoom-to-fit ≈ 100 m de large), une poignée dimensionnée en mètres devient
+  sub-pixel. `ScreenSizedHandle`/`RotateHandle` recalculent leur échelle à
+  chaque frame (`useFrame`) en divisant par `camera.zoom`.
+- **Redimensionnement de la zone qui préserve l'ancre** : au début d'un drag
+  de poignée, le coin/bord opposé est figé en coordonnées **monde**
+  (`anchorWorldX/Z`, `cos0/sin0/width0/height0`) ; le calcul utilise
+  l'inverse de la matrice de rotation (= sa transposée, rotation pure) pour
+  repasser en local. Sans ce gel, redimensionner depuis un bord tourné
+  déplace aussi les bords non concernés.
+- **`Cue.color`**, **`Point`/`Activation.to_dict()`/`from_dict()`** en
+  camelCase — format fil cohérent entre `core/project.py` (snake_case côté
+  Python) et le frontend TypeScript (camelCase).
+- **Zoom-to-fit cible uniquement le footprint mappé de la zone de jeu**, pas
+  le terrain entier (corrigé le 2026-07-28, voir le commit
+  `3aa2cca`/l'historique git) : le terrain peut être un relevé complet
+  (gradins, toiture...) bien plus grand que la zone utile ; unioner les deux
+  revenait à toujours cadrer sur le terrain, la zone étant à peine visible
+  dedans.
+
+### 14.4 Bugs réels trouvés et corrigés cette session
+
+Tous trouvés en utilisant l'app, pas par les tests — à garder en tête, ce
+sont les catégories de piège les plus probables si de nouveaux bugs
+apparaissent :
+
+- **Caméra qui bascule/tremble à l'ouverture** : `camera.up` par défaut
+  `(0,1,0)` est antiparallèle à la direction de vue top-down `(0,-1,0)` — cas
+  dégénéré de `lookAt()`. Fixé en forçant `camera.up.set(0,0,-1)` avant
+  `lookAt()`.
+- **Boucle de rendu / tremblement pendant le scrub** : voir §14.3, fix
+  `transport` → toujours un ack, jamais un broadcast implicite.
+- **Poignées de redimensionnement invisibles/non cliquables** : les
+  `MapControls` (three-stdlib) ont leur propre listener `pointermove` qui
+  appelle `stopPropagation()`, tuant l'event avant qu'un listener `window`
+  le reçoive. Fixé via `setPointerCapture`/`releasePointerCapture` **sur
+  l'élément de la poignée lui-même**.
+- **Panneau scène qui refuse de rétrécir** : une piste `1fr` de CSS Grid a un
+  minimum implicite = `min-content` (pas 0) ; un `<canvas>` compte comme
+  contenu dimensionnable. Fixé avec `min-width: 0; min-height: 0` sur
+  `.scene-view`.
+- **`<line>` JSX invisible en 3D** : un `<line>` bare résout au type
+  DOM/SVG de TypeScript, pas au type react-three-fiber. Utiliser `<Line>` de
+  `drei`.
+- **Caméra qui saute quand on déplace la zone** : le `useMemo` de `fit`
+  dépendait de valeurs qui changeaient à chaque frame de drag, créant une
+  nouvelle référence d'objet à chaque fois, ce qui redéclenchait l'effet
+  d'application caméra. Fixé via un pattern `fitRef` (l'effet lit `fit` par
+  ref, sans en dépendre).
+
+### 14.5 Jamais vérifié / ouvert
+
+1. **Aucune session d'édition humaine réelle et prolongée** (§14.1) — priorité
+   absolue avant d'ajouter de nouvelles fonctionnalités.
+2. **Le tremblement de zoom rapporté par l'utilisateur** (« zoom bloqué, ça
+   tremble ») n'a **jamais été confirmé corrigé explicitement** — la vidéo
+   fournie ensuite s'est avérée être une référence de design (Capture), pas
+   un enregistrement du bug. Probablement résolu comme effet de bord des fix
+   caméra/`zoomToCursor`/`fitRef`, mais à reconfirmer avec l'utilisateur.
+3. **Packaging** : le sidecar est lancé en dev via `python -m lumitrack` sur
+   `PYTHONPATH` (`frontend/src-tauri/src/lib.rs`), **pas** encore packagé en
+   `externalBin`/PyInstaller (§12.11/§12.13). Nécessaire avant tout binaire
+   distribuable.
+4. **Undo/redo** : toujours **absent**, malgré §12.8 et §13.1 point 10 qui le
+   marquent explicitement « non négociable ». C'est le manque le plus
+   flagrant du MVP actuel.
+5. **Réseau PSN réel** : toujours jamais testé contre une vraie Capture/MA3
+   (hérité de §11.4 point 3, jamais traité cette session).
+6. **Export bundle en fichier unique** (zip, §12.14 dernier point) : non
+   fait, seul le dossier bundle incrémental existe.
+7. **Vues Face/Côté/3D libre** (§12.4) : non implémentées — conforme au
+   choix explicite du MVP (§13.1 point 3, vue Dessus seule), pas un oubli.
+8. **Groupes nommés réutilisables + LTP inter-groupes** (§12.2 complet) :
+   reporté en v1.1 par décision explicite (§13.1 point 2), pas un manque du
+   MVP actuel.
+9. Tout le reste du §13.2 (collision, dégradé/seuil de vitesse, vue
+   tableau, export vidéo) et la piste vidéo de référence du §13.3 : non
+   commencés, reportés comme prévu.
+
+### 14.6 Environnement de dev — pièges Windows à connaître
+
+- **Le PATH ne se rafraîchit pas automatiquement** dans le shell utilisé par
+  l'outil après une installation (Node, Rust, VS Build Tools) : reconstruire
+  `$env:Path` depuis le registre (`HKLM`/`HKCU`) en PowerShell avant d'appeler
+  `node`/`npm`/`cargo` si la commande échoue avec « not found ». Le Bash tool
+  n'a **pas** cette variable rafraîchie non plus dans ce même environnement —
+  utiliser PowerShell pour lancer/tuer les process de dev.
+- **Le sidecar Python peut rester orphelin** sur le port `17845` si le
+  process Rust (`app`/`cargo`) est tué brutalement sans passer par l'event
+  `CloseRequested` de la fenêtre. Avant de relancer : vérifier
+  `Get-NetTCPConnection -LocalPort 17845` et tuer le PID trouvé si présent.
+- **Changer la longueur d'un tableau de dépendances `useEffect`/`useMemo`
+  déclenche systématiquement une erreur transitoire de React Fast Refresh**
+  (« hooks changed size between renders ») au premier hot-reload suivant —
+  ce n'est pas un vrai bug, un redémarrage complet du process (`node`, `app`,
+  `cargo`, sidecar) suffit à la faire disparaître.
+- **Lancement** : `npm run tauri dev` depuis `frontend/`, ou le double-clic
+  `Lancer Lumitrack (dev).bat` à la racine (§11, toujours valide).
