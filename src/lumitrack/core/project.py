@@ -24,7 +24,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Optional
 
 PROJECT_FORMAT = "Lumitrack"
@@ -54,6 +54,23 @@ class Point:
             return int(self.number) & 0xFFFF
         return fallback_index & 0xFFFF
 
+    # camelCase on the wire (JSON files + WebSocket protocol), to match both
+    # the outer Project fields and the sidecar's live-edit commands.
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "name": self.name, "number": self.number,
+            "color": self.color, "psnTrackerId": self.psn_tracker_id,
+            "defaultHeightCm": self.default_height_cm,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Point":
+        return cls(
+            id=d["id"], name=d.get("name", ""), number=d.get("number"),
+            color=d.get("color", "#4F6DF5"), psn_tracker_id=d.get("psnTrackerId"),
+            default_height_cm=float(d.get("defaultHeightCm", DEFAULT_HEIGHT_CM)),
+        )
+
 
 @dataclass
 class Activation:
@@ -75,6 +92,23 @@ class Activation:
     def touches(self) -> bool:
         return any(v is not None for v in
                    (self.target_x_cm, self.target_y_cm, self.target_z_cm, self.target_yaw_deg))
+
+    def to_dict(self) -> dict:
+        return {
+            "targetXCm": self.target_x_cm, "targetYCm": self.target_y_cm,
+            "targetZCm": self.target_z_cm, "targetYawDeg": self.target_yaw_deg,
+            "fadeMs": self.fade_ms, "easing": self.easing,
+            "orientationMode": self.orientation_mode,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Activation":
+        return cls(
+            target_x_cm=d.get("targetXCm"), target_y_cm=d.get("targetYCm"),
+            target_z_cm=d.get("targetZCm"), target_yaw_deg=d.get("targetYawDeg"),
+            fade_ms=float(d.get("fadeMs", 1000.0)), easing=d.get("easing", "linear"),
+            orientation_mode=d.get("orientationMode", "manual"),
+        )
 
 
 @dataclass
@@ -215,13 +249,13 @@ class Project:
             "transformInvertX": self.transform_invert_x,
             "transformInvertY": self.transform_invert_y,
             "transformSwapXy": self.transform_swap_xy,
-            "points": [asdict(p) for p in self.points],
+            "points": [p.to_dict() for p in self.points],
             "cues": [
                 {
                     "id": c.id, "name": c.name,
                     "startMs": c.start_ms, "durationMs": c.duration_ms,
                     "activations": {
-                        pid: asdict(a) for pid, a in c.activations.items()
+                        pid: a.to_dict() for pid, a in c.activations.items()
                     },
                 }
                 for c in self.cues
@@ -256,10 +290,10 @@ class Project:
             transform_invert_y=bool(d.get("transformInvertY", False)),
             transform_swap_xy=bool(d.get("transformSwapXy", False)),
         )
-        proj.points = [Point(**p) for p in d.get("points", [])]
+        proj.points = [Point.from_dict(p) for p in d.get("points", [])]
         for c in d.get("cues", []):
             activations = {
-                pid: Activation(**a) for pid, a in c.get("activations", {}).items()
+                pid: Activation.from_dict(a) for pid, a in c.get("activations", {}).items()
             }
             proj.cues.append(Cue(
                 id=c["id"], name=c.get("name", ""),

@@ -180,6 +180,28 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         session.transport.set_duration(session.timeline.duration_ms)
         return None
 
+    if msg_type == "update_cue":
+        cue = session.project.cue_by_id(msg.get("cueId", ""))
+        if cue is None:
+            return {"type": "error", "message": "Unknown cue id"}
+        if "name" in msg:
+            cue.name = msg["name"]
+        if "startMs" in msg:
+            cue.start_ms = float(msg["startMs"])
+        if "durationMs" in msg:
+            cue.duration_ms = float(msg["durationMs"])
+        session.project.sort_cues()
+        session.timeline.rebuild()
+        session.transport.set_duration(session.timeline.duration_ms)
+        return None
+
+    if msg_type == "delete_cue":
+        cue_id = msg.get("cueId")
+        session.project.cues = [c for c in session.project.cues if c.id != cue_id]
+        session.timeline.rebuild()
+        session.transport.set_duration(session.timeline.duration_ms)
+        return None
+
     if msg_type == "set_activation":
         cue = session.project.cue_by_id(msg.get("cueId", ""))
         if cue is None:
