@@ -1,8 +1,10 @@
 """Core tests. These cover the parts that must not silently break:
-the PSN wire format, packet splitting, timeline maths and timecode parsing.
+the PSN wire format, packet splitting, cue/activation timeline maths and
+timecode parsing.
 
 Run with:  pytest
 """
+import math
 import struct
 
 import pytest
@@ -11,14 +13,17 @@ from lumitrack.core.psn import (
     Tracker, build_data_packet, build_info_packet,
     split_data_packets, split_info_packets, PSN_MAX_PACKET_SIZE,
 )
-from lumitrack.core.timeline import Timeline, OutputTransform, apply_easing
-from lumitrack.core.project import Project, Point, Formation
+from lumitrack.core.timeline import Timeline, OutputTransform, apply_easing, resolve_positions
+from lumitrack.core.project import (
+    Project, Point, Cue, Activation, save_bundle, load_bundle,
+)
 from lumitrack.core import timecode as tc
 
 
 def _trackers(n, name_len=10):
     return [Tracker(id=i, name=("T" * name_len) + str(i),
-                    x_m=i * 0.5, y_m=-i * 0.25, z_m=1.0) for i in range(n)]
+                    x_m=i * 0.5, y_m=-i * 0.25, z_m=1.0, yaw_rad=0.1 * i)
+            for i in range(n)]
 
 
 # --------------------------------------------------------------- PSN ------
@@ -32,6 +37,15 @@ def test_data_packet_roundtrip():
     assert decoded.trackers[2].pos.x == pytest.approx(1.0)
     assert decoded.trackers[2].pos.y == pytest.approx(-0.5)
     assert decoded.trackers[2].pos.z == pytest.approx(1.0)
+
+
+def test_data_packet_orientation_roundtrip():
+    pypsn = pytest.importorskip("pypsn")
+    trackers = [Tracker(id=0, name="A", yaw_rad=math.pi / 2)]
+    decoded = pypsn.parse_psn_packet(build_data_packet(trackers))
+    assert decoded.trackers[0].ori.z == pytest.approx(math.pi / 2)
+    assert decoded.trackers[0].ori.x == pytest.approx(0.0)
+    assert decoded.trackers[0].ori.y == pytest.approx(0.0)
 
 
 def test_info_packet_roundtrip():
@@ -73,21 +87,24 @@ def test_packet_count_is_reported():
 def _demo_project():
     p = Project(stage_width_cm=1000, stage_height_cm=1000)
     p.points = [Point(id="a", name="A", number=1), Point(id="b", name="B", number=2)]
-    p.formations = [
-        Formation(id="f1", name="one", order=10, duration_ms=1000,
-                  easing="linear", positions={"a": (0.0, 0.0)}),
-        Formation(id="f2", name="two", order=20, duration_ms=1000,
-                  easing="linear", positions={"a": (100.0, 200.0)}),
+    p.cues = [
+        Cue(id="c1", name="one", start_ms=0, duration_ms=1000, activations={
+            "a": Activation(target_x_cm=0.0, target_y_cm=0.0, fade_ms=1000, easing="linear"),
+        }),
+        Cue(id="c2", name="two", start_ms=1000, duration_ms=1000, activations={
+            "a": Activation(target_x_cm=100.0, target_y_cm=200.0, fade_ms=1000, easing="linear"),
+        }),
     ]
     return p
 
 
 def test_timeline_interpolates_linearly():
     tl = Timeline(_demo_project())
-    assert tl.positions_at(1000)["a"] == pytest.approx((0.0, 0.0))
+    assert (tl.positions_at(1000)["a"].x_cm, tl.positions_at(1000)["a"].y_cm) == pytest.approx((0.0, 0.0))
     mid = tl.positions_at(1500)["a"]
-    assert mid == pytest.approx((50.0, 100.0))
-    assert tl.positions_at(2000)["a"] == pytest.approx((100.0, 200.0))
+    assert (mid.x_cm, mid.y_cm) == pytest.approx((50.0, 100.0))
+    end = tl.positions_at(2000)["a"]
+    assert (end.x_cm, end.y_cm) == pytest.approx((100.0, 200.0))
 
 
 def test_point_without_position_is_absent_not_zero():
@@ -95,20 +112,65 @@ def test_point_without_position_is_absent_not_zero():
     assert "b" not in tl.positions_at(1500)
 
 
-def test_point_keeps_last_position_when_not_in_formation():
+def test_point_keeps_last_position_when_not_touched_by_a_later_cue():
     project = _demo_project()
-    project.formations.append(
-        Formation(id="f3", name="three", order=30, duration_ms=1000,
-                  easing="linear", positions={"b": (10.0, 10.0)}))
+    project.cues.append(Cue(id="c3", name="three", start_ms=2000, duration_ms=1000,
+                             activations={"b": Activation(target_x_cm=10.0, target_y_cm=10.0, fade_ms=1000)}))
     tl = Timeline(project)
-    # 'a' is not in f3, so it must hold its f2 position
-    assert tl.positions_at(2500)["a"] == pytest.approx((100.0, 200.0))
+    # 'a' is not touched by c3, so it must hold its c2 position.
+    a = tl.positions_at(2500)["a"]
+    assert (a.x_cm, a.y_cm) == pytest.approx((100.0, 200.0))
 
 
-def test_segments_are_cumulative():
-    tl = Timeline(_demo_project())
-    bounds = [(s, e) for s, e, _f in tl.segments]
-    assert bounds == [(0.0, 1000.0), (1000.0, 2000.0)]
+def test_overlapping_cues_resolve_by_latest_start_ltp():
+    """Two cues that both touch the same point and overlap in time: the one
+    with the later start_ms governs from the moment it starts (§12.2 LTP),
+    even if the earlier cue's own fade window hasn't finished yet."""
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="early", name="early", start_ms=0, duration_ms=2000,
+            activations={"a": Activation(target_x_cm=1000, target_y_cm=0, fade_ms=2000)}),
+        Cue(id="late", name="late", start_ms=500, duration_ms=500,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=500, fade_ms=500)}),
+    ]
+    poses = resolve_positions(project, 1000)
+    # By t=1000 the "late" cue has fully taken over and finished its own fade.
+    assert (poses["a"].x_cm, poses["a"].y_cm) == pytest.approx((0.0, 500.0))
+
+
+def test_first_appearance_snaps_to_target_without_animating_in():
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+                         activations={"a": Activation(target_x_cm=500, target_y_cm=500, fade_ms=1000)})]
+    poses_before = resolve_positions(project, 500)
+    assert "a" not in poses_before
+    poses_at_start = resolve_positions(project, 1000)
+    assert (poses_at_start["a"].x_cm, poses_at_start["a"].y_cm) == pytest.approx((500.0, 500.0))
+
+
+def test_z_and_yaw_default_when_never_set():
+    project = _demo_project()
+    pose = resolve_positions(project, 1500)["a"]
+    assert pose.z_cm == pytest.approx(project.points[0].default_height_cm)
+    assert pose.yaw_deg == pytest.approx(0.0)
+
+
+def test_z_and_yaw_are_independent_animatable_tracks():
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c1", name="c1", start_ms=0, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_z_cm=100,
+                                          target_yaw_deg=90, fade_ms=1000)}),
+        # Only rotates further; x/y/z keep tracking the previous cue's values.
+        Cue(id="c2", name="c2", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_yaw_deg=450, fade_ms=1000)}),
+    ]
+    mid = resolve_positions(project, 1500)["a"]
+    assert (mid.x_cm, mid.y_cm, mid.z_cm) == pytest.approx((0.0, 0.0, 100.0))
+    assert mid.yaw_deg == pytest.approx(270.0)  # multi-turn value, not wrapped
 
 
 @pytest.mark.parametrize("name", ["linear", "smooth", "bounce", "spring",
@@ -122,8 +184,8 @@ def test_easing_is_bounded_and_anchored(name):
 # --------------------------------------------------------- transform ------
 
 def test_transform_cm_to_metres_with_origin_and_invert():
-    t = OutputTransform(origin_x_cm=2500, origin_y_cm=1500, invert_y=True, z_m=1.8)
-    x, y, z = t.to_metres(3050, 3505)
+    t = OutputTransform(origin_x_cm=2500, origin_y_cm=1500, invert_y=True)
+    x, y, z = t.to_metres(3050, 3505, z_cm=180)
     assert x == pytest.approx(5.5)
     assert y == pytest.approx(-20.05)
     assert z == pytest.approx(1.8)
@@ -181,10 +243,63 @@ def test_project_save_load_roundtrip(tmp_path):
     back = Project.load(str(path))
     assert back.name == "Round trip"
     assert len(back.points) == 2
-    assert back.formations[1].positions["a"] == (100.0, 200.0)
+    act = back.cue_by_id("c2").activations["a"]
+    assert (act.target_x_cm, act.target_y_cm) == (100.0, 200.0)
 
 
 def test_tracker_id_falls_back_to_number_then_index():
     assert Point(id="x", name="x", number=7).resolved_tracker_id(0) == 7
     assert Point(id="x", name="x", number=7, psn_tracker_id=99).resolved_tracker_id(0) == 99
     assert Point(id="x", name="x").resolved_tracker_id(4) == 4
+
+
+def test_apply_group_transform_gives_each_point_its_own_arc():
+    """A group rotation must not move points rigidly: each point keeps its
+    own distance to the pivot, so a wider point sweeps a wider arc
+    (CONCEPTION.md §13.1 point 1)."""
+    project = Project()
+    project.points = [Point(id="near", name="near"), Point(id="far", name="far")]
+    setup_cue = Cue(id="setup", name="setup", start_ms=0, duration_ms=1,
+                     activations={
+                         "near": Activation(target_x_cm=110, target_y_cm=100, fade_ms=1),
+                         "far": Activation(target_x_cm=200, target_y_cm=100, fade_ms=1),
+                     })
+    move_cue = Cue(id="move", name="move", start_ms=1000, duration_ms=1000)
+    project.cues = [setup_cue, move_cue]
+
+    project.apply_group_transform(
+        move_cue, ["near", "far"], pivot=(100.0, 100.0), rotate_deg=90.0,
+        fade_ms=1000.0, easing="linear",
+    )
+
+    poses = resolve_positions(project, 2000)
+    # 90° rotation around (100,100): (110,100) -> (100,110); (200,100) -> (100,200)
+    assert (poses["near"].x_cm, poses["near"].y_cm) == pytest.approx((100.0, 110.0), abs=1e-6)
+    assert (poses["far"].x_cm, poses["far"].y_cm) == pytest.approx((100.0, 200.0), abs=1e-6)
+    near_radius = math.hypot(poses["near"].x_cm - 100.0, poses["near"].y_cm - 100.0)
+    far_radius = math.hypot(poses["far"].x_cm - 100.0, poses["far"].y_cm - 100.0)
+    assert far_radius > near_radius
+
+
+def test_bundle_roundtrip_dedupes_media_by_hash(tmp_path):
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"fake-audio-bytes")
+
+    project = _demo_project()
+    project.name = "Bundled"
+    project.audio_path = str(audio)
+    bundle_dir = str(tmp_path / "Show.bundle")
+
+    save_bundle(project, bundle_dir)
+    # Re-save without changing the audio: must not create a second media file.
+    save_bundle(project, bundle_dir)
+
+    media_dir = tmp_path / "Show.bundle" / "media"
+    audio_copies = list(media_dir.glob("*.m4a"))
+    assert len(audio_copies) == 1
+
+    back = load_bundle(bundle_dir)
+    assert back.name == "Bundled"
+    assert back.audio_path and back.audio_path.endswith(".m4a")
+    with open(back.audio_path, "rb") as fh:
+        assert fh.read() == b"fake-audio-bytes"

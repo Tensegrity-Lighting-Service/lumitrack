@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lumitrack"
-version = "0.1.0"
-description = "Desktop choreography editor with timecode input and PosiStageNet output"
+version = "0.2.0"
+description = "Choreography/prevvisualization editor (Tauri+React frontend) with timecode input and PosiStageNet output, Python core run as a local sidecar"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 dependencies = [
-    "PySide6>=6.6",
     "pypsn>=0.2.3",
+    "websockets>=12.0",
 ]
 
 [project.optional-dependencies]
@@ -19,7 +19,7 @@ midi = ["mido>=1.3", "python-rtmidi>=1.5"]
 dev = ["pytest>=8.0", "pyinstaller>=6.0"]
 
 [project.scripts]
-lumitrack = "lumitrack.__main__:main"
+lumitrack-sidecar = "lumitrack.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

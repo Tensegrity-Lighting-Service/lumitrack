@@ -6,6 +6,7 @@ so the output rate doesn't drift as load increases. With ~100 trackers at
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 from typing import Optional
@@ -175,17 +176,18 @@ class PsnBroadcaster:
         if project is None or timeline is None:
             return []
 
-        positions = timeline.positions_at(t_ms)
+        poses = timeline.positions_at(t_ms)
         trackers = []
         for index, point in enumerate(project.points):
-            pos = positions.get(point.id)
-            if pos is None:
+            pose = poses.get(point.id)
+            if pose is None:
                 continue  # never invent a position at (0,0)
-            x_m, y_m, z_m = transform.to_metres(pos[0], pos[1])
+            x_m, y_m, z_m = transform.to_metres(pose.x_cm, pose.y_cm, pose.z_cm)
             trackers.append(Tracker(
                 id=point.resolved_tracker_id(index),
                 name=point.name or f"Point {index + 1}",
                 x_m=x_m, y_m=y_m, z_m=z_m,
+                yaw_rad=math.radians(pose.yaw_deg),
             ))
         return trackers
 
