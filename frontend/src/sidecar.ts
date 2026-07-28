@@ -6,7 +6,7 @@
 // re-renders from them — every edit is sent as a command and only takes
 // effect once the sidecar echoes back a fresh `project` snapshot.
 import { useSyncExternalStore } from 'react'
-import type { Project, ServerMessage, TickMessage } from './types'
+import type { BlockContextMessage, Project, ServerMessage, TickMessage } from './types'
 
 const SIDECAR_PORT = 17845
 const RECONNECT_DELAY_MS = 1000
@@ -14,6 +14,7 @@ const RECONNECT_DELAY_MS = 1000
 class SidecarClient {
   project: Project | null = null
   tick: TickMessage | null = null
+  blockContext: BlockContextMessage | null = null
   connected = false
   psnRunning = false
   lastError: string | null = null
@@ -47,6 +48,8 @@ class SidecarClient {
         this.psnRunning = msg.psnRunning
       } else if (msg.type === 'tick') {
         this.tick = msg
+      } else if (msg.type === 'block_context') {
+        this.blockContext = msg
       } else if (msg.type === 'error') {
         this.lastError = msg.message
         console.error('[sidecar]', msg.message)
@@ -104,6 +107,18 @@ class SidecarClient {
   }) {
     this.send({ type: 'set_activation', cueId, pointId, ...patch })
   }
+  // Block-edit context (§12.6). Requested again after every fresh
+  // `project` snapshot while a cue is selected (see App.tsx), so the
+  // displayed trajectories always describe the current project state —
+  // resolution itself stays entirely backend-side (§13.1.7).
+  resolveBlockContext(cueId: string) {
+    this.send({ type: 'resolve_block_context', cueId })
+  }
+  clearBlockContext() {
+    if (this.blockContext === null) return
+    this.blockContext = null
+    this.emit()
+  }
   applyGroupTransform(cueId: string, pointIds: string[], opts: {
     pivot?: [number, number]; translate?: [number, number]; rotateDeg?: number
     fadeMs?: number; easing?: string
@@ -126,6 +141,10 @@ export function useProject(): Project | null {
 
 export function useTick(): TickMessage | null {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.tick)
+}
+
+export function useBlockContext(): BlockContextMessage | null {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.blockContext)
 }
 
 export function useConnected(): boolean {

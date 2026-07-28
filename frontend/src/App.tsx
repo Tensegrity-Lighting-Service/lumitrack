@@ -3,7 +3,7 @@ import './App.css'
 import { Scene } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import { Waveform } from './audio/Waveform'
-import { sidecar, useConnected, useProject, usePsnRunning, useTick } from './sidecar'
+import { sidecar, useBlockContext, useConnected, useProject, usePsnRunning, useTick } from './sidecar'
 import type { Activation, Cue, Point, Project } from './types'
 
 const ROSTER_MIN = 160
@@ -156,6 +156,7 @@ function App() {
   const tick = useTick()
   const connected = useConnected()
   const psnRunning = usePsnRunning()
+  const blockContext = useBlockContext()
 
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null)
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null)
@@ -198,6 +199,17 @@ function App() {
   }, [project, tMs])
 
   const selectedCue = project?.cues.find((c) => c.id === selectedCueId) ?? null
+
+  // Selecting a block puts the scene in that block's edit mode (§12.6):
+  // fetch its context (targets + trajectories) and keep it fresh across
+  // every project snapshot, since any edit can move a target or change
+  // which cue a start position tracks from. Depends on `project` (the
+  // snapshot object), not on individual fields, so a set_activation echo
+  // triggers a re-request too.
+  useEffect(() => {
+    if (selectedCue) sidecar.resolveBlockContext(selectedCue.id)
+    else sidecar.clearBlockContext()
+  }, [selectedCue, project])
 
   // Global shortcuts. Skipped while typing in an input/select/color-picker
   // so Space/Delete keep their normal text-editing meaning there.
@@ -334,6 +346,7 @@ function App() {
           positions={positions}
           selectedPointId={selectedPointId}
           selectedCueId={selectedCueId}
+          blockContext={blockContext}
           onSelectPoint={setSelectedPointId}
           cameraLocked={cameraLocked}
           fitToken={fitToken}

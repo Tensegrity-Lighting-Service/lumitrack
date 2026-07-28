@@ -4,13 +4,17 @@
 // 3D, quatre caméras" — this file only wires up the first of the four.
 //
 // Editing model: click an actor to select it (Roster/Inspector follow).
-// With a Cue selected in the timeline, dragging a selected actor writes its
-// new x/y straight into that Cue's Activation (§13.1 point 3, "déplacement
-// + rotation" in Vue Dessus) — there's nowhere else for a position edit to
-// go, since Activations only exist inside a Cue. Without a Cue selected,
-// actors are select-only. MapControls (pan/zoom) is disabled for the
-// duration of a drag so the two gestures never fight over the same mouse
-// movement.
+// Selecting a Cue in the timeline puts the scene in that block's edit mode
+// (§12.6): the block's targets (draggable ghost markers) and static
+// trajectories (backend-sampled polylines, see `resolve_block_context`)
+// are displayed on top of the live state, which stays visible but dimmed.
+// Dragging an actor — or its target ghost — writes the new x/y into that
+// Cue's Activation, and the ghost/trajectory follow each echoed snapshot,
+// so no edit is ever silent (the constat n°2 anti-pattern: writing into a
+// cue that doesn't govern the current playhead used to move nothing on
+// screen). Without a Cue selected, actors are select-only. MapControls
+// (pan/zoom) is disabled for the duration of a drag so the two gestures
+// never fight over the same mouse movement.
 //
 // Stage-to-terrain mapping: the "zone de jeu" (the stage rectangle actors
 // are positioned within, stageWidthCm x stageHeightCm) has no inherent
@@ -28,7 +32,7 @@ import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
-import type { Project, Pose } from '../types'
+import type { BlockContextEntry, BlockContextMessage, Project, Pose } from '../types'
 
 const CM_TO_M = 0.01
 const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
@@ -42,6 +46,14 @@ const HANDLE_PX = 11
 const ROTATE_HANDLE_PX = 9
 const ROTATE_HANDLE_OFFSET_PX = 40 // distance above the top edge, same constant-screen-size logic
 const SNAP_RADIUS_M = 0.6
+// Target ghosts keep a constant screen size like the zone handles do — a
+// world-sized marker would be unreadable at zoom-to-fit scale, defeating
+// the whole "every edit has visible feedback" point of block-edit mode.
+const GHOST_PX = 15
+// Live-state dimming in block-edit mode (§12.6): activated actors stay
+// readable, the rest is context; the ghosts/trajectories are the subject.
+const EDIT_ACTIVATED_OPACITY = 0.45
+const EDIT_BYSTANDER_OPACITY = 0.18
 const SNAP_MAX_POINTS = 4000 // subsampled if the floor layer is denser than this
 // How close to the terrain's own minimum Y counts as "floor level". Height-
 // based, not name-based: any venue survey has *some* ground plane, but node
@@ -124,16 +136,20 @@ function GenericFloor({ widthM, heightM }: { widthM: number; heightM: number }) 
   )
 }
 
-function Actor({ pose, color, selected, draggable, onPointerDown }: {
+function Actor({ pose, color, selected, draggable, opacity, onPointerDown }: {
   pose: Pose
   color: string
   selected: boolean
   draggable: boolean
+  /** 1 in live view; dimmed in block-edit mode, where the live state is
+   * context and the targets/trajectories are the subject (§12.6). */
+  opacity: number
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
 }) {
   const [x_cm, y_cm, z_cm, yaw_deg] = pose
   const [x, y, z] = stageToLocal(x_cm, y_cm, z_cm)
   const yawRad = THREE.MathUtils.degToRad(yaw_deg)
+  const transparent = opacity < 1
   return (
     <group
       position={[x, y, z]}
@@ -144,18 +160,111 @@ function Actor({ pose, color, selected, draggable, onPointerDown }: {
     >
       <mesh>
         <sphereGeometry args={[ACTOR_RADIUS_M, 20, 16]} />
-        <meshStandardMaterial color={color} emissive={selected ? color : '#000000'} emissiveIntensity={selected ? 0.6 : 0} />
+        <meshStandardMaterial
+          color={color}
+          emissive={selected ? color : '#000000'}
+          emissiveIntensity={selected ? 0.6 : 0}
+          transparent={transparent}
+          opacity={opacity}
+        />
       </mesh>
       {/* Directional pointer: shows which way the carried fixture faces (§12.5). */}
       <mesh position={[0, 0, ACTOR_RADIUS_M * 1.8]}>
         <coneGeometry args={[ACTOR_RADIUS_M * 0.45, ACTOR_RADIUS_M * 1.6, 12]} />
-        <meshStandardMaterial color={color} />
+        <meshStandardMaterial color={color} transparent={transparent} opacity={opacity} />
       </mesh>
       {/* Larger invisible hit target: the visible marker is small, dragging
           shouldn't require pixel-perfect aim on it. */}
       <mesh visible={false}>
         <sphereGeometry args={[ACTOR_RADIUS_M * 1.8, 8, 8]} />
       </mesh>
+    </group>
+  )
+}
+
+/** Visual weight of one block-edit element, driven by actor selection
+ * (§12.6): no actor selected → every trajectory reads equally; an actor
+ * selected → its trajectory/ghost pops, the rest stays visible but dim. */
+type Emphasis = 'highlight' | 'normal' | 'dim'
+
+const EMPHASIS_OPACITY: Record<Emphasis, number> = { highlight: 1, normal: 0.85, dim: 0.25 }
+
+/** Static trajectory of one activation in the selected block: the polyline
+ * sampled by the backend from the real tracking-chain start to the target
+ * (`resolve_block_context`). Pure display — the geometry arrives fully
+ * resolved, nothing is interpolated here (§13.1.7). */
+function Trajectory({ path, color, emphasis }: {
+  path: [number, number, number][]
+  color: string
+  emphasis: Emphasis
+}) {
+  const points = useMemo(
+    () => path.map(([x_cm, y_cm, z_cm]) => new THREE.Vector3(...stageToLocal(x_cm, y_cm, z_cm))),
+    [path],
+  )
+  return (
+    <Line
+      points={points}
+      color={color}
+      lineWidth={emphasis === 'highlight' ? 3.5 : 2}
+      transparent
+      opacity={EMPHASIS_OPACITY[emphasis]}
+      depthTest={false}
+      renderOrder={1010}
+    />
+  )
+}
+
+/** Where this activation sends the actor: a flat ring + heading tick at the
+ * target pose, constant screen size (same `useFrame`/`camera.zoom` scaling
+ * as the zone handles). Draggable: grabbing the ghost — like dragging the
+ * actor itself while a block is selected — moves the block's target, so the
+ * thing being edited is always the thing on screen. */
+function TargetGhost({ pose, color, emphasis, onPointerDown }: {
+  pose: Pose
+  color: string
+  emphasis: Emphasis
+  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const [x_cm, y_cm, z_cm, yaw_deg] = pose
+  const [x, y, z] = stageToLocal(x_cm, y_cm, z_cm)
+  const yawRad = THREE.MathUtils.degToRad(yaw_deg)
+  const scaledRef = useRef<THREE.Group>(null)
+  useFrame(({ camera }) => {
+    if (!scaledRef.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const s = GHOST_PX / zoom
+    scaledRef.current.scale.set(s, s, s)
+  })
+  const opacity = EMPHASIS_OPACITY[emphasis]
+  return (
+    <group position={[x, y, z]} rotation={[0, -yawRad, 0]}>
+      <group
+        ref={scaledRef}
+        onPointerDown={onPointerDown}
+        onPointerOver={() => { document.body.style.cursor = 'grab' }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={1011}>
+          <ringGeometry args={[0.68, 1, 32]} />
+          <meshBasicMaterial color={color} transparent opacity={opacity} depthTest={false} side={THREE.DoubleSide} />
+        </mesh>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={1011}>
+          <circleGeometry args={[0.28, 16]} />
+          <meshBasicMaterial color={color} transparent opacity={opacity} depthTest={false} side={THREE.DoubleSide} />
+        </mesh>
+        {/* Flat heading tick: apex points along local +Z, the same axis the
+            actor's own directional cone offsets toward, so ghost and actor
+            agree on what the target yaw means. */}
+        <mesh position={[0, 0, 1.45]} rotation={[Math.PI / 2, 0, 0]} renderOrder={1011}>
+          <coneGeometry args={[0.38, 0.85, 3]} />
+          <meshBasicMaterial color={color} transparent opacity={opacity} depthTest={false} />
+        </mesh>
+        {/* Invisible hit disc: dragging shouldn't need pixel-perfect aim. */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} visible={false}>
+          <circleGeometry args={[1.7, 12]} />
+        </mesh>
+      </group>
     </group>
   )
 }
@@ -602,13 +711,14 @@ function DarkenMask({ maskBounds, stageGroupRef, widthM, heightM }: {
  * horizontal plane at the actor's height and throttles setActivation calls,
  * pointerup releases MapControls again. */
 function SceneContent({
-  project, positions, selectedPointId, selectedCueId, onSelectPoint, cameraLocked, fitToken, editingZone,
+  project, positions, selectedPointId, selectedCueId, blockContext, onSelectPoint, cameraLocked, fitToken, editingZone,
   gridOpacity, snapToGrid, zoomAction,
 }: {
   project: Project
   positions: Record<string, Pose>
   selectedPointId: string | null
   selectedCueId: string | null
+  blockContext: BlockContextMessage | null
   onSelectPoint: (pointId: string) => void
   cameraLocked: boolean
   fitToken: number
@@ -767,6 +877,14 @@ function SceneContent({
     }
   }, [gl, camera, raycaster, selectedCueId, cameraLocked, snapToGrid, project.gridSizeCm])
 
+  // Block-edit mode (§12.6): entries only trusted when the context echoes
+  // the currently selected cue — a stale context from a just-deselected or
+  // just-deleted cue must not draw ghosts for the wrong block.
+  const editEntries: Record<string, BlockContextEntry> | null =
+    selectedCueId && blockContext && blockContext.cueId === selectedCueId
+      ? blockContext.entries
+      : null
+
   const handleActorPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string) => {
     e.stopPropagation()
     onSelectPoint(pointId)
@@ -779,6 +897,22 @@ function SceneContent({
     const planeY = pose[2] * CM_TO_M
     dragRef.current = { pointId, planeY, lastSent: 0 }
     if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  // Grabbing a target ghost drags the same thing an actor drag edits — the
+  // block's target — through the same dragRef/onMove path; only the raycast
+  // plane height comes from the target pose instead of the live pose.
+  const handleGhostPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string, targetZCm: number) => {
+    e.stopPropagation()
+    onSelectPoint(pointId)
+    if (!selectedCueId) return
+    dragRef.current = { pointId, planeY: targetZCm * CM_TO_M, lastSent: 0 }
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const emphasisFor = (pointId: string): Emphasis => {
+    if (!selectedPointId) return 'normal'
+    return pointId === selectedPointId ? 'highlight' : 'dim'
   }
 
   // drei's Grid has no true opacity/alpha control (its shader material
@@ -843,8 +977,35 @@ function SceneContent({
               color={point.color}
               selected={point.id === selectedPointId}
               draggable={Boolean(selectedCueId)}
+              opacity={editEntries === null ? 1
+                : editEntries[point.id] ? EDIT_ACTIVATED_OPACITY : EDIT_BYSTANDER_OPACITY}
               onPointerDown={(e) => handleActorPointerDown(e, point.id)}
             />
+          )
+        })}
+
+        {/* Block-edit overlay (§12.6): every activation of the selected
+            block shows its target ghost and static trajectory. By default
+            all of them; selecting an actor highlights its own and dims the
+            rest (context stays visible). */}
+        {editEntries && project.points.map((point) => {
+          const entry = editEntries[point.id]
+          if (!entry) return null
+          const emphasis = emphasisFor(point.id)
+          return (
+            <group key={`edit-${point.id}`}>
+              {entry.path.length > 0 && (
+                <Trajectory path={entry.path} color={point.color} emphasis={emphasis} />
+              )}
+              {entry.targetPose && (
+                <TargetGhost
+                  pose={entry.targetPose}
+                  color={point.color}
+                  emphasis={emphasis}
+                  onPointerDown={(e) => handleGhostPointerDown(e, point.id, entry.targetPose![2])}
+                />
+              )}
+            </group>
           )
         })}
       </StageGroup>
@@ -861,6 +1022,7 @@ export function Scene(props: {
   positions: Record<string, Pose>
   selectedPointId: string | null
   selectedCueId: string | null
+  blockContext: BlockContextMessage | null
   onSelectPoint: (pointId: string) => void
   cameraLocked: boolean
   fitToken: number

@@ -76,6 +76,36 @@ export interface TickMessage {
   positions: Record<string, Pose>
 }
 
+// Block-edit context (§12.6): everything the scene needs to display a
+// selected cue's targets and static trajectories. `path` is pure spatial
+// geometry (uniform-parameter samples, no easing baked in); `timing` is
+// what maps time onto it — kept separate on purpose (§13.1.11). All values
+// are resolved by the backend; the frontend never interpolates.
+export interface TrajectoryTiming {
+  startMs: number
+  fadeMs: number
+  easing: string
+}
+
+export interface BlockContextEntry {
+  /** Where the point really tracks from (last cue that touched each axis),
+   * or null if it has no known position when the block starts. */
+  startPose: Pose | null
+  targetPose: Pose | null
+  /** [x_cm, y_cm, z_cm][] — empty when there is no spatial movement. */
+  path: [number, number, number][]
+  timing: TrajectoryTiming
+  /** Per axis, the id of the cue the start value tracks from (null =
+   * first appearance or axis untouched by this block). */
+  sources: Record<'x' | 'y' | 'z' | 'yaw', string | null>
+}
+
+export interface BlockContextMessage {
+  type: 'block_context'
+  cueId: string
+  entries: Record<string, BlockContextEntry>
+}
+
 export interface ErrorMessage {
   type: 'error'
   message: string
@@ -90,4 +120,6 @@ export interface AckMessage {
   type: 'ack'
 }
 
-export type ServerMessage = ProjectMessage | TickMessage | ErrorMessage | SavedMessage | AckMessage
+export type ServerMessage =
+  | ProjectMessage | TickMessage | BlockContextMessage
+  | ErrorMessage | SavedMessage | AckMessage
