@@ -22,7 +22,7 @@
 // reason in the rectangle's own local metres — the group's transform does
 // the placement once, rather than every child re-deriving it.
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber'
+import { Canvas, useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
 import { OrthographicCamera, MapControls, Grid, useGLTF, Line } from '@react-three/drei'
 import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
@@ -34,8 +34,20 @@ const CM_TO_M = 0.01
 const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
 const ACTOR_RADIUS_M = 0.4 // was 0.18 — too small to read against a full-size stage
 const FIT_PADDING = 0.9 // leaves a small margin around the fit region on zoom-to-fit
-const HANDLE_SIZE_M = 0.6
-const ROTATE_HANDLE_OFFSET_M = 1.5
+// Handles keep a constant *screen* size (px) regardless of zoom — see
+// ScreenSizedMesh — rather than a fixed world size, which would shrink to
+// invisible once "zoom to fit" frames a whole arena (~100m) and was the
+// root of "on ne voit pas du tout les éléments de transformation".
+const HANDLE_PX = 11
+const ROTATE_HANDLE_PX = 9
+const ROTATE_HANDLE_OFFSET_PX = 40 // distance above the top edge, same constant-screen-size logic
+const SNAP_RADIUS_M = 0.6
+const SNAP_MAX_POINTS = 4000 // subsampled if the floor layer is denser than this
+// How close to the terrain's own minimum Y counts as "floor level". Height-
+// based, not name-based: any venue survey has *some* ground plane, but node
+// naming is completely author-dependent (this must work for any terrain a
+// user loads, not just the one glTF on hand during development).
+const SNAP_FLOOR_EPSILON_M = 0.15
 
 /** Stage (x_cm, y_cm depth, z_cm height) -> StageGroup-local metres
  * (X, Y up, Z). The group's own transform (position/rotation) then places
@@ -51,18 +63,47 @@ export interface PlanarBounds {
   maxZ: number
 }
 
+export interface SnapPoint { x: number; z: number }
+
 /** Reports its actual bounding box (XZ footprint) once loaded: the terrain's
  * real-world size/origin has no necessary relation to the project's own
  * "stage" dimensions (an abstract prop-placement rectangle, not a survey of
  * the venue) — zoom-to-fit needs the real footprint to show the whole
- * model instead of whatever fraction of it overlaps the stage rectangle. */
-function Terrain({ path, onBounds }: { path: string; onBounds: (bounds: PlanarBounds) => void }) {
+ * model instead of whatever fraction of it overlaps the stage rectangle.
+ *
+ * Also collects snap candidates: vertices sitting near the terrain's own
+ * lowest Y (SNAP_FLOOR_EPSILON_M) across *every* mesh, not ones picked by
+ * node name — this has to work for whatever terrain a user loads, and glTF
+ * authoring/naming is out of our control, but a floor-level heuristic holds
+ * for any venue survey. Grandstands/roof/rigging sit well above the floor
+ * so they're naturally excluded; whatever's drawn on the ground (pitch
+ * lines, markings, thresholds) is exactly what's left. */
+function Terrain({ path, onBounds, onSnapPoints }: {
+  path: string
+  onBounds: (bounds: PlanarBounds) => void
+  onSnapPoints: (points: SnapPoint[]) => void
+}) {
   const url = useMemo(() => convertFileSrc(path), [path])
   const { scene } = useGLTF(url)
   useEffect(() => {
     const box = new THREE.Box3().setFromObject(scene)
     onBounds({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z })
-  }, [scene, onBounds])
+
+    const floorY = box.min.y + SNAP_FLOOR_EPSILON_M
+    const points: SnapPoint[] = []
+    const v = new THREE.Vector3()
+    scene.traverse((node) => {
+      if (points.length >= SNAP_MAX_POINTS) return
+      if (!(node instanceof THREE.Mesh)) return
+      const position = node.geometry.getAttribute('position')
+      if (!position) return
+      for (let i = 0; i < position.count && points.length < SNAP_MAX_POINTS; i++) {
+        v.fromBufferAttribute(position, i).applyMatrix4(node.matrixWorld)
+        if (v.y <= floorY) points.push({ x: v.x, z: v.z })
+      }
+    })
+    onSnapPoints(points)
+  }, [scene, onBounds, onSnapPoints])
   return <primitive object={scene} />
 }
 
@@ -153,26 +194,142 @@ function ZoneOutline({ widthM, heightM, editing }: { widthM: number; heightM: nu
 
 type DragKind = 'move' | 'resize' | 'rotate'
 
+/** One of the 8 resize handles: 4 corners (resize both axes) + 4 edge
+ * midpoints (resize one axis, "le resize doit pouvoir se faire depuis les
+ * bords"). fx/fz are the handle's position as a fraction of width/height
+ * (0, 0.5 or 1) — also used to derive which corner is the fixed anchor
+ * (1-fx, 1-fz) that must not move in world space while dragging. */
+interface ResizeHandleDef {
+  key: string
+  axis: 'x' | 'z' | 'both'
+  fx: number
+  fz: number
+  cursor: string
+}
+const RESIZE_HANDLES: ResizeHandleDef[] = [
+  { key: 'tl', axis: 'both', fx: 0, fz: 0, cursor: 'nwse-resize' },
+  { key: 'tr', axis: 'both', fx: 1, fz: 0, cursor: 'nesw-resize' },
+  { key: 'br', axis: 'both', fx: 1, fz: 1, cursor: 'nwse-resize' },
+  { key: 'bl', axis: 'both', fx: 0, fz: 1, cursor: 'nesw-resize' },
+  { key: 'top', axis: 'z', fx: 0.5, fz: 0, cursor: 'ns-resize' },
+  { key: 'bottom', axis: 'z', fx: 0.5, fz: 1, cursor: 'ns-resize' },
+  { key: 'left', axis: 'x', fx: 0, fz: 0.5, cursor: 'ew-resize' },
+  { key: 'right', axis: 'x', fx: 1, fz: 0.5, cursor: 'ew-resize' },
+]
+
+/** Nearest snap candidate to (x,z) within SNAP_RADIUS_M, or null. Linear
+ * scan: fine at SNAP_MAX_POINTS scale and only run at drag-throttle rate,
+ * not every raw pointermove. */
+function findSnap(x: number, z: number, points: SnapPoint[]): SnapPoint | null {
+  let best: SnapPoint | null = null
+  let bestDistSq = SNAP_RADIUS_M * SNAP_RADIUS_M
+  for (const p of points) {
+    const dx = p.x - x, dz = p.z - z
+    const distSq = dx * dx + dz * dz
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq
+      best = p
+    }
+  }
+  return best
+}
+
+/** Keeps a constant *screen* size (px) regardless of camera zoom — a fixed
+ * world size would shrink to invisible once "zoom to fit" frames a whole
+ * arena (~100m), which was the root of "on ne voit pas du tout les éléments
+ * de transformation". `args` is the geometry's aspect ratio at unit scale
+ * (e.g. [1,1,1] square, [0.35,1,1] a bar elongated along Z) — actual size
+ * comes entirely from the per-frame scale below. Unlit meshBasicMaterial:
+ * these are a 2D editing overlay, not scene-lit geometry. */
+function ScreenSizedHandle({ position, sizePx, args, color, onPointerDown, cursor, renderOrder }: {
+  position: [number, number, number]
+  sizePx: number
+  args: [number, number, number]
+  color: string
+  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
+  cursor: string
+  renderOrder: number
+}) {
+  const ref = useRef<THREE.Mesh>(null)
+  useFrame(({ camera }) => {
+    if (!ref.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const s = sizePx / zoom
+    ref.current.scale.set(s, s, s)
+  })
+  return (
+    <mesh
+      ref={ref}
+      position={position}
+      renderOrder={renderOrder}
+      onPointerDown={onPointerDown}
+      onPointerOver={() => { document.body.style.cursor = cursor }}
+      onPointerOut={() => { document.body.style.cursor = 'auto' }}
+    >
+      <boxGeometry args={args} />
+      <meshBasicMaterial color={color} depthTest={false} />
+    </mesh>
+  )
+}
+
+/** Rotate handle: offset outward from the top edge (screen-up is -Z, since
+ * the camera's `up` is set to (0,0,-1) for the top-down view). Both its
+ * offset distance and size are recomputed every frame from the current
+ * zoom, same reasoning as ScreenSizedHandle — a fixed-world-metres offset
+ * would put it almost on top of the corner once zoomed out to fit a whole
+ * arena. */
+function RotateHandle({ widthM, onPointerDown }: {
+  widthM: number
+  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const ref = useRef<THREE.Mesh>(null)
+  useFrame(({ camera }) => {
+    if (!ref.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const offset = ROTATE_HANDLE_OFFSET_PX / zoom
+    ref.current.position.set(widthM / 2, 0.03, -offset)
+    const s = ROTATE_HANDLE_PX / zoom
+    ref.current.scale.set(s, s, s)
+  })
+  return (
+    <mesh
+      ref={ref}
+      renderOrder={1002}
+      onPointerDown={onPointerDown}
+      onPointerOver={() => { document.body.style.cursor = 'grab' }}
+      onPointerOut={() => { document.body.style.cursor = 'auto' }}
+    >
+      <sphereGeometry args={[0.5, 16, 12]} />
+      <meshBasicMaterial color="#4ff58c" depthTest={false} />
+    </mesh>
+  )
+}
+
 /** Move/resize/rotate handles for the "zone de jeu", only rendered while
- * editing. All three gestures raycast against a ground plane and reduce to
- * a small delta applied on top of the project's current placement:
+ * editing. All gestures raycast against a ground plane:
  *  - move: world-space delta added straight to the origin (translation
- *    doesn't care about rotation).
- *  - resize: the world hit converted into the *group's own local space*
- *    (stageGroupRef.worldToLocal — lets three.js invert whatever rotation
- *    is current instead of us re-deriving trig by hand) becomes the new
- *    width/height directly, since local (0,0) is the rectangle's corner.
+ *    doesn't care about rotation), snapped to nearby floor geometry.
+ *  - resize: general anchor-preserving formula — whichever corner is
+ *    diagonally (or, for an edge handle, directly) opposite the dragged
+ *    handle is frozen in *world* space for the whole gesture (its position
+ *    is cached once at drag start, using the rotation/origin at that
+ *    moment, so it's immune to the group's transform changing mid-drag).
+ *    The raycasted hit is expressed in that same frozen local frame to get
+ *    the new width/height, then the anchor's world position is used to
+ *    solve for the new origin. Reduces to the simple "grow from one fixed
+ *    corner" case when dragging the corner whose anchor is local (0,0).
  *  - rotate: angle-from-pivot delta (current minus drag-start) added to the
  *    rotation at drag start — a relative delta needs no assumption about
  *    which way three.js' Y-rotation matrix winds, only that it's applied
  *    consistently between the two samples.
  */
-function ZoneHandles({ project, widthM, heightM, stageGroupRef, controlsRef }: {
+function ZoneHandles({ project, widthM, heightM, stageGroupRef, controlsRef, snapPoints }: {
   project: Project
   widthM: number
   heightM: number
   stageGroupRef: React.RefObject<THREE.Group | null>
   controlsRef: React.RefObject<MapControlsImpl | null>
+  snapPoints: SnapPoint[]
 }) {
   const { camera, raycaster, gl } = useThree()
   const dragRef = useRef<{
@@ -181,6 +338,16 @@ function ZoneHandles({ project, widthM, heightM, stageGroupRef, controlsRef }: {
     startOriginXM: number
     startOriginZM: number
     startRotationDeg: number
+    lastSent: number
+    resize?: {
+      handle: ResizeHandleDef
+      cos0: number
+      sin0: number
+      width0: number
+      height0: number
+      anchorWorldX: number
+      anchorWorldZ: number
+    }
   } | null>(null)
 
   useEffect(() => {
@@ -209,21 +376,54 @@ function ZoneHandles({ project, widthM, heightM, stageGroupRef, controlsRef }: {
     const onMove = (e: PointerEvent) => {
       const drag = dragRef.current
       if (!drag) return
+      const now = performance.now()
+      if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
+      drag.lastSent = now
       const world = raycastGround(e)
       if (!world) return
 
       if (drag.kind === 'move') {
+        // Snap the rectangle's own origin corner to a nearby line vertex —
+        // lets the user click a corner/dot on the pitch and have the zone
+        // lock onto it instead of eyeballing the position.
+        let originXM = drag.startOriginXM + (world.x - drag.startWorld.x)
+        let originZM = drag.startOriginZM + (world.z - drag.startWorld.z)
+        const snap = findSnap(originXM, originZM, snapPoints)
+        if (snap) { originXM = snap.x; originZM = snap.z }
+        sidecar.updateStageMap({ originXM, originZM })
+      } else if (drag.kind === 'resize' && drag.resize) {
+        const { handle, cos0, sin0, width0, height0, anchorWorldX, anchorWorldZ } = drag.resize
+        const snap = findSnap(world.x, world.z, snapPoints)
+        const targetX = snap ? snap.x : world.x
+        const targetZ = snap ? snap.z : world.z
+
+        // World delta from the frozen anchor, expressed in the rectangle's
+        // *local* axes (rotation-only inverse — R is orthogonal, so its
+        // inverse is its transpose; no origin/translation involved since
+        // this is a delta, not a point).
+        const dxw = targetX - anchorWorldX
+        const dzw = targetZ - anchorWorldZ
+        const localDx = dxw * cos0 - dzw * sin0
+        const localDz = dxw * sin0 + dzw * cos0
+
+        let newWidthM = width0
+        let newHeightM = height0
+        if (handle.axis !== 'z') newWidthM = Math.max(0.1, handle.fx === 1 ? localDx : -localDx)
+        if (handle.axis !== 'x') newHeightM = Math.max(0.1, handle.fz === 1 ? localDz : -localDz)
+
+        // Where the anchor sits relative to the *new* origin — rotate that
+        // back into world space and subtract from the anchor's (fixed)
+        // world position to get the new origin.
+        const anchorNewLocalX = newWidthM * (1 - handle.fx)
+        const anchorNewLocalZ = newHeightM * (1 - handle.fz)
+        const rotatedX = anchorNewLocalX * cos0 + anchorNewLocalZ * sin0
+        const rotatedZ = -anchorNewLocalX * sin0 + anchorNewLocalZ * cos0
+
         sidecar.updateStageMap({
-          originXM: drag.startOriginXM + (world.x - drag.startWorld.x),
-          originZM: drag.startOriginZM + (world.z - drag.startWorld.z),
-        })
-      } else if (drag.kind === 'resize') {
-        const group = stageGroupRef.current
-        if (!group) return
-        const local = group.worldToLocal(world.clone())
-        sidecar.updateStageMap({
-          widthCm: Math.max(10, local.x / CM_TO_M),
-          heightCm: Math.max(10, local.z / CM_TO_M),
+          widthCm: newWidthM / CM_TO_M,
+          heightCm: newHeightM / CM_TO_M,
+          originXM: anchorWorldX - rotatedX,
+          originZM: anchorWorldZ - rotatedZ,
         })
       } else {
         const pivotX = drag.startOriginXM
@@ -243,33 +443,55 @@ function ZoneHandles({ project, widthM, heightM, stageGroupRef, controlsRef }: {
       dom.removeEventListener('pointerup', endDrag)
       dom.removeEventListener('pointerleave', endDrag)
     }
-  }, [camera, raycaster, gl, stageGroupRef, controlsRef])
+  }, [camera, raycaster, gl, stageGroupRef, controlsRef, snapPoints])
 
-  const beginDrag = (e: ThreeEvent<PointerEvent>, kind: DragKind) => {
+  const beginMoveOrRotateDrag = (e: ThreeEvent<PointerEvent>, kind: 'move' | 'rotate') => {
     e.stopPropagation()
-    const world = e.point.clone()
     dragRef.current = {
       kind,
-      startWorld: world,
+      startWorld: e.point.clone(),
       startOriginXM: project.stageMapOriginXM,
       startOriginZM: project.stageMapOriginZM,
       startRotationDeg: project.stageMapRotationDeg,
+      lastSent: 0,
+    }
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const beginResizeDrag = (e: ThreeEvent<PointerEvent>, handle: ResizeHandleDef) => {
+    e.stopPropagation()
+    const rotRad0 = THREE.MathUtils.degToRad(project.stageMapRotationDeg)
+    const cos0 = Math.cos(rotRad0)
+    const sin0 = Math.sin(rotRad0)
+    const originXM = project.stageMapOriginXM
+    const originZM = project.stageMapOriginZM
+    const anchorLocalX = (1 - handle.fx) * widthM
+    const anchorLocalZ = (1 - handle.fz) * heightM
+    const anchorWorldX = originXM + anchorLocalX * cos0 + anchorLocalZ * sin0
+    const anchorWorldZ = originZM + (-anchorLocalX * sin0 + anchorLocalZ * cos0)
+    dragRef.current = {
+      kind: 'resize',
+      startWorld: e.point.clone(),
+      startOriginXM: originXM,
+      startOriginZM: originZM,
+      startRotationDeg: project.stageMapRotationDeg,
+      lastSent: 0,
+      resize: { handle, cos0, sin0, width0: widthM, height0: heightM, anchorWorldX, anchorWorldZ },
     }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
   return (
     <>
-      {/* Move: drag the whole filled zone. renderOrder + depthTest=false on
-          every handle here: this is a 2D editing overlay, it must stay
-          visible/on top of the terrain rather than being occluded like
-          normal 3D geometry (grandstands, LED boards etc. sit above y=0 in
-          a real venue survey). */}
+      {/* Move: drag the whole filled zone. renderOrder + depthTest=false: a
+          2D editing overlay must stay visible/on top of the terrain rather
+          than being occluded like normal 3D geometry (grandstands, LED
+          boards etc. sit above y=0 in a real venue survey). */}
       <mesh
         position={[widthM / 2, 0.02, heightM / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
         renderOrder={1001}
-        onPointerDown={(e) => beginDrag(e, 'move')}
+        onPointerDown={(e) => beginMoveOrRotateDrag(e, 'move')}
         onPointerOver={() => { document.body.style.cursor = 'move' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
       >
@@ -277,30 +499,20 @@ function ZoneHandles({ project, widthM, heightM, stageGroupRef, controlsRef }: {
         <meshBasicMaterial transparent opacity={0} depthWrite={false} depthTest={false} />
       </mesh>
 
-      {/* Resize: bottom-right corner (local width, height). */}
-      <mesh
-        position={[widthM, 0.03, heightM]}
-        renderOrder={1002}
-        onPointerDown={(e) => beginDrag(e, 'resize')}
-        onPointerOver={() => { document.body.style.cursor = 'nwse-resize' }}
-        onPointerOut={() => { document.body.style.cursor = 'auto' }}
-      >
-        <boxGeometry args={[HANDLE_SIZE_M, HANDLE_SIZE_M, HANDLE_SIZE_M]} />
-        <meshStandardMaterial color="#f5734f" depthTest={false} />
-      </mesh>
+      {RESIZE_HANDLES.map((h) => (
+        <ScreenSizedHandle
+          key={h.key}
+          position={[widthM * h.fx, 0.03, heightM * h.fz]}
+          sizePx={HANDLE_PX}
+          args={h.axis === 'x' ? [0.35, 1, 1] : h.axis === 'z' ? [1, 1, 0.35] : [1, 1, 1]}
+          color="#f5734f"
+          cursor={h.cursor}
+          renderOrder={1002}
+          onPointerDown={(e) => beginResizeDrag(e, h)}
+        />
+      ))}
 
-      {/* Rotate: offset outward from the top edge (screen-up is -Z, since
-          the camera's `up` is set to (0,0,-1) for the top-down view). */}
-      <mesh
-        position={[widthM / 2, 0.03, -ROTATE_HANDLE_OFFSET_M]}
-        renderOrder={1002}
-        onPointerDown={(e) => beginDrag(e, 'rotate')}
-        onPointerOver={() => { document.body.style.cursor = 'grab' }}
-        onPointerOut={() => { document.body.style.cursor = 'auto' }}
-      >
-        <sphereGeometry args={[HANDLE_SIZE_M * 0.5, 16, 12]} />
-        <meshStandardMaterial color="#4ff58c" depthTest={false} />
-      </mesh>
+      <RotateHandle widthM={widthM} onPointerDown={(e) => beginMoveOrRotateDrag(e, 'rotate')} />
     </>
   )
 }
@@ -400,27 +612,43 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
   const dragRef = useRef<{ pointId: string; planeY: number; lastSent: number } | null>(null)
   const [terrainBounds, setTerrainBounds] = useState<PlanarBounds | null>(null)
   const onTerrainBounds = useCallback((b: PlanarBounds) => setTerrainBounds(b), [])
+  const [snapPoints, setSnapPoints] = useState<SnapPoint[]>([])
+  const onSnapPoints = useCallback((p: SnapPoint[]) => setSnapPoints(p), [])
 
-  // Fit region: the terrain's real footprint when one is loaded (its size
-  // has no relation to the stage rectangle's — using the stage size cropped
-  // the Belfius arena to a fraction of itself, and unioning the two added a
-  // slab of empty space on the side where they don't overlap, since the
-  // terrain is centred on its own origin and the stage isn't. Falls back to
-  // the stage's own (mapped) footprint when there's no terrain.
+  // Fit region: the union of the terrain's real footprint (when one is
+  // loaded) and the zone's own *mapped* world-space footprint — so "zoom to
+  // fit" always shows the zone as actually placed, not just the raw venue
+  // survey. Safe now that the zone has a real placement transform: earlier,
+  // unioning against a zone always assumed stuck at the world origin added
+  // a slab of empty space wherever it didn't overlap the terrain (that's
+  // why fit briefly used terrain bounds alone). Falls back to the zone's
+  // footprint on its own when there's no terrain.
   const fit = useMemo(() => {
+    const rotRad = THREE.MathUtils.degToRad(project.stageMapRotationDeg)
+    const cos = Math.cos(rotRad), sin = Math.sin(rotRad)
+    // Same Y-rotation convention Three.js applies to the group's own
+    // `rotation` prop (verified against DarkenMask's hole alignment).
+    const toWorldX = (lx: number, lz: number) => project.stageMapOriginXM + lx * cos + lz * sin
+    const toWorldZ = (lx: number, lz: number) => project.stageMapOriginZM + (-lx * sin + lz * cos)
+    const corners = [[0, 0], [widthM, 0], [widthM, heightM], [0, heightM]]
+      .map(([lx, lz]) => [toWorldX(lx, lz), toWorldZ(lx, lz)])
+    let minX = Math.min(...corners.map((c) => c[0]))
+    let maxX = Math.max(...corners.map((c) => c[0]))
+    let minZ = Math.min(...corners.map((c) => c[1]))
+    let maxZ = Math.max(...corners.map((c) => c[1]))
     if (terrainBounds) {
-      return {
-        centerX: (terrainBounds.minX + terrainBounds.maxX) / 2,
-        centerZ: (terrainBounds.minZ + terrainBounds.maxZ) / 2,
-        spanX: terrainBounds.maxX - terrainBounds.minX,
-        spanZ: terrainBounds.maxZ - terrainBounds.minZ,
-      }
+      minX = Math.min(minX, terrainBounds.minX)
+      maxX = Math.max(maxX, terrainBounds.maxX)
+      minZ = Math.min(minZ, terrainBounds.minZ)
+      maxZ = Math.max(maxZ, terrainBounds.maxZ)
     }
-    const ox = project.stageMapOriginXM
-    const oz = project.stageMapOriginZM
-    return { centerX: ox + widthM / 2, centerZ: oz + heightM / 2, spanX: widthM, spanZ: heightM }
-  }, [widthM, heightM, terrainBounds, project.stageMapOriginXM, project.stageMapOriginZM])
+    return { centerX: (minX + maxX) / 2, centerZ: (minZ + maxZ) / 2, spanX: maxX - minX, spanZ: maxZ - minZ }
+  }, [widthM, heightM, terrainBounds, project.stageMapOriginXM, project.stageMapOriginZM, project.stageMapRotationDeg])
 
+  // Always current for the effect below to read without depending on it
+  // (see that effect's comment for why).
+  const fitRef = useRef(fit)
+  fitRef.current = fit
   const span = Math.max(fit.spanX, fit.spanZ)
 
   // Sole owner of the camera's position/orientation/zoom for the top-down
@@ -428,42 +656,42 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
   // than via the `target` JSX prop, since drei reapplies primitive props
   // every render and this component re-renders on every tick (~30/s); a
   // fresh `target={[...]}` array each render would fight the user's own
-  // panning. Runs by default (mount + whenever the fit region changes) and
-  // on demand via `fitToken` (View menu). Looking straight down means the
-  // view direction (0,-1,0) is exactly antiparallel to Three's default
-  // camera.up (0,1,0) — a degenerate case for lookAt() that three.js
-  // resolves with an effectively arbitrary roll, which is what actually
-  // made the terrain look tilted rather than flat (checked: every node in
-  // the .glb's own rotation data is yaw-only, so the asset itself was never
-  // the problem).
+  // panning. Looking straight down means the view direction (0,-1,0) is
+  // exactly antiparallel to Three's default camera.up (0,1,0) — a
+  // degenerate case for lookAt() that three.js resolves with an
+  // effectively arbitrary roll, which is what actually made the terrain
+  // look tilted rather than flat (checked: every node in the .glb's own
+  // rotation data is yaw-only, so the asset itself was never the problem).
+  //
+  // Runs on mount, when the terrain finishes loading (terrainBounds turns
+  // non-null), on panel resize, and on demand via `fitToken` (View menu) —
+  // deliberately *not* on every change to `fit` itself: `fit` now includes
+  // the zone's placement so an explicit re-fit reflects wherever the zone
+  // currently is, but auto-re-running on every drag frame of that same
+  // placement is exactly what made the camera jump while moving the zone.
+  // Reading the latest fit via `fitRef` decouples "what to apply" from
+  // "when to apply it".
   useEffect(() => {
     // A locked camera is meant to be fully frozen, not just immune to mouse
     // pan/zoom — otherwise resizing the scene panel (which changes `size`,
     // one of this effect's triggers) would silently move a "locked" view.
     if (cameraLocked) return
-    if (fit.spanX <= 0 || fit.spanZ <= 0) return
+    const currentFit = fitRef.current
+    if (currentFit.spanX <= 0 || currentFit.spanZ <= 0) return
+    const currentSpan = Math.max(currentFit.spanX, currentFit.spanZ)
     const cam = camera as THREE.OrthographicCamera
     cam.up.set(0, 0, -1)
-    cam.position.set(fit.centerX, span * 2, fit.centerZ)
-    cam.lookAt(fit.centerX, 0, fit.centerZ)
-    const zoomX = (size.width * FIT_PADDING) / fit.spanX
-    const zoomY = (size.height * FIT_PADDING) / fit.spanZ
+    cam.position.set(currentFit.centerX, currentSpan * 2, currentFit.centerZ)
+    cam.lookAt(currentFit.centerX, 0, currentFit.centerZ)
+    const zoomX = (size.width * FIT_PADDING) / currentFit.spanX
+    const zoomY = (size.height * FIT_PADDING) / currentFit.spanZ
     cam.zoom = Math.min(zoomX, zoomY)
     cam.updateProjectionMatrix()
     if (controlsRef.current) {
-      controlsRef.current.target.set(fit.centerX, 0, fit.centerZ)
+      controlsRef.current.target.set(currentFit.centerX, 0, currentFit.centerZ)
       controlsRef.current.update()
     }
-    // Depend on primitives (size.width/height, fit.centerX/centerZ/spanX/
-    // spanZ), not the `size`/`fit` objects: both can get a fresh reference
-    // on unrelated updates even when the actual numbers haven't changed —
-    // `fit` in particular is recomputed (new object) every time the zone's
-    // origin moves, even though its own useMemo ignores that value once a
-    // terrain is loaded. Depending on the object itself re-ran this effect
-    // on every zone drag and snapped the camera back to the fit position,
-    // discarding whatever pan/zoom the user had done in between (reported
-    // as "the view changes place and zoom" while moving the zone).
-  }, [camera, size.width, size.height, fit.centerX, fit.centerZ, fit.spanX, fit.spanZ, span, fitToken, cameraLocked])
+  }, [camera, size.width, size.height, terrainBounds !== null, fitToken, cameraLocked])
 
   useEffect(() => {
     const dom = gl.domElement
@@ -535,13 +763,14 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
         enabled={!cameraLocked}
         enableRotate={false}
         screenSpacePanning
+        zoomToCursor
       />
       <ambientLight intensity={editingZone ? 0.7 : 1.1} />
       <directionalLight position={[fit.centerX, span * 3, fit.centerZ]} intensity={editingZone ? 0.4 : 0.6} />
 
       <Suspense fallback={<GenericFloor widthM={widthM} heightM={heightM} />}>
         {project.terrainGltfPath
-          ? <Terrain path={project.terrainGltfPath} onBounds={onTerrainBounds} />
+          ? <Terrain path={project.terrainGltfPath} onBounds={onTerrainBounds} onSnapPoints={onSnapPoints} />
           : null}
       </Suspense>
 
@@ -568,6 +797,7 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
             heightM={heightM}
             stageGroupRef={stageGroupRef}
             controlsRef={controlsRef}
+            snapPoints={snapPoints}
           />
         )}
 
