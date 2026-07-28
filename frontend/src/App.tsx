@@ -17,6 +17,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+// "Zoom to fit" icon: a square with its edge midpoints cut away, leaving
+// just the 4 corner brackets — the requested "petit carré coupé à ses
+// médianes pour ne garder que ses 4 coins".
+function FitIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+      <path
+        d="M1 4V1H4 M9 1H12V4 M12 9V12H9 M4 12H1V9"
+        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 /** Panel-resize dividers (window/timeline sizing was previously fixed).
  * Plain pointer-capture drag, no library: drag deltas are applied directly
  * to the caller's setter, clamped to sane min/max there isn't a natural
@@ -152,6 +166,20 @@ function App() {
   const [cameraLocked, setCameraLocked] = useState(false)
   const [fitToken, setFitToken] = useState(0)
   const [editingZone, setEditingZone] = useState(false)
+  const [gridOpacity, setGridOpacity] = useState(0.5)
+  const [snapToGrid, setSnapToGrid] = useState(false)
+  const [zoomAction, setZoomAction] = useState({ token: 0, factor: 1 })
+  const [showGridSettings, setShowGridSettings] = useState(false)
+
+  const zoomIn = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1.2 }))
+  const zoomOut = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1 / 1.2 }))
+
+  useEffect(() => {
+    if (!showGridSettings) return
+    const close = () => setShowGridSettings(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [showGridSettings])
 
   const tMs = tick?.tMs ?? 0
   const playing = tick?.playing ?? false
@@ -310,7 +338,47 @@ function App() {
           cameraLocked={cameraLocked}
           fitToken={fitToken}
           editingZone={editingZone}
+          gridOpacity={gridOpacity}
+          snapToGrid={snapToGrid}
+          zoomAction={zoomAction}
         />
+
+        <div className="viewport-toolbar">
+          <button title="Zoom avant" onClick={zoomIn}>+</button>
+          <button title="Zoom arrière" onClick={zoomOut}>−</button>
+          <button title="Ajuster à la fenêtre" onClick={() => setFitToken((t) => t + 1)}>
+            <FitIcon />
+          </button>
+          <button
+            title="Aligner sur la grille"
+            className={snapToGrid ? 'active' : ''}
+            onClick={() => setSnapToGrid((v) => !v)}
+          >
+            #
+          </button>
+          <div className="viewport-toolbar-settings">
+            <button title="Réglages de la grille" onClick={() => setShowGridSettings((v) => !v)}>⚙</button>
+            {showGridSettings && (
+              <div className="viewport-popover" onClick={(e) => e.stopPropagation()}>
+                <label>
+                  Opacité de la grille
+                  <input
+                    type="range" min={0} max={1} step={0.05}
+                    value={gridOpacity}
+                    onChange={(e) => setGridOpacity(Number(e.target.value))}
+                  />
+                </label>
+                <label>
+                  Taille de la grille (cm)
+                  <input
+                    type="number" step={10} min={1} value={project.gridSizeCm}
+                    onChange={(e) => sidecar.updateStageMap({ gridSizeCm: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+        </div>
       </main>
 
       <VerticalResizer area="vhandle2" onDeltaX={(dx) => setInspectorWidth((w) => clamp(w - dx, INSPECTOR_MIN, INSPECTOR_MAX))} />

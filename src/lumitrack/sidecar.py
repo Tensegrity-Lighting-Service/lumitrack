@@ -187,6 +187,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             project.stage_width_cm = max(1.0, float(msg["widthCm"]))
         if "heightCm" in msg:
             project.stage_height_cm = max(1.0, float(msg["heightCm"]))
+        if "gridSizeCm" in msg:
+            project.grid_size_cm = max(1.0, float(msg["gridSizeCm"]))
         return None
 
     if msg_type == "add_point":

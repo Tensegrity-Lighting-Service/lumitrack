@@ -56,6 +56,14 @@ function stageToLocal(x_cm: number, y_cm: number, z_cm: number): [number, number
   return [x_cm * CM_TO_M, z_cm * CM_TO_M, y_cm * CM_TO_M]
 }
 
+const SCENE_BACKGROUND = '#0c0d10'
+
+/** t=1 -> original color, t=0 -> faded into the scene background. Used as a
+ * stand-in for opacity where a material has no such control (drei's Grid). */
+function mixTowardBackground(hex: string, t: number): string {
+  return new THREE.Color(hex).lerp(new THREE.Color(SCENE_BACKGROUND), 1 - t).getStyle()
+}
+
 export interface PlanarBounds {
   minX: number
   maxX: number
@@ -593,7 +601,10 @@ function DarkenMask({ maskBounds, stageGroupRef, widthM, heightM }: {
  * pointerdown on an actor arms it, pointermove raycasts against a
  * horizontal plane at the actor's height and throttles setActivation calls,
  * pointerup releases MapControls again. */
-function SceneContent({ project, positions, selectedPointId, selectedCueId, onSelectPoint, cameraLocked, fitToken, editingZone }: {
+function SceneContent({
+  project, positions, selectedPointId, selectedCueId, onSelectPoint, cameraLocked, fitToken, editingZone,
+  gridOpacity, snapToGrid, zoomAction,
+}: {
   project: Project
   positions: Record<string, Pose>
   selectedPointId: string | null
@@ -602,6 +613,9 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
   cameraLocked: boolean
   fitToken: number
   editingZone: boolean
+  gridOpacity: number
+  snapToGrid: boolean
+  zoomAction: { token: number; factor: number }
 }) {
   const widthM = project.stageWidthCm * CM_TO_M
   const heightM = project.stageHeightCm * CM_TO_M
@@ -693,6 +707,19 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
     }
   }, [camera, size.width, size.height, terrainBounds !== null, fitToken, cameraLocked])
 
+  // Viewport +/- buttons (top-right of the scene panel). Multiplies zoom
+  // around the current view centre — mouse-wheel zoom already goes to the
+  // cursor via MapControls' zoomToCursor, this is just the button variant.
+  const zoomActionTokenRef = useRef(-1)
+  useEffect(() => {
+    if (zoomAction.token === zoomActionTokenRef.current) return
+    zoomActionTokenRef.current = zoomAction.token
+    if (cameraLocked) return
+    const cam = camera as THREE.OrthographicCamera
+    cam.zoom = Math.max(0.01, cam.zoom * zoomAction.factor)
+    cam.updateProjectionMatrix()
+  }, [camera, zoomAction, cameraLocked])
+
   useEffect(() => {
     const dom = gl.domElement
     const plane = new THREE.Plane()
@@ -724,10 +751,13 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
       raycaster.setFromCamera(toNdc(e), camera)
       if (raycaster.ray.intersectPlane(plane, hit) && stageGroupRef.current) {
         const local = stageGroupRef.current.worldToLocal(hit.clone())
-        sidecar.setActivation(selectedCueId, drag.pointId, {
-          targetXCm: local.x / CM_TO_M,
-          targetYCm: local.z / CM_TO_M,
-        })
+        let targetXCm = local.x / CM_TO_M
+        let targetYCm = local.z / CM_TO_M
+        if (snapToGrid && project.gridSizeCm > 0) {
+          targetXCm = Math.round(targetXCm / project.gridSizeCm) * project.gridSizeCm
+          targetYCm = Math.round(targetYCm / project.gridSizeCm) * project.gridSizeCm
+        }
+        sidecar.setActivation(selectedCueId, drag.pointId, { targetXCm, targetYCm })
       }
     }
 
@@ -739,7 +769,7 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
       dom.removeEventListener('pointerup', endDrag)
       dom.removeEventListener('pointerleave', endDrag)
     }
-  }, [gl, camera, raycaster, selectedCueId, cameraLocked])
+  }, [gl, camera, raycaster, selectedCueId, cameraLocked, snapToGrid, project.gridSizeCm])
 
   const handleActorPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string) => {
     e.stopPropagation()
@@ -754,6 +784,12 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
     dragRef.current = { pointId, planeY, lastSent: 0 }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
+
+  // drei's Grid has no true opacity/alpha control (its shader material
+  // doesn't expose one) — faded toward the background colour instead, which
+  // reads the same way visually for a HUD-style grid over a dark scene.
+  const gridCellColor = useMemo(() => mixTowardBackground('#2b2f38', gridOpacity), [gridOpacity])
+  const gridSectionColor = useMemo(() => mixTowardBackground('#3a3f4a', gridOpacity), [gridOpacity])
 
   return (
     <>
@@ -782,8 +818,8 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
           args={[widthM, heightM]}
           cellSize={project.gridSizeCm * CM_TO_M}
           sectionSize={project.gridSizeCm * CM_TO_M * 10}
-          cellColor="#2b2f38"
-          sectionColor="#3a3f4a"
+          cellColor={gridCellColor}
+          sectionColor={gridSectionColor}
           fadeDistance={span * 6}
           infiniteGrid={false}
         />
@@ -833,6 +869,9 @@ export function Scene(props: {
   cameraLocked: boolean
   fitToken: number
   editingZone: boolean
+  gridOpacity: number
+  snapToGrid: boolean
+  zoomAction: { token: number; factor: number }
 }) {
   return (
     <Canvas>
