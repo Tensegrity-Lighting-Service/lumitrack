@@ -95,6 +95,20 @@ class Activation:
     # Un axe absent du dict retombe sur l'easing nommé — les bundles
     # existants restent valides sans migration.
     curves: Optional[dict] = None
+    # Tracé spatial courbe (mission "motion path", spec AE) : points de
+    # passage ENTRE le départ (dynamique, résolu par le tracking) et la
+    # cible. Chaque waypoint = {"xCm","yCm"} absolus + poignées RELATIVES
+    # {"inDxCm","inDyCm","outDxCm","outDyCm"} (None = tiers de corde =
+    # quasi-droit). start_handle/target_handle : poignée sortante du départ /
+    # entrante de la cible, en offsets relatifs {"dxCm","dyCm"}. Tout à None
+    # -> ligne droite (comportement historique, bundles inchangés).
+    path_points: Optional[list] = None
+    start_handle: Optional[dict] = None
+    target_handle: Optional[dict] = None
+
+    def has_spatial_path(self) -> bool:
+        return bool(self.path_points) or self.start_handle is not None \
+            or self.target_handle is not None
 
     def touches(self) -> bool:
         return any(v is not None for v in
@@ -107,6 +121,9 @@ class Activation:
             "fadeMs": self.fade_ms, "easing": self.easing,
             "orientationMode": self.orientation_mode,
             "curves": self.curves,
+            "pathPoints": self.path_points,
+            "startHandle": self.start_handle,
+            "targetHandle": self.target_handle,
         }
 
     @classmethod
@@ -117,6 +134,9 @@ class Activation:
             fade_ms=float(d.get("fadeMs", 1000.0)), easing=d.get("easing", "linear"),
             orientation_mode=d.get("orientationMode", "manual"),
             curves=d.get("curves"),
+            path_points=d.get("pathPoints"),
+            start_handle=d.get("startHandle"),
+            target_handle=d.get("targetHandle"),
         )
 
 

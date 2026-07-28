@@ -9,6 +9,7 @@
 pub mod curve;
 pub mod easing;
 pub mod model;
+pub mod path;
 pub mod psn;
 pub mod timecode;
 pub mod timeline;

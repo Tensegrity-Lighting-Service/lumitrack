@@ -389,3 +389,90 @@ def test_curves_survive_bundle_roundtrip(tmp_path):
     act = p2.cues[0].activations["p1"]
     assert act.curves is not None and set(act.curves.keys()) == {"x", "yaw"}
     assert act.curves["x"][0]["outT"] == 0.42
+
+
+# ---------------------------------------------------- tracé spatial (AE) ---
+
+def _path_project():
+    from lumitrack.core.project import Project, Point, Cue, Activation
+    p = Project(name="path")
+    p.points.append(Point(id="p1", name="P1"))
+    p.cues.append(Cue(id="c1", name="A", start_ms=0, duration_ms=500, activations={
+        "p1": Activation(target_x_cm=0.0, target_y_cm=0.0, fade_ms=0.0)}))
+    p.cues.append(Cue(id="c2", name="B", start_ms=1000, duration_ms=2000, activations={
+        "p1": Activation(target_x_cm=1000.0, target_y_cm=0.0, fade_ms=2000.0,
+                         easing="linear",
+                         path_points=[{"xCm": 500.0, "yCm": 400.0,
+                                       "inDxCm": None, "inDyCm": None,
+                                       "outDxCm": None, "outDyCm": None}])}))
+    return p
+
+
+def test_spatial_path_bends_through_waypoint():
+    from lumitrack.core.timeline import resolve_positions
+    p = _path_project()
+    # Extrémités exactes.
+    assert resolve_positions(p, 1000.0)["p1"].y_cm == 0.0
+    end = resolve_positions(p, 3000.0)["p1"]
+    assert (end.x_cm, end.y_cm) == (1000.0, 0.0)
+    # À mi-parcours (longueur d'arc), le tracé passe près du waypoint —
+    # loin de la droite y=0.
+    mid = resolve_positions(p, 2000.0)["p1"]
+    assert mid.y_cm > 250.0
+    # Sans tracé, la même config reste sur la droite.
+    p.cues[1].activations["p1"].path_points = None
+    mid2 = resolve_positions(p, 2000.0)["p1"]
+    assert abs(mid2.y_cm) < 1e-9
+
+
+def test_spatial_path_arc_length_uniform_speed():
+    from lumitrack.core.timeline import resolve_positions
+    import math as m
+    p = _path_project()
+    # Vitesse ~constante : les distances entre échantillons réguliers sont
+    # proches les unes des autres (paramétrage par longueur d'arc).
+    poses = [resolve_positions(p, 1000.0 + i * 200.0)["p1"] for i in range(11)]
+    dists = [m.hypot(b.x_cm - a.x_cm, b.y_cm - a.y_cm)
+             for a, b in zip(poses, poses[1:])]
+    assert max(dists) / min(dists) < 1.20
+
+
+def test_spatial_path_ltp_steals_one_axis():
+    from lumitrack.core.project import Cue, Activation
+    from lumitrack.core.timeline import resolve_positions
+    p = _path_project()
+    # Un cue postérieur vole X en plein parcours : X suit le nouveau cue,
+    # Y retombe sur la résolution par axe (tracé écrasé, pas de crash).
+    p.cues.append(Cue(id="c3", name="C", start_ms=1500, duration_ms=500, activations={
+        "p1": Activation(target_x_cm=-200.0, fade_ms=500.0, easing="linear")}))
+    pose = resolve_positions(p, 1750.0)["p1"]
+    assert pose.x_cm == 400.0  # mi-fade de c3 : 1000 -> -200
+    assert pose.y_cm == 0.0    # par axe : y gouverné par c2, droite linéaire
+
+
+def test_spatial_path_block_context_curved():
+    from lumitrack.core.timeline import resolve_block_context
+    p = _path_project()
+    entries = resolve_block_context(p, "c2")["entries"]
+    path = entries["p1"]["path"]
+    assert len(path) == 25
+    assert max(pt[1] for pt in path) > 300.0  # le tracé affiché est courbé
+    assert path[0][:2] == [0.0, 0.0] and path[-1][:2] == [1000.0, 0.0]
+
+
+def test_spatial_path_handles_and_roundtrip(tmp_path):
+    from lumitrack.core.project import save_bundle, load_bundle
+    from lumitrack.core.timeline import resolve_positions
+    p = _path_project()
+    act = p.cues[1].activations["p1"]
+    act.start_handle = {"dxCm": 0.0, "dyCm": 300.0}
+    act.target_handle = {"dxCm": 0.0, "dyCm": 300.0}
+    path = str(tmp_path / "p.lumitrack")
+    save_bundle(p, path)
+    p2 = load_bundle(path)
+    act2 = p2.cues[1].activations["p1"]
+    assert act2.start_handle == {"dxCm": 0.0, "dyCm": 300.0}
+    assert act2.path_points[0]["xCm"] == 500.0
+    # Les poignées influencent le parcours (départ tiré vers +y).
+    early = resolve_positions(p2, 1200.0)["p1"]
+    assert early.y_cm > 50.0

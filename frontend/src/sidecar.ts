@@ -110,6 +110,9 @@ class SidecarClient {
     targetZCm?: number | null; targetYawDeg?: number | null
     fadeMs?: number; easing?: string
     curves?: Partial<Record<'x' | 'y' | 'z' | 'yaw', unknown[]>> | null
+    pathPoints?: unknown[] | null
+    startHandle?: { dxCm: number; dyCm: number } | null
+    targetHandle?: { dxCm: number; dyCm: number } | null
   }) {
     this.send({ type: 'set_activation', cueId, pointId, ...patch })
   }

@@ -421,3 +421,11 @@
 .graph-node-selected { fill: #fff; }
 .graph-handle { cursor: grab; }
 .graph-handle-line { stroke: #56566a; stroke-width: 1; }
+
+/* Bouton retour ligne droite (tracé spatial) dans l'inspecteur */
+.inspector-clear-path {
+  font-size: 11px; padding: 2px 8px; margin: 2px 0 4px;
+  background: #1f1f27; color: #b9b9c6; border: 1px solid #30303c;
+  border-radius: 4px; cursor: pointer;
+}
+.inspector-clear-path:hover { background: #2a2a35; }

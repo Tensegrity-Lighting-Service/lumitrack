@@ -284,6 +284,14 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             act.fade_ms = float(msg["fadeMs"])
         if "easing" in msg:
             act.easing = msg["easing"]
+        # Tracé spatial (motion path) : listes/dicts écrits tels quels,
+        # null efface (retour à la ligne droite).
+        if "pathPoints" in msg:
+            act.path_points = msg["pathPoints"] or None
+        if "startHandle" in msg:
+            act.start_handle = msg["startHandle"]
+        if "targetHandle" in msg:
+            act.target_handle = msg["targetHandle"]
         if "curves" in msg:
             # Dict {axe: [nœuds]} du graph editor, ou None pour tout effacer.
             # Un axe portant [] ou None est retiré (retour à l'easing nommé).

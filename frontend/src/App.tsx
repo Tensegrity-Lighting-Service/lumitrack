@@ -575,6 +575,15 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
             onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v }) }} />
         </label>
         <label>Courbe
+          {(activation.pathPoints?.length || activation.startHandle || activation.targetHandle) ? (
+            <button
+              className="inspector-clear-path"
+              title="Supprimer les waypoints et poignées : retour à la ligne droite"
+              onClick={() => sidecar.setActivation(cueId, pointId, { pathPoints: null, startHandle: null, targetHandle: null })}
+            >
+              Tracé droit
+            </button>
+          ) : null}
           <select value={activation.easing} onChange={(e) => set({ easing: e.target.value })}>
             {EASING_NAMES.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>

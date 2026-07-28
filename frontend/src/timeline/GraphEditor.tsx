@@ -247,10 +247,14 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
       if (!selection) return
       const target = e.target as HTMLElement
       if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA') return
+      // Un nœud est sélectionné : la touche nous appartient, même si le
+      // nœud est une extrémité non supprimable — sinon le raccourci global
+      // supprimerait le BLOC pendant l'édition de courbe.
+      e.stopPropagation()
+      e.preventDefault()
       const { nodes } = curveFor(selection.axis)
       const sorted = sortNodes(nodes)
       if (selection.index === 0 || selection.index === sorted.length - 1) return
-      e.stopPropagation()
       const next = sorted.filter((_, i) => i !== selection.index)
       setSelection(null)
       setLocal(selection.axis, next)

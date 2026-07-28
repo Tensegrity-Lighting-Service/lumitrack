@@ -42,6 +42,14 @@ pub struct Activation {
     /// l'easing nommé s'applique (bundles existants inchangés).
     #[serde(default)]
     pub curves: Option<std::collections::HashMap<String, Vec<crate::curve::CurveNode>>>,
+    /// Tracé spatial (motion path) — voir core/project.py. Tout à None =
+    /// ligne droite.
+    #[serde(default)]
+    pub path_points: Option<Vec<crate::path::PathPoint>>,
+    #[serde(default)]
+    pub start_handle: Option<crate::path::Handle>,
+    #[serde(default)]
+    pub target_handle: Option<crate::path::Handle>,
 }
 
 fn default_fade_ms() -> f64 { 1000.0 }

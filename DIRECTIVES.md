@@ -313,6 +313,31 @@ DES CHARGES du nôtre. Réalisé :
 - Le port N2 devra brancher ces courbes telles quelles (déjà dans le moteur
   Rust). À tester à la relance : timeline+son (reste dû) + graph editor.
 
+### Mission tracés courbes dans la scène (2026-07-29) — LIVRÉE
+
+Correction de cap par Florian après la livraison du graph editor : « les
+courbes que je voulais c'est sur le TRACÉ » — c'est-à-dire le motion path
+d'AE dans la vue scène, pas (seulement) la courbe valeur/temps. Les deux
+coexistent désormais : la piste Courbes de la timeline = profil de vitesse ;
+le tracé dans la scène = géométrie du chemin. Réalisé :
+
+- **Moteur** : `Activation.pathPoints` (waypoints absolus + poignées Bézier
+  RELATIVES) + `startHandle`/`targetHandle` (offsets sur le départ dynamique
+  et la cible). Évaluation `path_position` : segments cubiques 2D, poignée
+  absente = tiers de corde, vitesse constante par table de longueur d'arc
+  (PATH_LUT_STEPS=24/segment, même constante Rust). Résolution : quand le
+  même cue gouverne x ET y en plein fade, la position vient du tracé (profil
+  de vitesse = courbe/easing de l'axe X) ; si le LTP vole un axe, retour à
+  la résolution par axe. Block context : échantillonnage courbe. Python +
+  Rust, fixture régénérée (39 tracés) — parité 1e-6. 69 pytest, 33 cargo.
+- **Scène** : sur l'activation mise en avant — waypoints (losanges taille
+  écran), poignées départ/cible toujours visibles, poignées du waypoint
+  sélectionné, drag plan-sol avec la mécanique existante (symétrie des
+  poignées, Alt = casser), **double-clic sur le tracé = insertion**, Suppr =
+  retrait (capture AVANT le raccourci qui supprime le bloc — même correction
+  appliquée au graph editor), Échap = désélection. Inspecteur : bouton
+  « Tracé droit ». Le tracé affiché reste backend-échantillonné (§13.1.7).
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).

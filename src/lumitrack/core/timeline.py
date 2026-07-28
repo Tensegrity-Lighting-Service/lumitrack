@@ -168,6 +168,95 @@ def axis_progress(act, axis: str, progress: float) -> float:
     return apply_easing(act.easing, progress)
 
 
+# ------------------------------------------------------- tracé spatial -----
+# Motion path (spec AE) : le chemin réellement PARCOURU au sol peut être
+# courbé par des points de passage et des poignées (Activation.path_points /
+# start_handle / target_handle). Le départ reste DYNAMIQUE (résolu par le
+# tracking) : le premier segment part d'où le point se trouve vraiment.
+# L'abscisse curviligne est uniformisée par table de longueur d'arc
+# (PATH_LUT_STEPS échantillons par segment) pour une vitesse constante le
+# long du tracé — le profil de vitesse vient de l'easing/courbe de l'axe X.
+
+PATH_LUT_STEPS = 24  # même constante dans native/src/path.rs (parité)
+
+
+def _spatial_segments(start_xy, act, target_xy):
+    """-> [(p0, p1, p2, p3)], contrôles 2D absolus de chaque segment cubique.
+    Poignée absente -> tiers de corde (segment quasi rectiligne)."""
+    anchors = [tuple(start_xy)]
+    for wp in (act.path_points or []):
+        anchors.append((float(wp["xCm"]), float(wp["yCm"])))
+    anchors.append(tuple(target_xy))
+
+    def out_handle(i):
+        a = anchors[i]
+        b = anchors[i + 1]
+        if i == 0:
+            h = act.start_handle
+            if h is not None:
+                return (a[0] + float(h["dxCm"]), a[1] + float(h["dyCm"]))
+        else:
+            wp = (act.path_points or [])[i - 1]
+            if wp.get("outDxCm") is not None:
+                return (a[0] + float(wp["outDxCm"]), a[1] + float(wp.get("outDyCm") or 0.0))
+        return (a[0] + (b[0] - a[0]) / 3.0, a[1] + (b[1] - a[1]) / 3.0)
+
+    def in_handle(i):
+        a = anchors[i]
+        b = anchors[i + 1]
+        if i + 1 == len(anchors) - 1:
+            h = act.target_handle
+            if h is not None:
+                return (b[0] + float(h["dxCm"]), b[1] + float(h["dyCm"]))
+        else:
+            wp = (act.path_points or [])[i]
+            if wp.get("inDxCm") is not None:
+                return (b[0] + float(wp["inDxCm"]), b[1] + float(wp.get("inDyCm") or 0.0))
+        return (b[0] - (b[0] - a[0]) / 3.0, b[1] - (b[1] - a[1]) / 3.0)
+
+    return [(anchors[i], out_handle(i), in_handle(i), anchors[i + 1])
+            for i in range(len(anchors) - 1)]
+
+
+def _bezier2(p0, p1, p2, p3, s):
+    m = 1.0 - s
+    a = m * m * m
+    b = 3 * m * m * s
+    c = 3 * m * s * s
+    d = s * s * s
+    return (a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0],
+            a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1])
+
+
+def path_position(start_xy, act, target_xy, p: float):
+    """Position (x, y) à la fraction de parcours p (0..1, DÉJÀ passée par
+    l'easing). Paramétrage par longueur d'arc : p = fraction de la distance
+    réellement parcourue, pas du paramètre de Bézier."""
+    p = max(0.0, min(1.0, p))
+    segments = _spatial_segments(start_xy, act, target_xy)
+    # Table cumulative : PATH_LUT_STEPS pas par segment, interpolation
+    # linéaire entre échantillons. Identique dans le moteur Rust.
+    pts = []
+    for seg in segments:
+        for i in range(PATH_LUT_STEPS):
+            pts.append(_bezier2(*seg, i / PATH_LUT_STEPS))
+    pts.append(tuple(target_xy))
+    lengths = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        lengths.append(lengths[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+    total = lengths[-1]
+    if total <= 0.0:
+        return tuple(target_xy)
+    goal = p * total
+    for i in range(1, len(lengths)):
+        if lengths[i] >= goal:
+            span = lengths[i] - lengths[i - 1]
+            f = (goal - lengths[i - 1]) / span if span > 0 else 0.0
+            a, b = pts[i - 1], pts[i]
+            return (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)
+    return tuple(target_xy)
+
+
 # --------------------------------------------------------- axis resolver ---
 
 _AXIS_FIELDS = {
@@ -231,15 +320,46 @@ class Pose:
     yaw_deg: float
 
 
+def _governing_index(kfs, t_ms: float) -> int:
+    """Index du keyframe gouvernant (dernier démarré à-ou-avant t), -1 si
+    aucun — même parcours que `_resolve_axis`."""
+    idx = -1
+    for i, kf in enumerate(kfs):
+        if kf[0] <= t_ms:
+            idx = i
+        else:
+            break
+    return idx
+
+
 def resolve_positions(project: Project, t_ms: float) -> dict:
     """-> {point_id: Pose}. A point absent from the result has no known x/y
     at this instant and must never be sent to PSN or drawn on the scene."""
     result = {}
     for point in project.points:
-        x = _resolve_axis(_axis_keyframes(project, point.id, "x"), t_ms)
-        y = _resolve_axis(_axis_keyframes(project, point.id, "y"), t_ms)
+        kfs_x = _axis_keyframes(project, point.id, "x")
+        kfs_y = _axis_keyframes(project, point.id, "y")
+        x = _resolve_axis(kfs_x, t_ms)
+        y = _resolve_axis(kfs_y, t_ms)
         if x is None or y is None:
             continue
+        # Tracé spatial (motion path) : quand le MÊME cue gouverne x ET y,
+        # que son activation porte un tracé courbe et qu'on est en plein
+        # fade, la position vient du tracé — les deux axes cessent d'être
+        # indépendants le temps de ce parcours. Si un autre cue vole un des
+        # deux axes (LTP), on retombe sur la résolution par axe : le tracé
+        # est partiellement écrasé, comme n'importe quelle cible.
+        ix = _governing_index(kfs_x, t_ms)
+        iy = _governing_index(kfs_y, t_ms)
+        if ix > 0 and iy > 0 and kfs_x[ix][4] == kfs_y[iy][4]:
+            start, fade_end, _tx, act, _cid, _ax = kfs_x[ix]
+            if act.has_spatial_path() and fade_end > start and t_ms < fade_end:
+                origin = (kfs_x[ix - 1][2], kfs_y[iy - 1][2])
+                target = (kfs_x[ix][2], kfs_y[iy][2])
+                progress = (t_ms - start) / (fade_end - start)
+                # Le profil de vitesse du tracé = courbe/easing de l'axe X.
+                eased = axis_progress(act, "x", progress)
+                x, y = path_position(origin, act, target, eased)
         z = _resolve_axis(_axis_keyframes(project, point.id, "z"), t_ms)
         yaw = _resolve_axis(_axis_keyframes(project, point.id, "yaw"), t_ms)
         result[point.id] = Pose(
@@ -324,14 +444,22 @@ def resolve_block_context(project: Project, cue_id: str,
 
         path = []
         if (start_pose is not None and target_pose is not None
-                and start_pose[:3] != target_pose[:3]):
+                and (start_pose[:3] != target_pose[:3] or act.has_spatial_path())):
+            # Échantillonnage à abscisse curviligne uniforme, sans easing
+            # (§13.1.11) : le tracé courbe passe par path_position, la
+            # hauteur reste linéaire le long du parcours.
+            curved = act.has_spatial_path()
             for i in range(samples + 1):
                 s = i / samples
-                path.append([
-                    start_pose[0] + (target_pose[0] - start_pose[0]) * s,
-                    start_pose[1] + (target_pose[1] - start_pose[1]) * s,
-                    start_pose[2] + (target_pose[2] - start_pose[2]) * s,
-                ])
+                if curved:
+                    px, py = path_position(
+                        (start_pose[0], start_pose[1]), act,
+                        (target_pose[0], target_pose[1]), s)
+                else:
+                    px = start_pose[0] + (target_pose[0] - start_pose[0]) * s
+                    py = start_pose[1] + (target_pose[1] - start_pose[1]) * s
+                path.append([px, py,
+                             start_pose[2] + (target_pose[2] - start_pose[2]) * s])
 
         entries[point.id] = {
             "startPose": start_pose,

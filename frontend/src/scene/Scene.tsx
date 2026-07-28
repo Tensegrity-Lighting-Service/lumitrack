@@ -32,7 +32,7 @@ import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
-import type { BlockContextEntry, BlockContextMessage, Project, Pose } from '../types'
+import type { Activation, BlockContextEntry, BlockContextMessage, PathPoint, Project, Pose } from '../types'
 
 const CM_TO_M = 0.01
 const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
@@ -50,6 +50,9 @@ const SNAP_RADIUS_M = 0.6
 // world-sized marker would be unreadable at zoom-to-fit scale, defeating
 // the whole "every edit has visible feedback" point of block-edit mode.
 const GHOST_PX = 15
+// Waypoints/poignées du tracé spatial : mêmes règles d'échelle écran.
+const WAYPOINT_PX = 9
+const PATH_HANDLE_PX = 6
 // Live-state dimming in block-edit mode (§12.6): activated actors stay
 // readable, the rest is context; the ghosts/trajectories are the subject.
 const EDIT_ACTIVATED_OPACITY = 0.45
@@ -193,10 +196,11 @@ const EMPHASIS_OPACITY: Record<Emphasis, number> = { highlight: 1, normal: 0.85,
  * sampled by the backend from the real tracking-chain start to the target
  * (`resolve_block_context`). Pure display — the geometry arrives fully
  * resolved, nothing is interpolated here (§13.1.7). */
-function Trajectory({ path, color, emphasis }: {
+function Trajectory({ path, color, emphasis, onDoubleClick }: {
   path: [number, number, number][]
   color: string
   emphasis: Emphasis
+  onDoubleClick?: (e: ThreeEvent<MouseEvent>) => void
 }) {
   const points = useMemo(
     () => path.map(([x_cm, y_cm, z_cm]) => new THREE.Vector3(...stageToLocal(x_cm, y_cm, z_cm))),
@@ -211,7 +215,162 @@ function Trajectory({ path, color, emphasis }: {
       opacity={EMPHASIS_OPACITY[emphasis]}
       depthTest={false}
       renderOrder={1010}
+      onDoubleClick={onDoubleClick}
     />
+  )
+}
+
+/** Marqueur d'édition du tracé à taille écran constante (waypoint = carré
+ * pivoté, poignée = disque). Même logique de zoom que TargetGhost. */
+function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown }: {
+  xCm: number
+  yCm: number
+  zCm: number
+  px: number
+  color: string
+  shape: 'diamond' | 'dot'
+  selected: boolean
+  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const [x, y, z] = stageToLocal(xCm, yCm, zCm)
+  const ref = useRef<THREE.Group>(null)
+  useFrame(({ camera }) => {
+    if (!ref.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const sc = px / zoom
+    ref.current.scale.set(sc, sc, sc)
+  })
+  return (
+    <group position={[x, y + 0.02, z]}>
+      <group
+        ref={ref}
+        rotation={[-Math.PI / 2, 0, shape === 'diamond' ? Math.PI / 4 : 0]}
+        onPointerDown={onPointerDown}
+        onPointerOver={() => { document.body.style.cursor = 'grab' }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        {shape === 'diamond'
+          ? <mesh renderOrder={1030}>
+              <planeGeometry args={[1, 1]} />
+              <meshBasicMaterial color={selected ? '#ffffff' : color} depthTest={false} transparent side={THREE.DoubleSide} />
+            </mesh>
+          : <mesh renderOrder={1030}>
+              <circleGeometry args={[0.5, 20]} />
+              <meshBasicMaterial color={color} depthTest={false} transparent side={THREE.DoubleSide} />
+            </mesh>}
+        {/* Hitbox élargie : les marqueurs font ~9 px, la zone de saisie 3x. */}
+        <mesh renderOrder={1029} visible={false}>
+          <circleGeometry args={[1.6, 12]} />
+          <meshBasicMaterial depthTest={false} transparent opacity={0} side={THREE.DoubleSide} />
+        </mesh>
+      </group>
+    </group>
+  )
+}
+
+// Ancres du tracé (départ dynamique, waypoints, cible) + poignées par
+// défaut au tiers de corde — MÊME convention que le moteur (timeline.py /
+// path.rs), pour que la poignée affichée soit celle réellement appliquée.
+function pathAnchors(entry: BlockContextEntry, act: Activation): [number, number][] {
+  const out: [number, number][] = []
+  if (entry.startPose) out.push([entry.startPose[0], entry.startPose[1]])
+  for (const wp of act.pathPoints ?? []) out.push([wp.xCm, wp.yCm])
+  if (entry.targetPose) out.push([entry.targetPose[0], entry.targetPose[1]])
+  return out
+}
+
+function defaultHandle(a: [number, number], b: [number, number]): [number, number] {
+  return [a[0] + (b[0] - a[0]) / 3, a[1] + (b[1] - a[1]) / 3]
+}
+
+/** Overlay d'édition du tracé de l'activation mise en avant : waypoints
+ * (losanges), poignées de Bézier (points reliés à leur ancre), double-clic
+ * sur le tracé pour insérer — l'affichage de la courbe elle-même reste le
+ * Trajectory backend-échantillonné. */
+function PathEditOverlay({ entry, act, color, selectedIndex, onWaypointDown, onHandleDown }: {
+  entry: BlockContextEntry
+  act: Activation
+  color: string
+  selectedIndex: number | null
+  onWaypointDown: (e: ThreeEvent<PointerEvent>, index: number) => void
+  onHandleDown: (e: ThreeEvent<PointerEvent>, anchor: 'start' | 'target' | number, side: 'in' | 'out') => void
+}) {
+  const anchors = pathAnchors(entry, act)
+  if (anchors.length < 2 || !entry.startPose || !entry.targetPose) return null
+  const zCm = entry.startPose[2]
+  const wps = act.pathPoints ?? []
+
+  const handleMarkers: {
+    key: string
+    anchor: 'start' | 'target' | number
+    side: 'in' | 'out'
+    pos: [number, number]
+    from: [number, number]
+  }[] = []
+
+  // Poignée sortante du départ (toujours visible : c'est elle qui donne la
+  // première tangente, comme en AE).
+  const startPos: [number, number] = anchors[0]
+  const startHandlePos: [number, number] = act.startHandle
+    ? [startPos[0] + act.startHandle.dxCm, startPos[1] + act.startHandle.dyCm]
+    : defaultHandle(startPos, anchors[1])
+  handleMarkers.push({ key: 'h-start', anchor: 'start', side: 'out', pos: startHandlePos, from: startPos })
+
+  // Poignée entrante de la cible.
+  const targetPos: [number, number] = anchors[anchors.length - 1]
+  const targetHandlePos: [number, number] = act.targetHandle
+    ? [targetPos[0] + act.targetHandle.dxCm, targetPos[1] + act.targetHandle.dyCm]
+    : defaultHandle(targetPos, anchors[anchors.length - 2])
+  handleMarkers.push({ key: 'h-target', anchor: 'target', side: 'in', pos: targetHandlePos, from: targetPos })
+
+  // Poignées du waypoint sélectionné uniquement (les autres restent des
+  // losanges nus pour ne pas transformer la scène en sapin de Noël).
+  if (selectedIndex !== null && wps[selectedIndex]) {
+    const wp = wps[selectedIndex]
+    const aIdx = selectedIndex + 1 // index de ce waypoint dans anchors
+    const wpPos: [number, number] = [wp.xCm, wp.yCm]
+    const inPos: [number, number] = wp.inDxCm !== null
+      ? [wp.xCm + wp.inDxCm, wp.yCm + (wp.inDyCm ?? 0)]
+      : defaultHandle(wpPos, anchors[aIdx - 1])
+    const outPos: [number, number] = wp.outDxCm !== null
+      ? [wp.xCm + wp.outDxCm, wp.yCm + (wp.outDyCm ?? 0)]
+      : defaultHandle(wpPos, anchors[aIdx + 1])
+    handleMarkers.push({ key: `h-in-${selectedIndex}`, anchor: selectedIndex, side: 'in', pos: inPos, from: wpPos })
+    handleMarkers.push({ key: `h-out-${selectedIndex}`, anchor: selectedIndex, side: 'out', pos: outPos, from: wpPos })
+  }
+
+  return (
+    <group>
+      {handleMarkers.map((h) => (
+        <group key={h.key}>
+          <Line
+            points={[
+              new THREE.Vector3(...stageToLocal(h.from[0], h.from[1], zCm)),
+              new THREE.Vector3(...stageToLocal(h.pos[0], h.pos[1], zCm)),
+            ]}
+            color="#8a8a99"
+            lineWidth={1}
+            transparent
+            opacity={0.9}
+            depthTest={false}
+            renderOrder={1025}
+          />
+          <PathMarker
+            xCm={h.pos[0]} yCm={h.pos[1]} zCm={zCm}
+            px={PATH_HANDLE_PX} color="#d8d8e2" shape="dot" selected={false}
+            onPointerDown={(e) => onHandleDown(e, h.anchor, h.side)}
+          />
+        </group>
+      ))}
+      {wps.map((wp, i) => (
+        <PathMarker
+          key={`wp-${i}`}
+          xCm={wp.xCm} yCm={wp.yCm} zCm={zCm}
+          px={WAYPOINT_PX} color={color} shape="diamond" selected={i === selectedIndex}
+          onPointerDown={(e) => onWaypointDown(e, i)}
+        />
+      ))}
+    </group>
   )
 }
 
@@ -733,7 +892,16 @@ function SceneContent({
   const { camera, raycaster, gl, size } = useThree()
   const controlsRef = useRef<MapControlsImpl>(null)
   const stageGroupRef = useRef<THREE.Group>(null)
-  const dragRef = useRef<{ pointId: string; planeY: number; lastSent: number } | null>(null)
+  type SceneDrag =
+    | { kind: 'target'; pointId: string; planeY: number; lastSent: number }
+    | { kind: 'waypoint'; pointId: string; index: number; planeY: number; lastSent: number }
+    | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number }
+  const dragRef = useRef<SceneDrag | null>(null)
+  // Sélection d'un waypoint du tracé (Suppr le retire, voir keydown).
+  const [selectedWaypoint, setSelectedWaypoint] = useState<{ pointId: string; index: number } | null>(null)
+  // Lus par le onMove global au moment de l'évènement (l'effet ne dépend
+  // pas du project : il se ré-abonnerait à chaque écho sinon).
+  const liveRef = useRef<{ project: Project; entries: Record<string, BlockContextEntry> | null }>({ project, entries: null })
   const [terrainBounds, setTerrainBounds] = useState<PlanarBounds | null>(null)
   const onTerrainBounds = useCallback((b: PlanarBounds) => setTerrainBounds(b), [])
   const [snapPoints, setSnapPoints] = useState<SnapPoint[]>([])
@@ -855,15 +1023,63 @@ function SceneContent({
       drag.lastSent = now
       plane.setComponents(0, 1, 0, -drag.planeY)
       raycaster.setFromCamera(toNdc(e), camera)
-      if (raycaster.ray.intersectPlane(plane, hit) && stageGroupRef.current) {
-        const local = stageGroupRef.current.worldToLocal(hit.clone())
-        let targetXCm = local.x / CM_TO_M
-        let targetYCm = local.z / CM_TO_M
-        if (snapToGrid && project.gridSizeCm > 0) {
-          targetXCm = Math.round(targetXCm / project.gridSizeCm) * project.gridSizeCm
-          targetYCm = Math.round(targetYCm / project.gridSizeCm) * project.gridSizeCm
+      if (!raycaster.ray.intersectPlane(plane, hit) || !stageGroupRef.current) return
+      const local = stageGroupRef.current.worldToLocal(hit.clone())
+      let xCm = local.x / CM_TO_M
+      let yCm = local.z / CM_TO_M
+      const { project: proj, entries } = liveRef.current
+      if (snapToGrid && proj.gridSizeCm > 0 && drag.kind !== 'handle') {
+        xCm = Math.round(xCm / proj.gridSizeCm) * proj.gridSizeCm
+        yCm = Math.round(yCm / proj.gridSizeCm) * proj.gridSizeCm
+      }
+
+      if (drag.kind === 'target') {
+        sidecar.setActivation(selectedCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
+        return
+      }
+
+      const cue = proj.cues.find((c) => c.id === selectedCueId)
+      const act = cue?.activations[drag.pointId]
+      if (!act) return
+
+      if (drag.kind === 'waypoint') {
+        const wps = (act.pathPoints ?? []).map((wp) => ({ ...wp }))
+        if (!wps[drag.index]) return
+        wps[drag.index] = { ...wps[drag.index], xCm, yCm }
+        sidecar.setActivation(selectedCueId, drag.pointId, { pathPoints: wps })
+        return
+      }
+
+      // Poignée : offset relatif à son ancre. Alt = casser la symétrie
+      // (waypoints seulement — départ/cible n'ont qu'un côté).
+      const entry = entries?.[drag.pointId]
+      if (!entry) return
+      if (drag.anchor === 'start') {
+        if (!entry.startPose) return
+        sidecar.setActivation(selectedCueId, drag.pointId, {
+          startHandle: { dxCm: xCm - entry.startPose[0], dyCm: yCm - entry.startPose[1] },
+        })
+      } else if (drag.anchor === 'target') {
+        if (!entry.targetPose) return
+        sidecar.setActivation(selectedCueId, drag.pointId, {
+          targetHandle: { dxCm: xCm - entry.targetPose[0], dyCm: yCm - entry.targetPose[1] },
+        })
+      } else {
+        const wps = (act.pathPoints ?? []).map((wp) => ({ ...wp }))
+        const wp = wps[drag.anchor]
+        if (!wp) return
+        const dx = xCm - wp.xCm
+        const dy = yCm - wp.yCm
+        if (drag.side === 'in') {
+          wp.inDxCm = dx
+          wp.inDyCm = dy
+          if (!e.altKey) { wp.outDxCm = -dx; wp.outDyCm = -dy }
+        } else {
+          wp.outDxCm = dx
+          wp.outDyCm = dy
+          if (!e.altKey) { wp.inDxCm = -dx; wp.inDyCm = -dy }
         }
-        sidecar.setActivation(selectedCueId, drag.pointId, { targetXCm, targetYCm })
+        sidecar.setActivation(selectedCueId, drag.pointId, { pathPoints: wps })
       }
     }
 
@@ -884,6 +1100,88 @@ function SceneContent({
     selectedCueId && blockContext && blockContext.cueId === selectedCueId
       ? blockContext.entries
       : null
+  liveRef.current = { project, entries: editEntries }
+
+  // La sélection de waypoint ne survit ni au changement de bloc ni au
+  // changement de point mis en avant.
+  useEffect(() => { setSelectedWaypoint(null) }, [selectedCueId, selectedPointId])
+
+  const handleWaypointDown = (e: ThreeEvent<PointerEvent>, pointId: string, index: number, zCm: number) => {
+    e.stopPropagation()
+    onSelectPoint(pointId)
+    setSelectedWaypoint({ pointId, index })
+    if (!selectedCueId) return
+    dragRef.current = { kind: 'waypoint', pointId, index, planeY: zCm * CM_TO_M, lastSent: 0 }
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const handlePathHandleDown = (e: ThreeEvent<PointerEvent>, pointId: string,
+                                anchor: 'start' | 'target' | number, side: 'in' | 'out', zCm: number) => {
+    e.stopPropagation()
+    if (typeof anchor === 'number') setSelectedWaypoint({ pointId, index: anchor })
+    if (!selectedCueId) return
+    dragRef.current = { kind: 'handle', pointId, anchor, side, planeY: zCm * CM_TO_M, lastSent: 0 }
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  // Double-clic sur le tracé : insertion d'un waypoint à l'endroit cliqué.
+  // L'index de segment vient de la fraction du parcours (échantillons
+  // uniformes en longueur d'arc côté backend).
+  const handleTrajectoryDoubleClick = (e: ThreeEvent<MouseEvent>, pointId: string) => {
+    e.stopPropagation()
+    if (!selectedCueId || !stageGroupRef.current) return
+    const { project: proj, entries } = liveRef.current
+    const entry = entries?.[pointId]
+    const cue = proj.cues.find((c) => c.id === selectedCueId)
+    const act = cue?.activations[pointId]
+    if (!entry || !act || entry.path.length < 2) return
+    const local = stageGroupRef.current.worldToLocal(e.point.clone())
+    const xCm = local.x / CM_TO_M
+    const yCm = local.z / CM_TO_M
+    let best = 0
+    let bestD = Infinity
+    entry.path.forEach((pt, i) => {
+      const d = (pt[0] - xCm) ** 2 + (pt[1] - yCm) ** 2
+      if (d < bestD) { bestD = d; best = i }
+    })
+    const frac = best / (entry.path.length - 1)
+    const wps = (act.pathPoints ?? []).map((wp) => ({ ...wp }))
+    const segCount = wps.length + 1
+    const segIdx = Math.min(segCount - 1, Math.floor(frac * segCount))
+    const newWp: PathPoint = { xCm, yCm, inDxCm: null, inDyCm: null, outDxCm: null, outDyCm: null }
+    wps.splice(segIdx, 0, newWp)
+    setSelectedWaypoint({ pointId, index: segIdx })
+    onSelectPoint(pointId)
+    sidecar.setActivation(selectedCueId, pointId, { pathPoints: wps })
+  }
+
+  // Suppr retire le waypoint sélectionné AVANT que le raccourci global ne
+  // supprime le bloc (phase capture + stopPropagation) ; Échap désélectionne
+  // le waypoint sans lâcher le bloc.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!selectedWaypoint || !selectedCueId) return
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.stopPropagation()
+        e.preventDefault()
+        const { project: proj } = liveRef.current
+        const cue = proj.cues.find((c) => c.id === selectedCueId)
+        const act = cue?.activations[selectedWaypoint.pointId]
+        if (!act) return
+        const wps = (act.pathPoints ?? []).filter((_, i) => i !== selectedWaypoint.index)
+        setSelectedWaypoint(null)
+        sidecar.setActivation(selectedCueId, selectedWaypoint.pointId, { pathPoints: wps })
+      } else if (e.key === 'Escape') {
+        e.stopPropagation()
+        setSelectedWaypoint(null)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [selectedWaypoint, selectedCueId])
 
   const handleActorPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string) => {
     e.stopPropagation()
@@ -895,7 +1193,7 @@ function SceneContent({
     // touches Y — so local height == world height regardless of the
     // stage's placement (position/rotation) inside the terrain.
     const planeY = pose[2] * CM_TO_M
-    dragRef.current = { pointId, planeY, lastSent: 0 }
+    dragRef.current = { kind: 'target', pointId, planeY, lastSent: 0 }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
@@ -906,7 +1204,7 @@ function SceneContent({
     e.stopPropagation()
     onSelectPoint(pointId)
     if (!selectedCueId) return
-    dragRef.current = { pointId, planeY: targetZCm * CM_TO_M, lastSent: 0 }
+    dragRef.current = { kind: 'target', pointId, planeY: targetZCm * CM_TO_M, lastSent: 0 }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
@@ -999,8 +1297,29 @@ function SceneContent({
           return (
             <group key={`edit-${point.id}`}>
               {entry.path.length > 0 && (
-                <Trajectory path={entry.path} color={point.color} emphasis={emphasis} />
+                <Trajectory
+                  path={entry.path}
+                  color={point.color}
+                  emphasis={emphasis}
+                  onDoubleClick={(e) => handleTrajectoryDoubleClick(e, point.id)}
+                />
               )}
+              {emphasis === 'highlight' && entry.startPose && (() => {
+                const cue = project.cues.find((c) => c.id === selectedCueId)
+                const act = cue?.activations[point.id]
+                if (!act) return null
+                const zCm = entry.startPose![2]
+                return (
+                  <PathEditOverlay
+                    entry={entry}
+                    act={act}
+                    color={point.color}
+                    selectedIndex={selectedWaypoint?.pointId === point.id ? selectedWaypoint.index : null}
+                    onWaypointDown={(e, index) => handleWaypointDown(e, point.id, index, zCm)}
+                    onHandleDown={(e, anchor, side) => handlePathHandleDown(e, point.id, anchor, side, zCm)}
+                  />
+                )
+              })()}
               {entry.targetPose && (
                 <TargetGhost
                   pose={entry.targetPose}

@@ -24,6 +24,21 @@ export interface CurveNode {
   mode: 'smooth' | 'symmetric' | 'corner'
 }
 
+// Tracé spatial (motion path AE) : waypoint absolu + poignées relatives.
+export interface PathPoint {
+  xCm: number
+  yCm: number
+  inDxCm: number | null
+  inDyCm: number | null
+  outDxCm: number | null
+  outDyCm: number | null
+}
+
+export interface PathHandle {
+  dxCm: number
+  dyCm: number
+}
+
 export interface Activation {
   targetXCm: number | null
   targetYCm: number | null
@@ -34,6 +49,10 @@ export interface Activation {
   orientationMode: 'manual' | 'path'
   /** Courbes par axe (graph editor) ; axe absent = easing nommé. */
   curves?: Partial<Record<'x' | 'y' | 'z' | 'yaw', CurveNode[]>> | null
+  /** Tracé spatial : tout absent/null = ligne droite. */
+  pathPoints?: PathPoint[] | null
+  startHandle?: PathHandle | null
+  targetHandle?: PathHandle | null
 }
 
 export interface Cue {

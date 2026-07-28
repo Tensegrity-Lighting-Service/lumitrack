@@ -27,19 +27,38 @@ impl Axis {
 }
 
 #[derive(Debug, Clone)]
-struct Keyframe {
+struct Keyframe<'a> {
     start_ms: f64,
     fade_end_ms: f64,
     value: f64,
     easing: String,
     curve: Option<Vec<crate::curve::CurveNode>>,
+    act: &'a Activation,
     cue_id: String,
+}
+
+fn has_spatial_path(act: &Activation) -> bool {
+    act.path_points.as_ref().is_some_and(|p| !p.is_empty())
+        || act.start_handle.is_some()
+        || act.target_handle.is_some()
+}
+
+/// Port de `axis_progress` : courbe de l'axe si présente, sinon easing.
+fn act_axis_progress(act: &Activation, axis: Axis, progress: f64) -> f64 {
+    if let Some(curves) = &act.curves {
+        if let Some(nodes) = curves.get(axis.key()) {
+            if !nodes.is_empty() {
+                return crate::curve::eval_curve(nodes, progress.clamp(0.0, 1.0));
+            }
+        }
+    }
+    apply_easing(&act.easing, progress)
 }
 
 /// Port de `_axis_keyframes` : un keyframe par cue dont l'activation de ce
 /// point touche cet axe, trié par start_ms (tri stable).
-fn axis_keyframes(project: &Project, point_id: &str, axis: Axis) -> Vec<Keyframe> {
-    let mut kfs: Vec<Keyframe> = project
+fn axis_keyframes<'a>(project: &'a Project, point_id: &str, axis: Axis) -> Vec<Keyframe<'a>> {
+    let mut kfs: Vec<Keyframe<'a>> = project
         .cues
         .iter()
         .filter_map(|cue| {
@@ -54,6 +73,7 @@ fn axis_keyframes(project: &Project, point_id: &str, axis: Axis) -> Vec<Keyframe
                     .and_then(|c| c.get(axis.key()))
                     .filter(|nodes| !nodes.is_empty())
                     .cloned(),
+                act,
                 cue_id: cue.id.clone(),
             })
         })
@@ -65,6 +85,19 @@ fn axis_keyframes(project: &Project, point_id: &str, axis: Axis) -> Vec<Keyframe
 /// Port de `_resolve_axis` : le keyframe gouvernant est le dernier démarré
 /// à-ou-avant `t` (LTP) ; l'origine est la CIBLE du keyframe précédent —
 /// y compris en plein chevauchement (fidèle au moteur de lecture).
+/// Port de `_governing_index` : dernier keyframe démarré à-ou-avant t.
+fn governing_index(kfs: &[Keyframe], t_ms: f64) -> Option<usize> {
+    let mut idx = None;
+    for (i, kf) in kfs.iter().enumerate() {
+        if kf.start_ms <= t_ms {
+            idx = Some(i);
+        } else {
+            break;
+        }
+    }
+    idx
+}
+
 fn resolve_axis(kfs: &[Keyframe], t_ms: f64) -> Option<f64> {
     let mut governing: Option<(usize, &Keyframe)> = None;
     for (i, kf) in kfs.iter().enumerate() {
@@ -103,9 +136,33 @@ pub struct Pose {
 pub fn resolve_positions(project: &Project, t_ms: f64) -> BTreeMap<String, Pose> {
     let mut result = BTreeMap::new();
     for point in &project.points {
-        let x = resolve_axis(&axis_keyframes(project, &point.id, Axis::X), t_ms);
-        let y = resolve_axis(&axis_keyframes(project, &point.id, Axis::Y), t_ms);
-        let (Some(x), Some(y)) = (x, y) else { continue };
+        let kfs_x = axis_keyframes(project, &point.id, Axis::X);
+        let kfs_y = axis_keyframes(project, &point.id, Axis::Y);
+        let x = resolve_axis(&kfs_x, t_ms);
+        let y = resolve_axis(&kfs_y, t_ms);
+        let (Some(mut x), Some(mut y)) = (x, y) else { continue };
+        // Tracé spatial : même sémantique que le Python (même cue gouverne
+        // x ET y, tracé présent, en plein fade, pas une première
+        // apparition) — sinon résolution par axe inchangée.
+        if let (Some(ix), Some(iy)) = (governing_index(&kfs_x, t_ms), governing_index(&kfs_y, t_ms)) {
+            if ix > 0 && iy > 0 && kfs_x[ix].cue_id == kfs_y[iy].cue_id {
+                let kf = &kfs_x[ix];
+                if has_spatial_path(kf.act) && kf.fade_end_ms > kf.start_ms && t_ms < kf.fade_end_ms {
+                    let origin = (kfs_x[ix - 1].value, kfs_y[iy - 1].value);
+                    let target = (kfs_x[ix].value, kfs_y[iy].value);
+                    let progress = (t_ms - kf.start_ms) / (kf.fade_end_ms - kf.start_ms);
+                    let eased = act_axis_progress(kf.act, Axis::X, progress);
+                    let sp = crate::path::SpatialPath {
+                        points: kf.act.path_points.as_deref().unwrap_or(&[]),
+                        start_handle: kf.act.start_handle.as_ref(),
+                        target_handle: kf.act.target_handle.as_ref(),
+                    };
+                    let (px, py) = crate::path::path_position(origin, &sp, target, eased);
+                    x = px;
+                    y = py;
+                }
+            }
+        }
         let z = resolve_axis(&axis_keyframes(project, &point.id, Axis::Z), t_ms);
         let yaw = resolve_axis(&axis_keyframes(project, &point.id, Axis::Yaw), t_ms);
         result.insert(point.id.clone(), Pose {
@@ -199,14 +256,21 @@ pub fn resolve_block_context(
 
         let mut path = Vec::new();
         if let (Some(s), Some(t)) = (start_pose, target_pose) {
-            if s[..3] != t[..3] {
+            let curved = has_spatial_path(act);
+            if s[..3] != t[..3] || curved {
+                let sp = crate::path::SpatialPath {
+                    points: act.path_points.as_deref().unwrap_or(&[]),
+                    start_handle: act.start_handle.as_ref(),
+                    target_handle: act.target_handle.as_ref(),
+                };
                 for i in 0..=samples {
                     let f = i as f64 / samples as f64;
-                    path.push([
-                        s[0] + (t[0] - s[0]) * f,
-                        s[1] + (t[1] - s[1]) * f,
-                        s[2] + (t[2] - s[2]) * f,
-                    ]);
+                    let (px, py) = if curved {
+                        crate::path::path_position((s[0], s[1]), &sp, (t[0], t[1]), f)
+                    } else {
+                        (s[0] + (t[0] - s[0]) * f, s[1] + (t[1] - s[1]) * f)
+                    };
+                    path.push([px, py, s[2] + (t[2] - s[2]) * f]);
                 }
             }
         }

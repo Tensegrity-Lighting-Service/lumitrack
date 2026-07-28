@@ -38,6 +38,26 @@ def rand_project(n_points, n_cues):
                           "mode": random.choice(["smooth", "symmetric", "corner"])})
         return nodes
 
+    def rand_path():
+        """Tracé spatial : 1-3 waypoints, poignées parfois absentes."""
+        wps = []
+        for _ in range(random.randint(1, 3)):
+            wps.append({
+                "xCm": round(random.uniform(-500, 5500), 1),
+                "yCm": round(random.uniform(-500, 3500), 1),
+                "inDxCm": round(random.uniform(-300, 300), 1) if random.random() < 0.6 else None,
+                "inDyCm": round(random.uniform(-300, 300), 1) if random.random() < 0.6 else None,
+                "outDxCm": round(random.uniform(-300, 300), 1) if random.random() < 0.6 else None,
+                "outDyCm": round(random.uniform(-300, 300), 1) if random.random() < 0.6 else None,
+            })
+        return wps
+
+    def rand_handle():
+        if random.random() < 0.5:
+            return None
+        return {"dxCm": round(random.uniform(-400, 400), 1),
+                "dyCm": round(random.uniform(-400, 400), 1)}
+
     for c in range(n_cues):
         cue = Cue(id=f"c{c}", name=f"C{c}",
                   start_ms=round(random.uniform(0, 20000), 1),
@@ -59,6 +79,11 @@ def rand_project(n_points, n_cues):
                              for axis in random.sample(["x", "y", "z", "yaw"],
                                                        random.randint(1, 3))}
                             if random.random() < 0.4 else None),
+                    # ~30 % de tracés spatiaux (waypoints/poignées) — le
+                    # reste vérifie que la ligne droite reste identique.
+                    path_points=rand_path() if random.random() < 0.3 else None,
+                    start_handle=rand_handle() if random.random() < 0.25 else None,
+                    target_handle=rand_handle() if random.random() < 0.25 else None,
                 )
         p.cues.append(cue)
     p.sort_cues()
