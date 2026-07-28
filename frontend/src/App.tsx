@@ -21,38 +21,53 @@ function clamp(value: number, min: number, max: number): number {
  * Plain pointer-capture drag, no library: drag deltas are applied directly
  * to the caller's setter, clamped to sane min/max there isn't a natural
  * bound from otherwise. */
+// Pointer capture (not just a window listener) matters here: the scene
+// panel's <Canvas> sits right next to every one of these handles, and
+// MapControls attaches its own pointer listeners directly on the canvas
+// and calls stopPropagation() on them. Without capture, the drag's very
+// first pointermove that crosses onto the canvas has its propagation
+// killed before it reaches a window-level listener, so the handle looked
+// draggable but silently did nothing (observed 2026-07-28). Capturing the
+// pointer on the handle itself routes every subsequent event straight to
+// it regardless of what's physically under the cursor.
 function VerticalResizer({ area, onDeltaX }: { area: string; onDeltaX: (dx: number) => void }) {
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
     let lastX = e.clientX
     const onMove = (ev: PointerEvent) => {
       onDeltaX(ev.clientX - lastX)
       lastX = ev.clientX
     }
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+    const onUp = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
     }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
   }, [onDeltaX])
   return <div className="resizer resizer-v" style={{ gridArea: area }} onPointerDown={onPointerDown} />
 }
 
 function HorizontalResizer({ area, onDeltaY }: { area: string; onDeltaY: (dy: number) => void }) {
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
     let lastY = e.clientY
     const onMove = (ev: PointerEvent) => {
       onDeltaY(ev.clientY - lastY)
       lastY = ev.clientY
     }
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+    const onUp = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
     }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
   }, [onDeltaY])
   return <div className="resizer resizer-h" style={{ gridArea: area }} onPointerDown={onPointerDown} />
 }
