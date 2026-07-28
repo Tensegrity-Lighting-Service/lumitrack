@@ -11,7 +11,7 @@
 // actors are select-only. MapControls (pan/zoom) is disabled for the
 // duration of a drag so the two gestures never fight over the same mouse
 // movement.
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { OrthographicCamera, MapControls, Grid, useGLTF } from '@react-three/drei'
@@ -31,9 +31,25 @@ function stageToWorld(x_cm: number, y_cm: number, z_cm: number): [number, number
   return [x_cm * CM_TO_M, z_cm * CM_TO_M, y_cm * CM_TO_M]
 }
 
-function Terrain({ path }: { path: string }) {
+export interface PlanarBounds {
+  minX: number
+  maxX: number
+  minZ: number
+  maxZ: number
+}
+
+/** Reports its actual bounding box (XZ footprint) once loaded: the terrain's
+ * real-world size/origin has no necessary relation to the project's own
+ * "stage" dimensions (an abstract prop-placement rectangle, not a survey of
+ * the venue) — zoom-to-fit needs the real footprint to show the whole
+ * model instead of whatever fraction of it overlaps the stage rectangle. */
+function Terrain({ path, onBounds }: { path: string; onBounds: (bounds: PlanarBounds) => void }) {
   const url = useMemo(() => convertFileSrc(path), [path])
   const { scene } = useGLTF(url)
+  useEffect(() => {
+    const box = new THREE.Box3().setFromObject(scene)
+    onBounds({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z })
+  }, [scene, onBounds])
   return <primitive object={scene} />
 }
 
@@ -82,29 +98,6 @@ function Actor({ pose, color, selected, draggable, onPointerDown }: {
   )
 }
 
-/** Sole owner of the camera's position/orientation for the top-down view
- * (the <OrthographicCamera> element only configures zoom/near/far — a
- * second piece of code also setting position would just be two sources of
- * truth for the same object). Looking straight down means the view
- * direction (0,-1,0) is exactly antiparallel to Three's default camera.up
- * (0,1,0) — a degenerate case for lookAt() that three.js resolves with an
- * effectively arbitrary roll, which is what actually made the terrain look
- * tilted rather than flat (checked: every node in the .glb's own rotation
- * data is yaw-only, so the asset itself is not the problem). Setting `up`
- * to a horizontal axis before calling lookAt avoids the degeneracy. Runs in
- * useLayoutEffect so camera.up is already correct before MapControls reads
- * it to establish its own reference frame. */
-function CameraRig({ widthCm, heightCm }: { widthCm: number; heightCm: number }) {
-  const { camera } = useThree()
-  useLayoutEffect(() => {
-    const span = Math.max(widthCm, heightCm) * CM_TO_M
-    camera.up.set(0, 0, -1)
-    camera.position.set(widthCm * CM_TO_M / 2, span * 2, heightCm * CM_TO_M / 2)
-    camera.lookAt(widthCm * CM_TO_M / 2, 0, heightCm * CM_TO_M / 2)
-  }, [camera, widthCm, heightCm])
-  return null
-}
-
 /** Everything that needs useThree() (raycasting against the actual camera)
  * lives here, as a child of <Canvas>. Owns the one active drag gesture:
  * pointerdown on an actor arms it, pointermove raycasts against a
@@ -121,25 +114,65 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
 }) {
   const widthM = project.stageWidthCm * CM_TO_M
   const heightM = project.stageHeightCm * CM_TO_M
-  const span = Math.max(widthM, heightM)
 
   const { camera, raycaster, gl, size } = useThree()
   const controlsRef = useRef<MapControlsImpl>(null)
   const dragRef = useRef<{ pointId: string; planeY: number; lastSent: number } | null>(null)
+  const [terrainBounds, setTerrainBounds] = useState<PlanarBounds | null>(null)
+  const onTerrainBounds = useCallback((b: PlanarBounds) => setTerrainBounds(b), [])
 
-  // Zoom-to-fit: on by default (mount + whenever the stage's own size
-  // changes, e.g. a new/imported project) and re-triggerable from the View
-  // menu via `fitToken`. Orthographic zoom scales the base frustum (which
-  // r3f sizes to the canvas's pixel dimensions), so world-units-per-pixel
-  // fitting the stage into the viewport is just viewport-px / stage-m.
+  // "Fit" region = union of the declared stage rectangle and the actual
+  // terrain footprint. The two have no necessary relation (the stage is an
+  // abstract prop-placement rectangle; the terrain is a real venue survey,
+  // often centred on its own origin) — using only the stage size cropped
+  // the Belfius arena to a fraction of itself (observed 2026-07-28) because
+  // the demo stage (60x40m) is smaller than the venue (~100m) and not even
+  // centred on the same point.
+  const fit = useMemo(() => {
+    let minX = 0, maxX = widthM, minZ = 0, maxZ = heightM
+    if (terrainBounds) {
+      minX = Math.min(minX, terrainBounds.minX)
+      maxX = Math.max(maxX, terrainBounds.maxX)
+      minZ = Math.min(minZ, terrainBounds.minZ)
+      maxZ = Math.max(maxZ, terrainBounds.maxZ)
+    }
+    return { centerX: (minX + maxX) / 2, centerZ: (minZ + maxZ) / 2, spanX: maxX - minX, spanZ: maxZ - minZ }
+  }, [widthM, heightM, terrainBounds])
+
+  const span = Math.max(fit.spanX, fit.spanZ)
+
+  // Sole owner of the camera's position/orientation/zoom for the top-down
+  // view, and of MapControls' pan target — set here imperatively rather
+  // than via the `target` JSX prop, since drei reapplies primitive props
+  // every render and this component re-renders on every tick (~30/s); a
+  // fresh `target={[...]}` array each render would fight the user's own
+  // panning. Runs by default (mount + whenever the fit region changes, e.g.
+  // stage resize or the terrain finishing loading) and on demand via
+  // `fitToken` (View menu). Looking straight down means the view direction
+  // (0,-1,0) is exactly antiparallel to Three's default camera.up (0,1,0) —
+  // a degenerate case for lookAt() that three.js resolves with an
+  // effectively arbitrary roll, which is what actually made the terrain
+  // look tilted rather than flat (checked: every node in the .glb's own
+  // rotation data is yaw-only, so the asset itself was never the problem).
   useEffect(() => {
-    if (widthM <= 0 || heightM <= 0) return
+    // A locked camera is meant to be fully frozen, not just immune to mouse
+    // pan/zoom — otherwise resizing the scene panel (which changes `size`,
+    // one of this effect's triggers) would silently move a "locked" view.
+    if (cameraLocked) return
+    if (fit.spanX <= 0 || fit.spanZ <= 0) return
     const cam = camera as THREE.OrthographicCamera
-    const zoomX = (size.width * FIT_PADDING) / widthM
-    const zoomY = (size.height * FIT_PADDING) / heightM
+    cam.up.set(0, 0, -1)
+    cam.position.set(fit.centerX, span * 2, fit.centerZ)
+    cam.lookAt(fit.centerX, 0, fit.centerZ)
+    const zoomX = (size.width * FIT_PADDING) / fit.spanX
+    const zoomY = (size.height * FIT_PADDING) / fit.spanZ
     cam.zoom = Math.min(zoomX, zoomY)
     cam.updateProjectionMatrix()
-  }, [camera, size, widthM, heightM, fitToken])
+    if (controlsRef.current) {
+      controlsRef.current.target.set(fit.centerX, 0, fit.centerZ)
+      controlsRef.current.update()
+    }
+  }, [camera, size, fit, span, fitToken, cameraLocked])
 
   useEffect(() => {
     const dom = gl.domElement
@@ -199,16 +232,14 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
   return (
     <>
       <OrthographicCamera makeDefault near={0.1} far={span * 20} />
-      <CameraRig widthCm={project.stageWidthCm} heightCm={project.stageHeightCm} />
       <MapControls
         ref={controlsRef}
-        target={[widthM / 2, 0, heightM / 2]}
         enabled={!cameraLocked}
         enableRotate={false}
         screenSpacePanning
       />
       <ambientLight intensity={1.1} />
-      <directionalLight position={[widthM, span * 3, heightM]} intensity={0.6} />
+      <directionalLight position={[fit.centerX, span * 3, fit.centerZ]} intensity={0.6} />
 
       <Grid
         position={[widthM / 2, 0, heightM / 2]}
@@ -223,7 +254,7 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
 
       <Suspense fallback={<GenericFloor widthCm={project.stageWidthCm} heightCm={project.stageHeightCm} />}>
         {project.terrainGltfPath
-          ? <Terrain path={project.terrainGltfPath} />
+          ? <Terrain path={project.terrainGltfPath} onBounds={onTerrainBounds} />
           : <GenericFloor widthCm={project.stageWidthCm} heightCm={project.stageHeightCm} />}
       </Suspense>
 
