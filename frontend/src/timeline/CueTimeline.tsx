@@ -78,12 +78,15 @@ export function CueTimeline({ project, tMs, selectedCueId, onSelectCue }: {
     stateRef.current?.setTime(tMs / MS_PER_S)
   }, [tMs])
 
-  const getActionRender = useCallback((action: { id: string }) => {
+  const getActionRender = useCallback((action: { id: string; selected?: boolean }) => {
     const cue = cues.find((c) => c.id === action.id)
     if (!cue) return null
     const count = Object.keys(cue.activations).length
     return (
-      <div className="cue-block" style={{ '--cue-color': cue.color } as React.CSSProperties}>
+      <div
+        className={`cue-block${action.selected ? ' cue-block-selected' : ''}`}
+        style={{ '--cue-color': cue.color } as React.CSSProperties}
+      >
         <div className="cue-block-header">
           <span className="cue-block-name">{cue.name}</span>
           <span className="cue-block-count">{count}</span>

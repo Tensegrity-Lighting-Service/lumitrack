@@ -11,7 +11,7 @@
 // actors are select-only. MapControls (pan/zoom) is disabled for the
 // duration of a drag so the two gestures never fight over the same mouse
 // movement.
-import { Suspense, useEffect, useMemo, useRef } from 'react'
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { OrthographicCamera, MapControls, Grid, useGLTF } from '@react-three/drei'
@@ -80,15 +80,26 @@ function Actor({ pose, color, selected, draggable, onPointerDown }: {
   )
 }
 
+/** Sole owner of the camera's position/orientation for the top-down view
+ * (the <OrthographicCamera> element only configures zoom/near/far — a
+ * second piece of code also setting position would just be two sources of
+ * truth for the same object). Looking straight down means the view
+ * direction (0,-1,0) is exactly antiparallel to Three's default camera.up
+ * (0,1,0) — a degenerate case for lookAt() that three.js resolves with an
+ * effectively arbitrary roll, which is what actually made the terrain look
+ * tilted rather than flat (checked: every node in the .glb's own rotation
+ * data is yaw-only, so the asset itself is not the problem). Setting `up`
+ * to a horizontal axis before calling lookAt avoids the degeneracy. Runs in
+ * useLayoutEffect so camera.up is already correct before MapControls reads
+ * it to establish its own reference frame. */
 function CameraRig({ widthCm, heightCm }: { widthCm: number; heightCm: number }) {
   const { camera } = useThree()
-  const initialised = useRef(false)
-  if (!initialised.current) {
+  useLayoutEffect(() => {
     const span = Math.max(widthCm, heightCm) * CM_TO_M
-    camera.position.set(widthCm * CM_TO_M / 2, span, heightCm * CM_TO_M / 2)
+    camera.up.set(0, 0, -1)
+    camera.position.set(widthCm * CM_TO_M / 2, span * 2, heightCm * CM_TO_M / 2)
     camera.lookAt(widthCm * CM_TO_M / 2, 0, heightCm * CM_TO_M / 2)
-    initialised.current = true
-  }
+  }, [camera, widthCm, heightCm])
   return null
 }
 
@@ -167,8 +178,7 @@ function SceneContent({ project, positions, selectedPointId, selectedCueId, onSe
 
   return (
     <>
-      <OrthographicCamera makeDefault position={[widthM / 2, span * 2, heightM / 2]}
-        zoom={60} near={0.1} far={span * 20} />
+      <OrthographicCamera makeDefault zoom={60} near={0.1} far={span * 20} />
       <CameraRig widthCm={project.stageWidthCm} heightCm={project.stageHeightCm} />
       <MapControls ref={controlsRef} target={[widthM / 2, 0, heightM / 2]} enableRotate={false} screenSpacePanning />
       <ambientLight intensity={1.1} />

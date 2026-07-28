@@ -1,10 +1,61 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { Scene } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import { Waveform } from './audio/Waveform'
 import { sidecar, useConnected, useProject, usePsnRunning, useTick } from './sidecar'
 import type { Activation, Cue, Point } from './types'
+
+const ROSTER_MIN = 160
+const ROSTER_MAX = 420
+const INSPECTOR_MIN = 220
+const INSPECTOR_MAX = 480
+const TIMELINE_MIN = 120
+const TIMELINE_MAX = 560
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+/** Panel-resize dividers (window/timeline sizing was previously fixed).
+ * Plain pointer-capture drag, no library: drag deltas are applied directly
+ * to the caller's setter, clamped to sane min/max there isn't a natural
+ * bound from otherwise. */
+function VerticalResizer({ area, onDeltaX }: { area: string; onDeltaX: (dx: number) => void }) {
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    let lastX = e.clientX
+    const onMove = (ev: PointerEvent) => {
+      onDeltaX(ev.clientX - lastX)
+      lastX = ev.clientX
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [onDeltaX])
+  return <div className="resizer resizer-v" style={{ gridArea: area }} onPointerDown={onPointerDown} />
+}
+
+function HorizontalResizer({ area, onDeltaY }: { area: string; onDeltaY: (dy: number) => void }) {
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    let lastY = e.clientY
+    const onMove = (ev: PointerEvent) => {
+      onDeltaY(ev.clientY - lastY)
+      lastY = ev.clientY
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [onDeltaY])
+  return <div className="resizer resizer-h" style={{ gridArea: area }} onPointerDown={onPointerDown} />
+}
 
 function formatTimecode(ms: number): string {
   const totalMs = Math.max(0, Math.floor(ms))
@@ -25,6 +76,10 @@ function App() {
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null)
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null)
 
+  const [rosterWidth, setRosterWidth] = useState(220)
+  const [inspectorWidth, setInspectorWidth] = useState(300)
+  const [timelineHeight, setTimelineHeight] = useState(220)
+
   const tMs = tick?.tMs ?? 0
   const playing = tick?.playing ?? false
   const durationMs = tick?.durationMs ?? 1000
@@ -43,6 +98,33 @@ function App() {
 
   const selectedCue = project?.cues.find((c) => c.id === selectedCueId) ?? null
 
+  // Global shortcuts. Skipped while typing in an input/select/color-picker
+  // so Space/Delete keep their normal text-editing meaning there.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (playing) sidecar.pause()
+        else sidecar.play()
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedCueId) {
+          e.preventDefault()
+          sidecar.deleteCue(selectedCueId)
+          setSelectedCueId(null)
+        }
+      } else if (e.key === 'Escape') {
+        setSelectedCueId(null)
+        setSelectedPointId(null)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [playing, selectedCueId])
+
   if (!project) {
     return (
       <div className="app-loading">
@@ -52,7 +134,13 @@ function App() {
   }
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      style={{
+        gridTemplateColumns: `${rosterWidth}px 6px 1fr 6px ${inspectorWidth}px`,
+        gridTemplateRows: `40px 1fr 6px ${timelineHeight}px`,
+      }}
+    >
       <header className="transport-bar">
         <span className={`conn-dot ${connected ? 'conn-ok' : 'conn-bad'}`} title={connected ? 'Sidecar connecté' : 'Sidecar déconnecté'} />
         <button onClick={() => (playing ? sidecar.pause() : sidecar.play())}>
@@ -98,6 +186,8 @@ function App() {
         </ul>
       </aside>
 
+      <VerticalResizer area="vhandle1" onDeltaX={(dx) => setRosterWidth((w) => clamp(w + dx, ROSTER_MIN, ROSTER_MAX))} />
+
       <main className="scene-view">
         <Scene
           project={project}
@@ -107,6 +197,8 @@ function App() {
           onSelectPoint={setSelectedPointId}
         />
       </main>
+
+      <VerticalResizer area="vhandle2" onDeltaX={(dx) => setInspectorWidth((w) => clamp(w - dx, INSPECTOR_MIN, INSPECTOR_MAX))} />
 
       <aside className="inspector">
         <h2>Inspecteur</h2>
@@ -121,6 +213,8 @@ function App() {
           <p className="hint">Sélectionne un bloc dans la timeline.</p>
         )}
       </aside>
+
+      <HorizontalResizer area="hhandle" onDeltaY={(dy) => setTimelineHeight((h) => clamp(h - dy, TIMELINE_MIN, TIMELINE_MAX))} />
 
       <footer className="timeline-dock">
         {project.audioPath && <Waveform audioPath={project.audioPath} tMs={tMs} playing={playing} />}

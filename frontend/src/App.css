@@ -8,15 +8,22 @@
 
 .app {
   display: grid;
-  grid-template-columns: 220px 1fr 300px;
-  grid-template-rows: 40px 1fr 220px;
+  /* grid-template-columns/rows are set inline (App.tsx) from resizable
+     panel state; only the area layout is static here. */
   grid-template-areas:
-    "transport transport transport"
-    "roster    scene     inspector"
-    "timeline  timeline  timeline";
+    "transport transport transport transport transport"
+    "roster    vhandle1  scene      vhandle2  inspector"
+    "hhandle   hhandle   hhandle    hhandle   hhandle"
+    "timeline  timeline  timeline   timeline  timeline";
   height: 100vh;
   width: 100vw;
 }
+
+/* Drag dividers for resizing panels ("gérer la taille des fenêtres"). */
+.resizer { position: relative; z-index: 5; }
+.resizer-v { cursor: col-resize; }
+.resizer-h { cursor: row-resize; }
+.resizer:hover, .resizer:active { background: #4f6df5; }
 
 .transport-bar {
   grid-area: transport;
@@ -173,4 +180,12 @@
 .cue-block-body {
   flex: 1;
   background: color-mix(in srgb, var(--cue-color) 28%, #14161a);
+}
+/* Global selection highlight (§ "principe d'highlight sur element
+   selectionne au niveau global"): same idea as .roster li.selected and the
+   emissive glow on the selected actor in Scene.tsx — whatever was clicked
+   gets an unmistakable highlight everywhere it's shown. */
+.cue-block-selected {
+  outline: 2px solid #fff;
+  outline-offset: -1px;
 }
