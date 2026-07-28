@@ -243,45 +243,45 @@ d) Non bloquant, à garder en tête : le conflit LTP à départ strictement
 
 ---
 
-## Décision d'architecture — 2026-07-28 (soir) : refonte native intégrale
+## Décision d'architecture — 2026-07-28 (soir) : moteur Rust intégré
 
-Décision de Florian, actée après discussion : **Lumitrack devient une
-application 100 % native** — un seul processus, un seul exe, zéro webview,
-zéro serveur local. Chemin retenu : **Rust intégral** (egui pour l'UI, wgpu
-pour la scène 3D, cpal + ffmpeg externe pour l'audio, PSN/timecode portés) —
-seule voie native qui conserve la logique validée : la suite Python (58
-tests) sert d'ORACLE au port. Friction (friction.graphics) est retenu comme
-**référence UX** (timeline/graph editor) mais écarté comme base de code :
-GPL-3.0 (critère §12.16) et moteur 2D vectoriel sans rapport avec le métier.
+Arbitrage final de Florian (après avoir envisagé la réécriture native
+complète) : **le moteur Python est réécrit en Rust À L'INTÉRIEUR du
+processus Tauri ; l'interface React/react-three-fiber actuelle est
+conservée.** Résultat visé : UN seul processus, UN seul `Lumitrack.exe`,
+plus de sidecar Python, plus de WebSocket, plus de port local — le ressenti
+« serveur web avec une façade » disparaît, sans jeter l'UI validée
+aujourd'hui (trajectoires, ghosts, timeline maison, inspecteur).
 
-L'app Tauri/Python actuelle reste l'application de travail jusqu'à parité de
-la native — on ne casse rien pendant la transition.
+Friction (friction.graphics) : retenu comme **référence UX** (timeline,
+graph editor) — écarté comme base de code (GPL-3.0, critère §12.16, et
+moteur 2D vectoriel hors sujet).
+
+La suite pytest Python (58 tests) reste l'ORACLE du port. L'app actuelle
+(sidecar Python) reste l'app de travail jusqu'à la bascule.
 
 ### Phases
 
-- [x] **N0 — Moteur : modèle + résolution** *(fait 2026-07-28 : crate
-  `native/lumitrack-engine` — modèle serde au format fil camelCase (les
-  bundles existants restent lisibles), easing, résolution LTP 4 axes,
-  contexte de bloc. 14 tests unitaires portés + **test de parité contre
-  l'oracle Python** : fixture générée par `native/tests/
-  generate_parity_fixture.py` (3 projets aléatoires, 120 instants, tous les
-  contextes de bloc), identité à 1e-6. `cargo test` : 14 verts.)*
-- [ ] **N1 — Moteur : PSN + timecode + transport** (encodeur PSN v2 +
-  découpage MTU validés contre les captures pypsn des tests Python,
-  récepteurs Art-Net TC/MTC, horloge de transport)
-- [ ] **N2 — Coquille native + vue Dessus** (winit/egui/wgpu : fenêtre,
-  caméra ortho, terrain glTF, acteurs, ghosts/trajectoires)
-- [ ] **N3 — Timeline native + audio** (portage egui de la timeline maison
-  écrite ce soir — zoom curseur, règle adaptative, waveform ; décodage via
-  ffmpeg externe, lecture cpal)
-- [ ] **N4 — Inspecteur/roster/menus + undo/redo + dialogues natifs**
-- [ ] **N5 — Parité prononcée : retrait du sidecar Python et du frontend
-  web, exe unique, installeur**
+- [x] **N0 — Moteur Rust : modèle + résolution** *(fait 2026-07-28 : crate
+  `native/lumitrack-engine` — modèle serde au format fil camelCase (bundles
+  existants lisibles tels quels), easing, résolution LTP 4 axes, contexte
+  de bloc. 14 tests portés + **parité contre l'oracle Python** via fixture
+  générée (`native/tests/generate_parity_fixture.py`) : identité à 1e-6.)*
+- [ ] **N1 — Moteur Rust : PSN + timecode + transport** (encodeur PSN v2 +
+  découpage MTU, récepteurs Art-Net TC/MTC, horloge de transport —
+  validation croisée contre les tests Python/pypsn)
+- [ ] **N2 — Intégration Tauri** : le crate devient le backend du process
+  Tauri (commands + events remplacent le WebSocket) ; `sidecar.ts` garde la
+  même interface côté React, seul son transport change. Le sidecar Python
+  n'est plus lancé.
+- [ ] **N3 — Bascule + packaging** : retrait du code Python de l'app,
+  `tauri build` → exe unique + installeur, icône, plus aucun terminal.
+  Undo/redo s'implémente directement dans le moteur Rust (historique
+  d'états), les dialogues natifs Tauri remplacent les window.prompt.
 
-### Boucle de dev pendant la refonte
+### Boucle de dev
 
-Le superviseur code et teste le moteur dans son cloud (`cargo test`) ; les
-builds fenêtrés se font sur la machine de Florian via un `.bat` (à créer en
-N2) ou par cross-compilation depuis le cloud. Le test UI de la mission
-« timeline + son » de l'app actuelle reste à faire à la prochaine relance —
-elle demeure l'app de production pendant la transition.
+Moteur : développé et testé dans le cloud du superviseur (`cargo test`).
+Builds fenêtrés N2+ : sur la machine de Florian via `.bat`, ou
+cross-compilation depuis le cloud. Le test UI « timeline + son » de l'app
+actuelle reste à faire à la prochaine relance.
