@@ -115,13 +115,13 @@ export function PsnPanel({ project, onClose }: {
               spec.
             </p>
             <div className="psn-grid2">
-              <label>Origine X (cm)
-                <NumericInput value={project.transformOriginXCm} step={10}
-                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ originXCm: v }) }} />
+              <label>Origine X (m)
+                <NumericInput value={project.transformOriginXCm / 100} step={0.1}
+                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ originXCm: v * 100 }) }} />
               </label>
-              <label>Origine Y (cm)
-                <NumericInput value={project.transformOriginYCm} step={10}
-                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ originYCm: v }) }} />
+              <label>Origine Y (m)
+                <NumericInput value={project.transformOriginYCm / 100} step={0.1}
+                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ originYCm: v * 100 }) }} />
               </label>
             </div>
             <div className="psn-checks">

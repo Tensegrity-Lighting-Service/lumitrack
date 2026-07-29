@@ -303,7 +303,16 @@ def _resolve_axis(kfs, t_ms: float) -> Optional[float]:
     if governing_index == 0:
         origin = target  # first appearance: no prior value, snap to target
     else:
-        origin = kfs[governing_index - 1][2]
+        # L'origine est la position RÉELLEMENT résolue à l'instant où ce
+        # keyframe démarre — évaluée sur la chaîne des prédécesseurs (fix
+        # « téléportation » 2026-07-29 : avant, on prenait la CIBLE brute du
+        # keyframe précédent, donc un bloc démarrant pendant le fade d'un
+        # autre faisait sauter l'acteur à l'arrivée théorique du premier).
+        # Récursif : profondeur = nombre de fades imbriqués, trivial en
+        # pratique. Les blocs travaillent ainsi ENTRE eux.
+        origin = _resolve_axis(kfs[:governing_index], start)
+        if origin is None:
+            origin = target
 
     if fade_end <= start or t_ms >= fade_end:
         return target
@@ -354,7 +363,10 @@ def resolve_positions(project: Project, t_ms: float) -> dict:
         if ix > 0 and iy > 0 and kfs_x[ix][4] == kfs_y[iy][4]:
             start, fade_end, _tx, act, _cid, _ax = kfs_x[ix]
             if act.has_spatial_path() and fade_end > start and t_ms < fade_end:
-                origin = (kfs_x[ix - 1][2], kfs_y[iy - 1][2])
+                ox = _resolve_axis(kfs_x[:ix], start)
+                oy = _resolve_axis(kfs_y[:iy], start)
+                origin = (ox if ox is not None else kfs_x[ix][2],
+                          oy if oy is not None else kfs_y[iy][2])
                 target = (kfs_x[ix][2], kfs_y[iy][2])
                 progress = (t_ms - start) / (fade_end - start)
                 # Le profil de vitesse du tracé = courbe/easing de l'axe X.
@@ -428,7 +440,8 @@ def resolve_block_context(project: Project, cue_id: str,
                 axis_start[axis] = value  # first appearance: snap, no travel
                 sources[axis] = None
             else:
-                axis_start[axis] = kfs[index - 1][2]
+                resolved = _resolve_axis(kfs[:index], cue.start_ms)
+                axis_start[axis] = resolved if resolved is not None else kfs[index - 1][2]
                 sources[axis] = kfs[index - 1][4]
             axis_target[axis] = value
 

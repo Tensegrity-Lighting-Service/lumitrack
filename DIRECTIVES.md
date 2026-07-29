@@ -461,6 +461,22 @@ ATTENTION changement de sortie : les projets existants passent de Z-up à
 Y-up par défaut — c'est la correction de conformité ; l'option Z reste dans
 le panneau pour les outils qui dévient.
 
+### Fix reprise entre blocs + unités m/s (2026-07-29)
+
+Bug signalé par Florian : téléportation quand un bloc démarre pendant le
+fade d'un autre. Cause : l'origine d'un keyframe gouvernant était la CIBLE
+brute du précédent. Fix (Python + Rust, parité régénérée) : l'origine est
+désormais la position RÉSOLUE à l'instant du départ du keyframe (récursion
+sur la chaîne des prédécesseurs) — appliqué à la résolution par axe, au
+tracé spatial ET au départ affiché du block context. Blocs séquentiels :
+comportement inchangé. Tests : continuité au handoff (72 pytest, 34 cargo).
+NOTE sémantique : ce n'est plus le LTP-cible strict des consoles — c'est le
+« fade from current » attendu par Florian ; documenté ici comme choix.
+
+Unités : AFFICHAGE en mètres (X/Y/Z, zone, grille, origines PSN) et
+secondes (fades) — le modèle interne reste cm/ms, conversions dans les
+champs uniquement. Moniteur PSN déjà en mètres (protocole).
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).

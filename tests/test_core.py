@@ -448,7 +448,9 @@ def test_spatial_path_ltp_steals_one_axis():
     p.cues.append(Cue(id="c3", name="C", start_ms=1500, duration_ms=500, activations={
         "p1": Activation(target_x_cm=-200.0, fade_ms=500.0, easing="linear")}))
     pose = resolve_positions(p, 1750.0)["p1"]
-    assert pose.x_cm == 400.0  # mi-fade de c3 : 1000 -> -200
+    # Reprise sans téléportation (fix 2026-07-29) : à 1500, x résolu de c2
+    # vaut 250 (quart de fade) — c3 fond donc de 250 vers -200 ; mi-fade=25.
+    assert abs(pose.x_cm - 25.0) < 1e-6
     assert pose.y_cm == 0.0    # par axe : y gouverné par c2, droite linéaire
 
 
@@ -503,3 +505,46 @@ def test_lane_roundtrip_and_migration(tmp_path):
     lanes = {c.id: c.lane for c in migrated.cues}
     assert lanes["a"] == 0 and lanes["b"] == 1
     assert lanes["c"] == 0  # la piste 0 est libre à 3500 ms
+
+
+# --------------------------------------------- reprise entre blocs (fix) ---
+
+def test_overlapping_blocks_hand_over_without_teleport():
+    """Un bloc qui démarre pendant le fade d'un autre reprend l'acteur LÀ OÙ
+    IL EST (fix téléportation 2026-07-29), pas à la cible théorique du
+    premier bloc."""
+    from lumitrack.core.project import Project, Point, Cue, Activation
+    from lumitrack.core.timeline import resolve_positions
+    p = Project(name="handoff")
+    p.points.append(Point(id="p1", name="P1"))
+    p.cues.append(Cue(id="a", name="A", start_ms=0, duration_ms=2000, activations={
+        "p1": Activation(target_x_cm=0.0, target_y_cm=0.0, fade_ms=0.0)}))
+    # A' : part vers x=1000 en 2 s (linéaire).
+    p.cues.append(Cue(id="b", name="B", start_ms=1000, duration_ms=2000, activations={
+        "p1": Activation(target_x_cm=1000.0, fade_ms=2000.0, easing="linear")}))
+    # C démarre à 2000, en PLEIN fade de B (B est à 500 à cet instant).
+    p.cues.append(Cue(id="c", name="C", start_ms=2000, duration_ms=1000, activations={
+        "p1": Activation(target_x_cm=0.0, fade_ms=1000.0, easing="linear")}))
+    just_before = resolve_positions(p, 1999.9)["p1"].x_cm
+    just_after = resolve_positions(p, 2000.1)["p1"].x_cm
+    assert abs(just_before - 500.0) < 1.0
+    # Continuité : pas de saut à la prise de main de C.
+    assert abs(just_after - just_before) < 2.0
+    # Mi-fade de C : de ~500 vers 0 -> ~250.
+    assert abs(resolve_positions(p, 2500.0)["p1"].x_cm - 250.0) < 2.0
+    assert resolve_positions(p, 3000.0)["p1"].x_cm == 0.0
+
+
+def test_sequential_blocks_still_track_from_target():
+    """Blocs SANS chevauchement : comportement inchangé (l'acteur est déjà à
+    la cible du précédent quand le suivant démarre)."""
+    from lumitrack.core.project import Project, Point, Cue, Activation
+    from lumitrack.core.timeline import resolve_positions
+    p = Project(name="seq")
+    p.points.append(Point(id="p1", name="P1"))
+    p.cues.append(Cue(id="a", name="A", start_ms=0, duration_ms=1000, activations={
+        "p1": Activation(target_x_cm=100.0, target_y_cm=0.0, fade_ms=500.0)}))
+    p.cues.append(Cue(id="b", name="B", start_ms=2000, duration_ms=1000, activations={
+        "p1": Activation(target_x_cm=300.0, fade_ms=1000.0, easing="linear")}))
+    assert resolve_positions(p, 2000.0)["p1"].x_cm == 100.0
+    assert abs(resolve_positions(p, 2500.0)["p1"].x_cm - 200.0) < 1e-6

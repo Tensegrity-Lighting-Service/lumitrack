@@ -108,7 +108,14 @@ fn resolve_axis(kfs: &[Keyframe], t_ms: f64) -> Option<f64> {
         }
     }
     let (index, kf) = governing?;
-    let origin = if index == 0 { kf.value } else { kfs[index - 1].value };
+    // Port du fix « téléportation » : l'origine est la position résolue à
+    // l'instant du départ (chaîne des prédécesseurs), pas la cible brute du
+    // keyframe précédent.
+    let origin = if index == 0 {
+        kf.value
+    } else {
+        resolve_axis(&kfs[..index], kf.start_ms).unwrap_or(kf.value)
+    };
     if kf.fade_end_ms <= kf.start_ms || t_ms >= kf.fade_end_ms {
         return Some(kf.value);
     }
@@ -148,7 +155,9 @@ pub fn resolve_positions(project: &Project, t_ms: f64) -> BTreeMap<String, Pose>
             if ix > 0 && iy > 0 && kfs_x[ix].cue_id == kfs_y[iy].cue_id {
                 let kf = &kfs_x[ix];
                 if has_spatial_path(kf.act) && kf.fade_end_ms > kf.start_ms && t_ms < kf.fade_end_ms {
-                    let origin = (kfs_x[ix - 1].value, kfs_y[iy - 1].value);
+                    let ox = resolve_axis(&kfs_x[..ix], kf.start_ms).unwrap_or(kfs_x[ix].value);
+                    let oy = resolve_axis(&kfs_y[..iy], kf.start_ms).unwrap_or(kfs_y[iy].value);
+                    let origin = (ox, oy);
                     let target = (kfs_x[ix].value, kfs_y[iy].value);
                     let progress = (t_ms - kf.start_ms) / (kf.fade_end_ms - kf.start_ms);
                     let eased = act_axis_progress(kf.act, Axis::X, progress);
@@ -235,7 +244,11 @@ pub fn resolve_block_context(
                         axis_start.insert(axis, Some(value)); // 1re apparition : snap
                         sources.insert(axis.key(), None);
                     } else {
-                        axis_start.insert(axis, Some(kfs[index - 1].value));
+                        // Fix téléportation : départ = position résolue au
+                        // démarrage du bloc, pas la cible brute du précédent.
+                        let resolved = resolve_axis(&kfs[..index], cue.start_ms)
+                            .unwrap_or(kfs[index - 1].value);
+                        axis_start.insert(axis, Some(resolved));
                         sources.insert(axis.key(), Some(kfs[index - 1].cue_id.clone()));
                     }
                     axis_target.insert(axis, Some(value));
@@ -405,11 +418,14 @@ mod tests {
             cue("B", 1000.0, vec![("p1", act(Some(1000.0), Some(0.0), 4000.0))]),
             cue("C", 2000.0, vec![("p1", act(Some(500.0), Some(500.0), 1000.0))]),
         ]);
+        // Fix « téléportation » (2026-07-29) : C démarre à 2000 pendant le
+        // fade de B (B : 0 -> 1000 sur 4000 ms, résolu à 2000 = 250). Le
+        // départ affiché ET la lecture reprennent l'acteur là où il est.
         let ctx = resolve_block_context(&p, "C", 4).unwrap();
-        assert_eq!(ctx["p1"].start_pose.unwrap()[0], 1000.0); // cible de B
-        // Et la lecture fait pareil : à t=2500 (mi-fade de C), origine = 1000.
+        assert!((ctx["p1"].start_pose.unwrap()[0] - 250.0).abs() < 1e-9);
+        // Lecture : à t=2500 (mi-fade de C), 250 -> 500 => 375.
         let poses = resolve_positions(&p, 2500.0);
-        assert!((poses["p1"].x_cm - 750.0).abs() < 1e-9);
+        assert!((poses["p1"].x_cm - 375.0).abs() < 1e-9);
     }
 
     /// Oracle : la polyline est purement spatiale, sans easing incorporé —

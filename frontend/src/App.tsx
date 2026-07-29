@@ -450,10 +450,10 @@ function App() {
                   />
                 </label>
                 <label>
-                  Taille de la grille (cm)
+                  Taille de la grille (m)
                   <NumericInput
-                    value={project.gridSizeCm} step={10}
-                    onCommit={(v) => { if (v !== null && v >= 1) sidecar.updateStageMap({ gridSizeCm: v }) }}
+                    value={project.gridSizeCm / 100} step={0.1}
+                    onCommit={(v) => { if (v !== null && v >= 0.01) sidecar.updateStageMap({ gridSizeCm: v * 100 }) }}
                   />
                 </label>
               </div>
@@ -526,13 +526,13 @@ function StagePlacementPanel({ project }: { project: Project }) {
           <NumericInput value={project.stageMapRotationDeg} step={1}
             onCommit={(v) => { if (v !== null) sidecar.updateStageMap({ rotationDeg: v }) }} />
         </label>
-        <label>Largeur (cm)
-          <NumericInput value={project.stageWidthCm} step={10}
-            onCommit={(v) => { if (v !== null && v >= 1) sidecar.updateStageMap({ widthCm: v }) }} />
+        <label>Largeur (m)
+          <NumericInput value={project.stageWidthCm / 100} step={0.5}
+            onCommit={(v) => { if (v !== null && v >= 0.01) sidecar.updateStageMap({ widthCm: v * 100 }) }} />
         </label>
-        <label>Profondeur (cm)
-          <NumericInput value={project.stageHeightCm} step={10}
-            onCommit={(v) => { if (v !== null && v >= 1) sidecar.updateStageMap({ heightCm: v }) }} />
+        <label>Profondeur (m)
+          <NumericInput value={project.stageHeightCm / 100} step={0.5}
+            onCommit={(v) => { if (v !== null && v >= 0.01) sidecar.updateStageMap({ heightCm: v * 100 }) }} />
         </label>
       </div>
       <p className="hint">Ou fais glisser directement dans la vue 3D : centre = déplacer, coin orange = redimensionner, poignée verte = pivoter.</p>
@@ -638,10 +638,10 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
             <p className="hint">{activated.length} activé{activated.length > 1 ? 's' : ''} sur {selectedPointIds.length} — les autres ne sont pas touchés.</p>
           )}
           <div className="group-timing-grid">
-            <label>Fade (ms)
+            <label>Fade (s)
               <NumericInput
-                value={sharedFade} step={100} nullable
-                onCommit={(v) => { if (v !== null && v >= 0) applyAll({ fadeMs: v }) }}
+                value={sharedFade === null ? null : sharedFade / 1000} step={0.1} nullable
+                onCommit={(v) => { if (v !== null && v >= 0) applyAll({ fadeMs: v * 1000 }) }}
               />
             </label>
             <label>Courbe
@@ -684,25 +684,25 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
       {/* stopPropagation : cliquer dans un champ ne doit pas basculer la
           sélection de l'acteur portée par la carte entière. */}
       <div className="activation-grid" onClick={(e) => e.stopPropagation()}>
-        <label>X (cm)
-          <NumericInput value={activation.targetXCm} step={10} nullable
-            onCommit={(v) => set({ targetXCm: v })} />
+        <label>X (m)
+          <NumericInput value={activation.targetXCm === null ? null : activation.targetXCm / 100} step={0.1} nullable
+            onCommit={(v) => set({ targetXCm: v === null ? null : v * 100 })} />
         </label>
-        <label>Y (cm)
-          <NumericInput value={activation.targetYCm} step={10} nullable
-            onCommit={(v) => set({ targetYCm: v })} />
+        <label>Y (m)
+          <NumericInput value={activation.targetYCm === null ? null : activation.targetYCm / 100} step={0.1} nullable
+            onCommit={(v) => set({ targetYCm: v === null ? null : v * 100 })} />
         </label>
-        <label>Z (cm)
-          <NumericInput value={activation.targetZCm} step={10} nullable
-            onCommit={(v) => set({ targetZCm: v })} />
+        <label>Z (m)
+          <NumericInput value={activation.targetZCm === null ? null : activation.targetZCm / 100} step={0.1} nullable
+            onCommit={(v) => set({ targetZCm: v === null ? null : v * 100 })} />
         </label>
         <label>Lacet (°)
           <NumericInput value={activation.targetYawDeg} step={5} nullable
             onCommit={(v) => set({ targetYawDeg: v })} />
         </label>
-        <label>Fade (ms)
-          <NumericInput value={activation.fadeMs} step={100}
-            onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v }) }} />
+        <label>Fade (s)
+          <NumericInput value={activation.fadeMs / 1000} step={0.1}
+            onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v * 1000 }) }} />
         </label>
         <label>Courbe
           {(activation.pathPoints?.length || activation.startHandle || activation.targetHandle) ? (
