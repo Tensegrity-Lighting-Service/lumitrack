@@ -338,6 +338,28 @@ le tracé dans la scène = géométrie du chemin. Réalisé :
   appliquée au graph editor), Échap = désélection. Inspecteur : bouton
   « Tracé droit ». Le tracé affiché reste backend-échantillonné (§13.1.7).
 
+### Mission multi-sélection + transport (2026-07-29) — LIVRÉE
+
+Demandes de Florian après validation des tracés courbes :
+
+- **Roster multi-sélection** : Ctrl/Cmd-clic = bascule, Shift-clic = plage,
+  clic nu = simple. Sélection ORDONNÉE (le dernier cliqué est le principal :
+  inspecteur, graph editor, mise en avant scène). En-tête du roster : champ
+  N + bouton « + Acteurs » (ajout en lot, numérotation continue).
+- **Timing groupé** : panneau dans l'inspecteur dès que >1 acteur
+  sélectionné avec un bloc actif — fade (ms) et easing appliqués d'un coup à
+  toutes les activations des sélectionnés dans le bloc (valeur affichée =
+  commune, sinon « mixte » ; les non-activés ne sont pas touchés, compte
+  affiché).
+- **Transport déplacé** : l'ancienne barre du haut (play + scrub + timecode)
+  est SUPPRIMÉE — le scrub était redondant avec la règle. Play/pause,
+  pastille de connexion et timecode vivent maintenant dans la barre de la
+  timeline, sous le roster. Espace fonctionne toujours.
+
+Reste ouvert (souhait exprimé, pas encore construit) : hiérarchie du roster
+(équipes en sous-dossiers, appartenance multiple — spec §12.2/§12.10,
+référence UX ContainerBox de Friction). Prochaine mission logique.
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).

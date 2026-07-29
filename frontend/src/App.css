@@ -12,7 +12,6 @@
      panel state; only the area layout is static here. */
   grid-template-areas:
     "menubar   menubar   menubar    menubar   menubar"
-    "transport transport transport transport transport"
     "roster    vhandle1  scene      vhandle2  inspector"
     "hhandle   hhandle   hhandle    hhandle   hhandle"
     "timeline  timeline  timeline   timeline  timeline";
@@ -429,3 +428,48 @@
   border-radius: 4px; cursor: pointer;
 }
 .inspector-clear-path:hover { background: #2a2a35; }
+
+
+/* ---- Roster : en-tête avec ajout multiple ---- */
+.roster-head {
+  display: flex; align-items: center; gap: 6px;
+  padding-right: 8px;
+}
+.roster-head h2 { margin-right: 0; }
+.roster-spacer { flex: 1; }
+.roster-add-count {
+  width: 34px; font-size: 11px; padding: 2px 4px;
+  background: #1f1f27; color: #b9b9c6; border: 1px solid #30303c;
+  border-radius: 4px;
+}
+.roster-add-btn {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  background: #1f1f27; color: #b9b9c6; border: 1px solid #30303c;
+  cursor: pointer; white-space: nowrap;
+}
+.roster-add-btn:hover { background: #2a2a35; }
+
+/* ---- Transport dans la barre de la timeline ---- */
+.tl-play { font-size: 13px; min-width: 30px; }
+.tl-timecode {
+  font-family: ui-monospace, monospace; font-size: 12px;
+  color: #cfd6ff; min-width: 96px;
+}
+.tl-toolbar-sep { width: 1px; height: 16px; background: #30303c; margin: 0 4px; }
+
+/* ---- Panneau de timing groupé ---- */
+.group-timing {
+  border: 1px solid #2c2c36; border-radius: 6px;
+  padding: 8px 10px; margin-bottom: 10px;
+  background: #16161c;
+}
+.group-timing h3 { margin: 0 0 4px; font-size: 12px; }
+.group-timing-names {
+  font-size: 11px; color: #7a7a88; margin: 0 0 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.group-timing-grid { display: flex; gap: 10px; }
+.group-timing-grid label {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 11px; color: #9a9aa8; flex: 1;
+}

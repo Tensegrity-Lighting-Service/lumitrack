@@ -88,11 +88,21 @@ interface DragState {
   moved: boolean
 }
 
-export function CueTimeline({ project, tMs, playing, durationMs, selectedCueId, selectedPointId, onSelectCue }: {
+function formatTimecodeMs(ms: number): string {
+  const totalS = Math.max(0, ms) / 1000
+  const h = Math.floor(totalS / 3600)
+  const m = Math.floor((totalS % 3600) / 60)
+  const sec = totalS % 60
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${pad(h)}:${pad(m)}:${sec.toFixed(3).padStart(6, '0')}`
+}
+
+export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue }: {
   project: Project
   tMs: number
   playing: boolean
   durationMs: number
+  connected: boolean
   selectedCueId: string | null
   selectedPointId: string | null
   onSelectCue: (cueId: string | null) => void
@@ -359,6 +369,19 @@ export function CueTimeline({ project, tMs, playing, durationMs, selectedCueId, 
   return (
     <div className="tl">
       <div className="tl-toolbar">
+        {/* Transport : déplacé de l'ancienne barre du haut (supprimée) —
+            près de la timeline, sous le roster, comme demandé. Le scrub
+            redondant a disparu : la règle fait déjà le seek. */}
+        <span className={`conn-dot ${connected ? 'conn-ok' : 'conn-bad'}`} title={connected ? 'Sidecar connecté' : 'Sidecar déconnecté'} />
+        <button
+          className="tl-play"
+          title={playing ? 'Pause (Espace)' : 'Lecture (Espace)'}
+          onClick={() => (playing ? sidecar.pause() : sidecar.play())}
+        >
+          {playing ? '⏸' : '⏵'}
+        </button>
+        <span className="tl-timecode">{formatTimecodeMs(tMs)}</span>
+        <span className="tl-toolbar-sep" />
         <button onClick={addCue}>+ Cue</button>
         {selectedCueId && <button onClick={deleteSelected}>Supprimer</button>}
         {selectedCueId && (

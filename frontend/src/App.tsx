@@ -141,16 +141,6 @@ function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }
   )
 }
 
-function formatTimecode(ms: number): string {
-  const totalMs = Math.max(0, Math.floor(ms))
-  const h = Math.floor(totalMs / 3_600_000)
-  const m = Math.floor((totalMs % 3_600_000) / 60_000)
-  const s = Math.floor((totalMs % 60_000) / 1000)
-  const millis = totalMs % 1000
-  const pad = (n: number, len = 2) => n.toString().padStart(len, '0')
-  return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(millis, 3)}`
-}
-
 function App() {
   const project = useProject()
   const tick = useTick()
@@ -159,9 +149,17 @@ function App() {
   const blockContext = useBlockContext()
 
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null)
-  const [selectedPointId, setSelectedPointId] = useState<string | null>(null)
+  // Sélection multiple d'acteurs (Ctrl/Shift-clic au roster). Ordonnée :
+  // le DERNIER cliqué est l'acteur "principal" (inspecteur, graph editor,
+  // mise en avant scène) ; les autres suivent pour les éditions groupées.
+  const [selectedPointIds, setSelectedPointIds] = useState<string[]>([])
+  const selectedPointId = selectedPointIds.length ? selectedPointIds[selectedPointIds.length - 1] : null
+  const setSelectedPointId = useCallback((id: string | null) => {
+    setSelectedPointIds(id === null ? [] : [id])
+  }, [])
 
   const [rosterWidth, setRosterWidth] = useState(220)
+  const [addCount, setAddCount] = useState(1)
   const [inspectorWidth, setInspectorWidth] = useState(300)
   const [timelineHeight, setTimelineHeight] = useState(220)
   const [cameraLocked, setCameraLocked] = useState(false)
@@ -231,7 +229,7 @@ function App() {
         }
       } else if (e.key === 'Escape') {
         setSelectedCueId(null)
-        setSelectedPointId(null)
+        setSelectedPointIds([])
       }
     }
     window.addEventListener('keydown', handler)
@@ -303,36 +301,59 @@ function App() {
       className="app"
       style={{
         gridTemplateColumns: `${rosterWidth}px 6px 1fr 6px ${inspectorWidth}px`,
-        gridTemplateRows: `26px 40px 1fr 6px ${timelineHeight}px`,
+        gridTemplateRows: `26px 1fr 6px ${timelineHeight}px`,
       }}
     >
       <MenuBar menus={menus} />
 
-      <header className="transport-bar">
-        <span className={`conn-dot ${connected ? 'conn-ok' : 'conn-bad'}`} title={connected ? 'Sidecar connecté' : 'Sidecar déconnecté'} />
-        <button onClick={() => (playing ? sidecar.pause() : sidecar.play())}>
-          {playing ? '⏸' : '⏵'}
-        </button>
-        <input
-          className="scrub"
-          type="range"
-          min={0}
-          max={durationMs}
-          value={tMs}
-          onChange={(e) => sidecar.seek(Number(e.target.value))}
-        />
-        <span className="timecode">{formatTimecode(tMs)}</span>
-        <span className="project-name">{project.name}</span>
-      </header>
-
       <aside className="roster">
-        <h2>Roster</h2>
+        <div className="roster-head">
+          <h2>Roster</h2>
+          <span className="roster-spacer" />
+          <input
+            className="roster-add-count"
+            type="number" min={1} max={99} value={addCount}
+            title="Nombre d'acteurs à ajouter d'un coup"
+            onChange={(e) => setAddCount(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
+          />
+          <button
+            className="roster-add-btn"
+            title={`Ajouter ${addCount} acteur${addCount > 1 ? 's' : ''}`}
+            onClick={() => {
+              const base = project.points.length
+              for (let i = 0; i < addCount; i++) {
+                sidecar.addPoint(`Acteur ${base + i + 1}`, base + i + 1)
+              }
+            }}
+          >
+            + Acteur{addCount > 1 ? 's' : ''}
+          </button>
+        </div>
         <ul>
-          {project.points.map((point) => (
+          {project.points.map((point, index) => (
             <li
               key={point.id}
-              className={point.id === selectedPointId ? 'selected' : ''}
-              onClick={() => setSelectedPointId(point.id === selectedPointId ? null : point.id)}
+              className={selectedPointIds.includes(point.id) ? 'selected' : ''}
+              onClick={(e) => {
+                // Ctrl/Cmd : bascule ; Shift : plage depuis le principal ;
+                // clic nu : sélection simple (re-clic = désélection).
+                if (e.ctrlKey || e.metaKey) {
+                  setSelectedPointIds((prev) => prev.includes(point.id)
+                    ? prev.filter((id) => id !== point.id)
+                    : [...prev, point.id])
+                } else if (e.shiftKey && selectedPointId) {
+                  const anchorIdx = project.points.findIndex((p) => p.id === selectedPointId)
+                  if (anchorIdx >= 0) {
+                    const [lo, hi] = anchorIdx < index ? [anchorIdx, index] : [index, anchorIdx]
+                    const range = project.points.slice(lo, hi + 1).map((p) => p.id)
+                    // Le point cliqué devient le principal (dernier).
+                    setSelectedPointIds([...range.filter((id) => id !== point.id), point.id])
+                  }
+                } else {
+                  setSelectedPointIds(selectedPointIds.length === 1 && selectedPointId === point.id
+                    ? [] : [point.id])
+                }
+              }}
             >
               <span
                 className={`status-dot ${movingPointIds.has(point.id) ? 'moving' : 'idle'}`}
@@ -407,6 +428,13 @@ function App() {
       <aside className="inspector">
         <h2>Inspecteur</h2>
         {editingZone && <StagePlacementPanel project={project} />}
+        {selectedCue && selectedPointIds.length > 1 && (
+          <GroupTimingPanel
+            cue={selectedCue}
+            selectedPointIds={selectedPointIds}
+            projectPoints={project.points}
+          />
+        )}
         {selectedCue ? (
           <CueInspector
             cue={selectedCue}
@@ -427,6 +455,7 @@ function App() {
           tMs={tMs}
           playing={playing}
           durationMs={durationMs}
+          connected={connected}
           selectedCueId={selectedCueId}
           selectedPointId={selectedPointId}
           onSelectCue={setSelectedCueId}
@@ -532,6 +561,66 @@ const EASING_NAMES = ['linear', 'smooth', 'ease-in', 'ease-out', 'bounce', 'spri
  * mid-typing backend echo can never rewrite the field (constat n°1). A
  * cleared X/Y/Z/lacet commits null = axe détouché, il repasse en tracking
  * (§12.1) ; le fade, lui, est toujours défini. */
+/** Édition groupée du timing (mission multi-sélection) : applique fade et
+ * easing d'un coup à toutes les activations des acteurs sélectionnés dans
+ * le bloc. Valeur affichée = commune si partagée, sinon vide (« mixte »).
+ * Chaque changement écrit N set_activation — le backend reste la seule
+ * source de vérité, comme partout. */
+function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
+  cue: Cue
+  selectedPointIds: string[]
+  projectPoints: Point[]
+}) {
+  const activated = selectedPointIds.filter((id) => cue.activations[id])
+  const acts = activated.map((id) => cue.activations[id])
+  const shared = <T,>(get: (a: Activation) => T): T | null =>
+    acts.length && acts.every((a) => get(a) === get(acts[0])) ? get(acts[0]) : null
+  const sharedFade = shared((a) => a.fadeMs)
+  const sharedEasing = shared((a) => a.easing)
+
+  const applyAll = (patch: { fadeMs?: number; easing?: string }) => {
+    for (const id of activated) sidecar.setActivation(cue.id, id, patch)
+  }
+
+  const names = selectedPointIds
+    .map((id) => projectPoints.find((p) => p.id === id)?.name ?? id)
+
+  return (
+    <div className="group-timing">
+      <h3>Timing groupé — {selectedPointIds.length} acteurs</h3>
+      <p className="group-timing-names" title={names.join(', ')}>{names.join(', ')}</p>
+      {activated.length === 0 ? (
+        <p className="hint">Aucun des acteurs sélectionnés n’est activé dans ce bloc.</p>
+      ) : (
+        <>
+          {activated.length < selectedPointIds.length && (
+            <p className="hint">{activated.length} activé{activated.length > 1 ? 's' : ''} sur {selectedPointIds.length} — les autres ne sont pas touchés.</p>
+          )}
+          <div className="group-timing-grid">
+            <label>Fade (ms)
+              <NumericInput
+                value={sharedFade} step={100} nullable
+                onCommit={(v) => { if (v !== null && v >= 0) applyAll({ fadeMs: v }) }}
+              />
+            </label>
+            <label>Courbe
+              <select
+                value={sharedEasing ?? ''}
+                onChange={(e) => { if (e.target.value) applyAll({ easing: e.target.value }) }}
+              >
+                {sharedEasing === null && <option value="">(mixte)</option>}
+                {['linear', 'smooth', 'ease-in', 'ease-out', 'bounce', 'spring', 'exponential'].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function ActivationCard({ cueId, pointId, point, activation, selected, onSelect }: {
   cueId: string
   pointId: string
