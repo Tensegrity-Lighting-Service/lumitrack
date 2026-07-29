@@ -396,6 +396,16 @@ tmp+replace. Au démarrage : reprise de l'autosave si présente, sinon démo.
 JSON simple, médias en chemins absolus (pas un bundle : pas de copie ni de
 versions/ qui gonfle). Les bundles explicites restent inchangés.
 
+### Validation PSN contre le SDK officiel (2026-07-29)
+
+Florian a pointé posistage.net : spec 2.03 + SDK de référence VYV
+(psn-cpp, MIT). Harnais `native/tests/official/` : le décodeur OFFICIEL
+décode nos paquets (7 datagrammes, découpage MTU 92 trackers, Unicode) —
+92 trackers vérifiés à 1e-5, constantes et version de header (2.0)
+identiques à psn_defs.hpp. L'encodeur est conforme PSN 2.x selon
+l'implémentation de référence, plus seulement selon pypsn. Chunks
+optionnels non émis notés dans le README (SPEED en premier candidat).
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).
