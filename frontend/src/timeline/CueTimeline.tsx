@@ -157,21 +157,50 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     }
   }, [viewportWidth, durationMs, fit])
 
+  // Zoom LISSÉ (« apple style », 2026-07-29) : chaque cran de molette
+  // pousse une CIBLE de zoom ; une boucle rAF fait converger le zoom réel
+  // par approche exponentielle (~1/4 de l'écart par frame) en maintenant
+  // l'instant sous le curseur immobile À CHAQUE frame — fluide, ancré au
+  // pointeur, et les crans successifs s'enchaînent sans à-coup.
+  const zoomAnimRef = useRef<{ target: number; anchorT: number; offsetX: number; raf: number } | null>(null)
+  const pxPerMsRef = useRef(effPxPerMs)
+  pxPerMsRef.current = effPxPerMs
+
   const zoomAt = useCallback((factor: number, clientX?: number) => {
     const el = scrollRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
     const offsetX = clientX !== undefined ? clientX - rect.left : el.clientWidth / 2
-    setPxPerMs((prev) => {
-      const cur = prev ?? 0.05
-      const next = Math.min(MAX_PX_PER_MS, Math.max(MIN_PX_PER_MS, cur * factor))
-      // Garde l'instant sous le curseur immobile pendant le zoom.
-      const tAtCursor = (el.scrollLeft + offsetX) / cur
-      requestAnimationFrame(() => {
-        el.scrollLeft = Math.max(0, tAtCursor * next - offsetX)
-      })
-      return next
-    })
+    const cur = pxPerMsRef.current
+    const anim = zoomAnimRef.current
+    const base = anim ? anim.target : cur
+    const target = Math.min(MAX_PX_PER_MS, Math.max(MIN_PX_PER_MS, base * factor))
+    const anchorT = (el.scrollLeft + offsetX) / cur
+
+    if (anim) {
+      anim.target = target
+      anim.anchorT = anchorT
+      anim.offsetX = offsetX
+      return
+    }
+    const state = { target, anchorT, offsetX, raf: 0 }
+    zoomAnimRef.current = state
+    const step = () => {
+      const current = pxPerMsRef.current
+      const remaining = state.target / current
+      // Convergence : ~25 % de l'écart logarithmique par frame.
+      const next = Math.abs(Math.log(remaining)) < 0.01
+        ? state.target
+        : current * Math.exp(Math.log(remaining) * 0.25)
+      setPxPerMs(next)
+      el.scrollLeft = Math.max(0, state.anchorT * next - state.offsetX)
+      if (next !== state.target) {
+        state.raf = requestAnimationFrame(step)
+      } else {
+        zoomAnimRef.current = null
+      }
+    }
+    state.raf = requestAnimationFrame(step)
   }, [])
 
   // Ctrl+molette = zoom au curseur (geste standard DAW) ; molette seule =
@@ -453,7 +482,6 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                   playing={playing}
                   pxPerMs={effPxPerMs}
                   scrollElRef={scrollRef}
-                  viewportWidth={viewportWidth}
                   height={AUDIO_H}
                 />
               </div>

@@ -643,3 +643,11 @@
 .backstage-block { border-bottom: 1px solid #22222a; padding-bottom: 6px; margin-bottom: 6px; }
 .backstage-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px 6px; }
 .backstage-grid label { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; color: #8a8a99; }
+
+/* ---- Waveform en tuiles (défilement natif avec le contenu) ---- */
+.tl-track-audio { position: relative; }
+.tl-audio-tiles { position: relative; width: 100%; overflow: visible; }
+.tl-audio-loading {
+  position: sticky; left: 8px; top: 4px;
+  font-size: 11px; color: #7a7a88;
+}

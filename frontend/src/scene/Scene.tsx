@@ -1981,6 +1981,8 @@ function SceneContent({
         enableRotate={false}
         screenSpacePanning
         zoomToCursor
+        enableDamping
+        dampingFactor={0.12}
         mouseButtons={MOUSE_MAPPING}
         touches={TOUCH_MAPPING}
       />

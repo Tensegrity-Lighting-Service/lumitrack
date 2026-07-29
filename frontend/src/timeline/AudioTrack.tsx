@@ -2,11 +2,14 @@
 //
 // wavesurfer.js reste le moteur audio (décodage + lecture locale synchro,
 // stack approuvée §12.11) mais son rendu propre est masqué : la waveform
-// est dessinée ICI, sur un canvas qui partage le système de coordonnées de
-// la timeline (pxPerMs/scrollLeft). C'est ce qui garantit l'alignement au
-// pixel entre waveform, règle, blocs et playhead — l'ancien composant
-// Waveform.tsx vivait dans son propre repère et ne pouvait pas le garantir
-// (constat n°4 de l'inspection du 2026-07-28).
+// est dessinée ICI, en TUILES posées DANS le contenu scrollé (architecture
+// DAW/Reaper, fix « la waveform bouge au scroll » 2026-07-29). Chaque
+// tuile est un canvas absolu de TILE_W px à sa position de contenu : elle
+// DÉFILE NATIVEMENT avec la règle et les blocs — zéro redessin, zéro
+// retard au scroll. Au scroll on ne peint que les tuiles manquantes ; un
+// changement de zoom invalide tout et repeint la fenêtre visible une fois.
+// (Les versions précédentes redessinaient la fenêtre dans le repère écran
+// à chaque scroll : toujours une frame derrière le défilement natif.)
 //
 // Le son ne pilote jamais le temps : le sidecar Python reste maître
 // (§13.1.7). play/pause suivent `playing`, la position n'est corrigée
@@ -19,6 +22,7 @@ import { sidecar } from '../sidecar'
 const DRIFT_THRESHOLD_S = 0.2
 const PEAK_BUCKETS_PER_S = 100 // résolution des pics précalculés
 const MAX_PEAK_BUCKETS = 60_000
+const TILE_W = 1024 // largeur d'une tuile de waveform (px contenu)
 
 interface Peaks {
   min: Float32Array
@@ -29,8 +33,8 @@ interface Peaks {
 
 /** Calcul des pics DÉCOUPÉ EN TRANCHES : chaque tranche de buckets rend la
  * main au navigateur (setTimeout 0) avant la suivante — l'interface reste
- * fluide pendant tout le calcul (fix « app freezée à l'import audio »,
- * 2026-07-29). `cancelled` interrompt proprement si le fichier change. */
+ * fluide pendant tout le calcul (fix « app freezée à l'import audio »).
+ * `cancelled` interrompt proprement si le fichier change. */
 async function computePeaksAsync(
   buffer: AudioBuffer,
   cancelled: () => boolean,
@@ -49,8 +53,7 @@ async function computePeaksAsync(
         const start = Math.floor(b * samplesPerBucket)
         const end = Math.min(data.length, Math.floor((b + 1) * samplesPerBucket))
         let lo = 0, hi = 0
-        // Pas d'échantillonnage exhaustif nécessaire pour un affichage : un
-        // pas de 8 échantillons suffit et divise le coût d'autant.
+        // Un pas de 8 échantillons suffit pour un affichage.
         for (let i = start; i < end; i += 8) {
           const v = data[i]
           if (v < lo) lo = v
@@ -66,22 +69,18 @@ async function computePeaksAsync(
   return { min, max, bucketMs: (buffer.duration * 1000) / buckets, durationS: buffer.duration }
 }
 
-export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, scrollElRef, viewportWidth, height }: {
+export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, scrollElRef, height }: {
   audioPath: string
   knownDurationS: number | null
   tMs: number
   playing: boolean
   pxPerMs: number
-  /** L'élément scrollé de la timeline : la waveform lit scrollLeft EN
-   * DIRECT dessus et se redessine sur son événement scroll — le passage
-   * par un état React ajoutait une frame de retard, visible en zoomant
-   * (waveform désalignée un instant à chaque cran). */
+  /** L'élément scrollé de la timeline : source de vérité du scroll pour
+   * savoir quelles tuiles peindre. */
   scrollElRef: React.RefObject<HTMLDivElement | null>
-  viewportWidth: number
   height: number
 }) {
   const hiddenRef = useRef<HTMLDivElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const wsRef = useRef<WaveSurfer | null>(null)
   const [peaks, setPeaks] = useState<Peaks | null>(null)
 
@@ -95,13 +94,11 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
       url: convertFileSrc(audioPath),
       interact: false,
       // Décodage BASSE FRÉQUENCE pour la waveform uniquement : 12 kHz
-      // suffisent largement à des pics d'affichage et divisent le coût de
+      // suffisent à des pics d'affichage et divisent le coût de
       // decodeAudioData par ~4. La LECTURE passe par l'élément <audio>
-      // natif (backend MediaElement de wavesurfer 7) et garde la qualité
-      // d'origine — fix « app freezée à l'import audio ».
+      // natif (backend MediaElement de wavesurfer 7), qualité d'origine.
       sampleRate: 12000,
-      // Le rendu interne de wavesurfer est inutile (canvas maison) : un
-      // renderFunction vide lui évite de peindre sa propre waveform.
+      // Rendu interne inutile (tuiles maison) : renderFunction vide.
       renderFunction: () => {},
     })
     wsRef.current = ws
@@ -112,8 +109,7 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
         if (result && !cancelled) setPeaks(result)
       })
       // Le backend intègre la durée réelle au transport ; on ne l'envoie
-      // que si elle manque ou diverge (> 50 ms) pour éviter un broadcast
-      // projet inutile à chaque chargement.
+      // que si elle manque ou diverge (> 50 ms).
       if (knownDurationS === null || Math.abs(knownDurationS - buffer.duration) > 0.05) {
         sidecar.setAudio({ durationS: buffer.duration })
       }
@@ -147,71 +143,90 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
     }
   }, [tMs])
 
-  // Dessin de la fenêtre visible uniquement : le canvas fait la largeur du
-  // viewport et se repositionne à scrollLeft — un canvas à la largeur du
-  // contenu complet exploserait à fort zoom (plusieurs millions de px).
-  // Redessin : sur changement de zoom/pics (effet) ET sur l'événement
-  // scroll de l'élément (rAF-batché), en lisant scrollLeft en direct.
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas || viewportWidth <= 0) return
-    let raf = 0
+  // ---- tuiles de waveform dans le contenu ----
+  const containerRef = useRef<HTMLDivElement>(null)
+  const tilesRef = useRef<Map<number, HTMLCanvasElement>>(new Map())
 
-    const draw = () => {
-      const scrollLeft = scrollElRef.current?.scrollLeft ?? 0
-      const dpr = window.devicePixelRatio || 1
-      canvas.width = Math.floor(viewportWidth * dpr)
+  useEffect(() => {
+    const container = containerRef.current
+    const scroller = scrollElRef.current
+    if (!container || !scroller) return
+    const dpr = window.devicePixelRatio || 1
+
+    // Zoom ou pics changés : toutes les tuiles sont invalides.
+    tilesRef.current.forEach((c) => c.remove())
+    tilesRef.current.clear()
+
+    const drawTile = (index: number) => {
+      const canvas = document.createElement('canvas')
+      canvas.className = 'tl-audio-tile'
+      canvas.width = Math.floor(TILE_W * dpr)
       canvas.height = Math.floor(height * dpr)
+      canvas.style.cssText = `position:absolute;top:0;left:${index * TILE_W}px;width:${TILE_W}px;height:${height}px;`
       const ctx = canvas.getContext('2d')
       if (!ctx) return
       ctx.scale(dpr, dpr)
-      ctx.clearRect(0, 0, viewportWidth, height)
       if (!peaks) {
         ctx.fillStyle = '#3a405230'
-        ctx.fillRect(0, height / 2 - 1, viewportWidth, 2)
-        ctx.fillStyle = '#7a7a88'
-        ctx.font = '11px system-ui, sans-serif'
-        ctx.fillText('Décodage de l’audio…', 8, height / 2 - 6)
-        return
-      }
-      const mid = height / 2
-      const amp = (height / 2) * 0.92
-      ctx.fillStyle = '#4f6df5'
-      for (let x = 0; x < viewportWidth; x++) {
-        const t0 = (scrollLeft + x) / pxPerMs
-        const t1 = (scrollLeft + x + 1) / pxPerMs
-        const b0 = Math.floor(t0 / peaks.bucketMs)
-        const b1 = Math.min(peaks.max.length - 1, Math.max(b0, Math.floor(t1 / peaks.bucketMs)))
-        if (b0 >= peaks.max.length || b0 < 0) continue
-        let lo = 0, hi = 0
-        for (let b = b0; b <= b1; b++) {
-          if (peaks.min[b] < lo) lo = peaks.min[b]
-          if (peaks.max[b] > hi) hi = peaks.max[b]
+        ctx.fillRect(0, height / 2 - 1, TILE_W, 2)
+      } else {
+        const mid = height / 2
+        const amp = (height / 2) * 0.92
+        const base = index * TILE_W
+        ctx.fillStyle = '#4f6df5'
+        for (let x = 0; x < TILE_W; x++) {
+          const t0 = (base + x) / pxPerMs
+          const t1 = (base + x + 1) / pxPerMs
+          const b0 = Math.floor(t0 / peaks.bucketMs)
+          const b1 = Math.min(peaks.max.length - 1, Math.max(b0, Math.floor(t1 / peaks.bucketMs)))
+          if (b0 >= peaks.max.length || b0 < 0) continue
+          let lo = 0, hi = 0
+          for (let b = b0; b <= b1; b++) {
+            if (peaks.min[b] < lo) lo = peaks.min[b]
+            if (peaks.max[b] > hi) hi = peaks.max[b]
+          }
+          const y0 = mid - hi * amp
+          const y1 = mid - lo * amp
+          ctx.fillRect(x, y0, 1, Math.max(1, y1 - y0))
         }
-        const y0 = mid - hi * amp
-        const y1 = mid - lo * amp
-        ctx.fillRect(x, y0, 1, Math.max(1, y1 - y0))
       }
+      container.appendChild(canvas)
+      tilesRef.current.set(index, canvas)
     }
 
-    draw()
-    const el = scrollElRef.current
-    const onScroll = () => {
-      cancelAnimationFrame(raf)
-      raf = requestAnimationFrame(draw)
+    const ensure = () => {
+      const sl = scroller.scrollLeft
+      const vw = scroller.clientWidth
+      const i0 = Math.max(0, Math.floor(sl / TILE_W) - 1)
+      const i1 = Math.floor((sl + vw) / TILE_W) + 1
+      for (let i = i0; i <= i1; i++) {
+        if (!tilesRef.current.has(i)) drawTile(i)
+      }
+      // Élagage : au-delà de ±3 tuiles hors champ, on libère.
+      tilesRef.current.forEach((canvas, i) => {
+        if (i < i0 - 3 || i > i1 + 3) {
+          canvas.remove()
+          tilesRef.current.delete(i)
+        }
+      })
     }
-    el?.addEventListener('scroll', onScroll, { passive: true })
+
+    ensure()
+    scroller.addEventListener('scroll', ensure, { passive: true })
     return () => {
-      cancelAnimationFrame(raf)
-      el?.removeEventListener('scroll', onScroll)
+      scroller.removeEventListener('scroll', ensure)
+      tilesRef.current.forEach((c) => c.remove())
+      tilesRef.current.clear()
     }
-  }, [peaks, pxPerMs, viewportWidth, height, scrollElRef])
+  }, [peaks, pxPerMs, height, scrollElRef])
 
   return (
     <>
-      {/* position:sticky left:0 : le canvas reste collé au viewport pendant
-          le scroll, son contenu est redessiné en fonction de scrollLeft. */}
-      <canvas ref={canvasRef} className="tl-audio-canvas" style={{ width: viewportWidth, height }} />
+      {/* Conteneur des tuiles : dans le CONTENU scrollé — les tuiles
+          défilent nativement avec la règle et les blocs. */}
+      <div ref={containerRef} className="tl-audio-tiles" style={{ height }}>
+        {!peaks && <span className="tl-audio-loading">Décodage de l’audio…</span>}
+      </div>
       <div ref={hiddenRef} style={{ display: 'none' }} />
     </>
   )
