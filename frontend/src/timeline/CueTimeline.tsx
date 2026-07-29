@@ -199,8 +199,18 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
       // anciennes positions de blocs ("les blocs vibrent en partant loin
       // avant de revenir"). flushSync force le re-layout des blocs AVANT
       // de poser scrollLeft : les deux arrivent dans la même peinture.
-      flushSync(() => setPxPerMs(next))
-      el.scrollLeft = Math.max(0, state.anchorT * next - state.offsetX)
+      //
+      // `setScrollLeft` DANS le même flush : la fenêtre de graduations
+      // (règle + grille temporelle) est calculée depuis cet état — en le
+      // laissant au scroll-event (asynchrone, frame suivante), la grille
+      // était générée avec l'ANCIEN scroll et le NOUVEAU zoom pendant
+      // toute l'animation → règle/grille désynchronisées des blocs.
+      const nsl = Math.max(0, state.anchorT * next - state.offsetX)
+      flushSync(() => {
+        setPxPerMs(next)
+        setScrollLeft(nsl)
+      })
+      el.scrollLeft = nsl
       if (next !== state.target) {
         state.raf = requestAnimationFrame(step)
       } else {

@@ -14,7 +14,7 @@
 // Le son ne pilote jamais le temps : le sidecar Python reste maître
 // (§13.1.7). play/pause suivent `playing`, la position n'est corrigée
 // qu'au-delà d'un seuil de dérive pour ne pas se battre avec les ticks.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
@@ -147,7 +147,13 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
   const containerRef = useRef<HTMLDivElement>(null)
   const tilesRef = useRef<Map<number, HTMLCanvasElement>>(new Map())
 
-  useEffect(() => {
+  // useLAYOUTEffect, pas useEffect : pendant l'animation de zoom, le
+  // parent commet pxPerMs + scrollLeft en flushSync à chaque frame ; un
+  // effet passif repeindrait les tuiles APRÈS la peinture → waveform en
+  // retard d'une frame sur la règle et les blocs pendant toute
+  // l'animation ("l'audio est asynchrone"). En layout effect, le
+  // repeuplement se fait dans le même flush, avant la peinture.
+  useLayoutEffect(() => {
     const container = containerRef.current
     const scroller = scrollElRef.current
     if (!container || !scroller) return
