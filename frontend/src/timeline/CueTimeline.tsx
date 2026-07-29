@@ -18,6 +18,7 @@ import type { Cue, Project } from '../types'
 import { sidecar } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
+import { BlockAutomation } from './BlockAutomation'
 
 const MS_PER_S = 1000
 const RULER_H = 26
@@ -509,6 +510,16 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                       <span className="cue-block-count">{count}</span>
                     </div>
                     <div className="cue-block-body" />
+                    {count > 0 && (
+                      <BlockAutomation
+                        cue={cue}
+                        selected={cue.id === selectedCueId}
+                        selectedPointId={selectedPointId}
+                        widthPx={Math.max(4, dur * effPxPerMs)}
+                        heightPx={LANE_H - 6}
+                        pxPerMs={effPxPerMs}
+                      />
+                    )}
                     <div className="cue-resize cue-resize-l" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-l')} />
                     <div className="cue-resize cue-resize-r" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-r')} />
                   </div>
