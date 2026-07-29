@@ -509,3 +509,29 @@ Moteur : développé et testé dans le cloud du superviseur (`cargo test`).
 Builds fenêtrés N2+ : sur la machine de Florian via `.bat`, ou
 cross-compilation depuis le cloud. Le test UI « timeline + son » de l'app
 actuelle reste à faire à la prochaine relance.
+
+## Mission — Zoom fluide partout (scène + timeline) — 2026-07-29
+
+Florian : « la gestion du zoom par rapport à l'emplacement de la souris
+est tout sauf fluide » puis « les blocs vibrent en partant loin avant de
+revenir à leur place » — deux bugs distincts, deux fixes (commit 065ea4b).
+
+- **Scène** : le `zoomToCursor` de three.js calcule sa correction d'ancre
+  UNE fois par cran de molette ; avec `enableDamping` le zoom s'étale sur
+  plusieurs frames → l'ancre dérive. Remplacé par un zoom custom façon
+  apps carto (MapLibre/camera-controls) : molette interceptée en CAPTURE
+  sur le parent du canvas (les MapControls ne la voient plus), cible de
+  zoom + point-monde mémorisé, convergence exponentielle en `useFrame`
+  (rate 13/s, indépendante du framerate) avec re-verrouillage de l'ancre
+  À CHAQUE frame (re-raycast du NDC mémorisé → translation caméra+target
+  de la dérive exacte). Boutons +/- reroutés (ancre = centre). Pincement
+  tactile inchangé (enableZoom des controls).
+- **Timeline** : la boucle de zoom posait `scrollLeft` en synchrone
+  pendant que React re-rendait les blocs en asynchrone → une frame peinte
+  avec le nouveau scroll et les anciennes positions (la « vibration »).
+  Fix : `flushSync(() => setPxPerMs(next))` AVANT `scrollLeft` — commit
+  atomique, blocs et scroll dans la même peinture. Question de Florian sur
+  une approche « vectorielle » : la vraie réponse pro est transform-based
+  (scaleX pendant le geste, re-layout au repos, façon Figma/Maps) — gardée
+  en plan B si le re-rendu par frame devenait lourd ; le bug réel était
+  l'ordre de peinture, pas le coût du re-layout.
