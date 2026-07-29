@@ -27,26 +27,40 @@ interface Peaks {
   durationS: number
 }
 
-function computePeaks(buffer: AudioBuffer): Peaks {
+/** Calcul des pics DÉCOUPÉ EN TRANCHES : chaque tranche de buckets rend la
+ * main au navigateur (setTimeout 0) avant la suivante — l'interface reste
+ * fluide pendant tout le calcul (fix « app freezée à l'import audio »,
+ * 2026-07-29). `cancelled` interrompt proprement si le fichier change. */
+async function computePeaksAsync(
+  buffer: AudioBuffer,
+  cancelled: () => boolean,
+): Promise<Peaks | null> {
   const buckets = Math.min(MAX_PEAK_BUCKETS, Math.max(1, Math.floor(buffer.duration * PEAK_BUCKETS_PER_S)))
   const min = new Float32Array(buckets).fill(0)
   const max = new Float32Array(buckets).fill(0)
   const samplesPerBucket = buffer.length / buckets
+  const SLICE = 2000 // buckets par tranche (~quelques ms de travail chacune)
   for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
     const data = buffer.getChannelData(ch)
-    for (let b = 0; b < buckets; b++) {
-      const start = Math.floor(b * samplesPerBucket)
-      const end = Math.min(data.length, Math.floor((b + 1) * samplesPerBucket))
-      let lo = 0, hi = 0
-      // Pas d'échantillonnage exhaustif nécessaire pour un affichage : un
-      // pas de 8 échantillons suffit et divise le coût d'autant.
-      for (let i = start; i < end; i += 8) {
-        const v = data[i]
-        if (v < lo) lo = v
-        if (v > hi) hi = v
+    for (let sliceStart = 0; sliceStart < buckets; sliceStart += SLICE) {
+      if (cancelled()) return null
+      const sliceEnd = Math.min(buckets, sliceStart + SLICE)
+      for (let b = sliceStart; b < sliceEnd; b++) {
+        const start = Math.floor(b * samplesPerBucket)
+        const end = Math.min(data.length, Math.floor((b + 1) * samplesPerBucket))
+        let lo = 0, hi = 0
+        // Pas d'échantillonnage exhaustif nécessaire pour un affichage : un
+        // pas de 8 échantillons suffit et divise le coût d'autant.
+        for (let i = start; i < end; i += 8) {
+          const v = data[i]
+          if (v < lo) lo = v
+          if (v > hi) hi = v
+        }
+        if (lo < min[b]) min[b] = lo
+        if (hi > max[b]) max[b] = hi
       }
-      if (lo < min[b]) min[b] = lo
-      if (hi > max[b]) max[b] = hi
+      // Rendre la main : l'UI respire entre deux tranches.
+      await new Promise((r) => setTimeout(r, 0))
     }
   }
   return { min, max, bucketMs: (buffer.duration * 1000) / buckets, durationS: buffer.duration }
@@ -70,17 +84,29 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
   // Moteur audio : instance wavesurfer cachée, source des pics + lecture.
   useEffect(() => {
     if (!hiddenRef.current) return
+    let cancelled = false
     const ws = WaveSurfer.create({
       container: hiddenRef.current,
       height: 1,
       url: convertFileSrc(audioPath),
       interact: false,
+      // Décodage BASSE FRÉQUENCE pour la waveform uniquement : 12 kHz
+      // suffisent largement à des pics d'affichage et divisent le coût de
+      // decodeAudioData par ~4. La LECTURE passe par l'élément <audio>
+      // natif (backend MediaElement de wavesurfer 7) et garde la qualité
+      // d'origine — fix « app freezée à l'import audio ».
+      sampleRate: 12000,
+      // Le rendu interne de wavesurfer est inutile (canvas maison) : un
+      // renderFunction vide lui évite de peindre sa propre waveform.
+      renderFunction: () => {},
     })
     wsRef.current = ws
     ws.on('decode', () => {
       const buffer = ws.getDecodedData()
       if (!buffer) return
-      setPeaks(computePeaks(buffer))
+      computePeaksAsync(buffer, () => cancelled).then((result) => {
+        if (result && !cancelled) setPeaks(result)
+      })
       // Le backend intègre la durée réelle au transport ; on ne l'envoie
       // que si elle manque ou diverge (> 50 ms) pour éviter un broadcast
       // projet inutile à chaque chargement.
@@ -89,6 +115,7 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
       }
     })
     return () => {
+      cancelled = true
       ws.destroy()
       wsRef.current = null
       setPeaks(null)
@@ -132,6 +159,9 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
     if (!peaks) {
       ctx.fillStyle = '#3a405230'
       ctx.fillRect(0, height / 2 - 1, viewportWidth, 2)
+      ctx.fillStyle = '#7a7a88'
+      ctx.font = '11px system-ui, sans-serif'
+      ctx.fillText('Décodage de l’audio…', 8, height / 2 - 6)
       return
     }
     const mid = height / 2
