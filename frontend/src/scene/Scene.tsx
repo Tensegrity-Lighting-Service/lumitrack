@@ -276,54 +276,6 @@ function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown }
   )
 }
 
-/** Boîte de transformation de la sélection multiple : rectangle englobant
- * + poignées d'échelle aux 4 coins + poignée de rotation au-dessus. Toutes
- * les poignées gardent une taille écran constante. */
-function SelectionBox({ bounds, zCm, onScaleDown, onRotateDown }: {
-  bounds: Bounds
-  zCm: number
-  onScaleDown: (e: ThreeEvent<PointerEvent>, corner: [number, number]) => void
-  onRotateDown: (e: ThreeEvent<PointerEvent>) => void
-}) {
-  const { minX, minY, maxX, maxY } = bounds
-  const corners: [number, number][] = [
-    [minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY],
-  ]
-  const rectPoints = [...corners, corners[0]].map(([x, y]) =>
-    new THREE.Vector3(...stageToLocal(x, y, zCm)))
-  const topCenter: [number, number] = [(minX + maxX) / 2, minY]
-  const rotRef = useRef<THREE.Group>(null)
-  useFrame(({ camera }) => {
-    if (!rotRef.current) return
-    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
-    // La poignée de rotation flotte à distance écran constante au-dessus.
-    rotRef.current.position.set(0, 0, -(ROTATE_HANDLE_OFFSET_PX / zoom))
-  })
-  const [tx, ty, tz] = stageToLocal(topCenter[0], topCenter[1], zCm)
-  return (
-    <group>
-      <Line points={rectPoints} color="#4f6df5" lineWidth={1.5} dashed dashSize={0.25} gapSize={0.15}
-        transparent opacity={0.9} depthTest={false} renderOrder={1040} />
-      {corners.map(([x, y], i) => (
-        <PathMarker
-          key={i} xCm={x} yCm={y} zCm={zCm} px={HANDLE_PX} color="#4f6df5" shape="diamond"
-          selected={false}
-          onPointerDown={(e) => onScaleDown(e, corners[(i + 2) % 4])}
-        />
-      ))}
-      <group position={[tx, ty, tz]}>
-        <group ref={rotRef}>
-          <PathMarker
-            xCm={0} yCm={0} zCm={0} px={ROTATE_HANDLE_PX} color="#f5c84f" shape="dot"
-            selected={false}
-            onPointerDown={onRotateDown}
-          />
-        </group>
-      </group>
-    </group>
-  )
-}
-
 // Ancres du tracé (départ dynamique, waypoints, cible) + poignées par
 // défaut au tiers de corde — MÊME convention que le moteur (timeline.py /
 // path.rs), pour que la poignée affichée soit celle réellement appliquée.
@@ -925,6 +877,239 @@ function DarkenMask({ maskBounds, stageGroupRef, widthM, heightM }: {
  * pointerdown on an actor arms it, pointermove raycasts against a
  * horizontal plane at the actor's height and throttles setActivation calls,
  * pointerup releases MapControls again. */
+
+/** Boîte de transformation de la sélection multiple — MÊME modèle que
+ * l'édition de la zone de jeu (ZoneOutline/ZoneHandles) : contour +
+ * remplissage translucide (draggable = déplacer toute la sélection),
+ * 8 poignées ScreenSized (4 coins = 2 axes, 4 milieux d'arêtes = 1 axe)
+ * avec l'ANCRE OPPOSÉE FIGÉE pendant le resize, sphère de rotation
+ * au-dessus. La rotation écrit au lâcher un arc de Bézier par acteur
+ * autour du centre de la boîte (chaque acteur suit son cercle, pas une
+ * droite) + rotation du lacet. */
+function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, stageGroupRef, controlsRef, snapToGrid, gridSizeCm }: {
+  project: Project
+  positions: Record<string, Pose>
+  selectedCueId: string
+  selectedPointIds: string[]
+  stageGroupRef: React.RefObject<THREE.Group | null>
+  controlsRef: React.RefObject<MapControlsImpl | null>
+  snapToGrid: boolean
+  gridSizeCm: number
+}) {
+  const { camera, raycaster, gl } = useThree()
+
+  type Member = { pointId: string; baseX: number; baseY: number; baseYaw: number | null }
+  const membersNow = (): Member[] => {
+    const cue = project.cues.find((c) => c.id === selectedCueId)
+    const out: Member[] = []
+    for (const id of selectedPointIds) {
+      const act = cue?.activations[id]
+      const pose = positions[id]
+      const baseX = act?.targetXCm ?? pose?.[0]
+      const baseY = act?.targetYCm ?? pose?.[1]
+      if (baseX === undefined || baseX === null || baseY === undefined || baseY === null) continue
+      out.push({ pointId: id, baseX, baseY, baseYaw: act?.targetYawDeg ?? pose?.[3] ?? null })
+    }
+    return out
+  }
+
+  const live = membersNow()
+  const bounds = boundsOf(live)
+
+  const dragRef = useRef<{
+    kind: DragKind
+    members: Member[]
+    b: Bounds
+    startCm: { x: number; y: number }
+    handle?: ResizeHandleDef
+    startAngle?: number
+    lastTheta: number
+    lastSent: number
+  } | null>(null)
+
+  useEffect(() => {
+    const dom = gl.domElement
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+    const hit = new THREE.Vector3()
+
+    const toNdc = (e: PointerEvent) => {
+      const rect = dom.getBoundingClientRect()
+      return new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      )
+    }
+
+    const hitCm = (e: PointerEvent): { x: number; y: number } | null => {
+      raycaster.setFromCamera(toNdc(e), camera)
+      if (!raycaster.ray.intersectPlane(plane, hit) || !stageGroupRef.current) return null
+      const local = stageGroupRef.current.worldToLocal(hit.clone())
+      return { x: local.x / CM_TO_M, y: local.z / CM_TO_M }
+    }
+
+    const endDrag = () => {
+      const drag = dragRef.current
+      dragRef.current = null
+      if (controlsRef.current) controlsRef.current.enabled = true
+      if (!drag || drag.kind !== 'rotate' || Math.abs(drag.lastTheta) < 1e-4) return
+      // Écriture finale de la rotation : cible + ARC autour du centre +
+      // lacet tourné du même angle.
+      const c = { x: (drag.b.minX + drag.b.maxX) / 2, y: (drag.b.minY + drag.b.maxY) / 2 }
+      const thetaDeg = (drag.lastTheta * 180) / Math.PI
+      for (const m of drag.members) {
+        const arc = rotationArc(m.baseX, m.baseY, c.x, c.y, drag.lastTheta)
+        sidecar.setActivation(selectedCueId, m.pointId, {
+          targetXCm: arc.targetXCm,
+          targetYCm: arc.targetYCm,
+          pathPoints: arc.pathPoints,
+          startHandle: arc.startHandle,
+          targetHandle: arc.targetHandle,
+          ...(m.baseYaw !== null ? { targetYawDeg: m.baseYaw + thetaDeg } : {}),
+        })
+      }
+    }
+
+    const onMove = (e: PointerEvent) => {
+      const drag = dragRef.current
+      if (!drag) return
+      const now = performance.now()
+      if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
+      drag.lastSent = now
+      const p = hitCm(e)
+      if (!p) return
+      const { b } = drag
+      const c = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }
+
+      if (drag.kind === 'move') {
+        let dx = p.x - drag.startCm.x
+        let dy = p.y - drag.startCm.y
+        if (snapToGrid && gridSizeCm > 0) {
+          dx = Math.round(dx / gridSizeCm) * gridSizeCm
+          dy = Math.round(dy / gridSizeCm) * gridSizeCm
+        }
+        for (const m of drag.members) {
+          sidecar.setActivation(selectedCueId, m.pointId, {
+            targetXCm: m.baseX + dx, targetYCm: m.baseY + dy,
+          })
+        }
+      } else if (drag.kind === 'resize' && drag.handle) {
+        // Ancre = coin/arête OPPOSÉ(E), figé(e) pendant tout le geste —
+        // même sémantique que le resize de la zone de jeu.
+        const h = drag.handle
+        const anchorX = b.minX + (1 - h.fx) * (b.maxX - b.minX)
+        const anchorY = b.minY + (1 - h.fz) * (b.maxY - b.minY)
+        const startHX = b.minX + h.fx * (b.maxX - b.minX)
+        const startHY = b.minY + h.fz * (b.maxY - b.minY)
+        const sx = (h.axis === 'x' || h.axis === 'both') && Math.abs(startHX - anchorX) > 1e-6
+          ? (p.x - anchorX) / (startHX - anchorX) : 1
+        const sy = (h.axis === 'z' || h.axis === 'both') && Math.abs(startHY - anchorY) > 1e-6
+          ? (p.y - anchorY) / (startHY - anchorY) : 1
+        for (const m of drag.members) {
+          sidecar.setActivation(selectedCueId, m.pointId, {
+            targetXCm: anchorX + (m.baseX - anchorX) * sx,
+            targetYCm: anchorY + (m.baseY - anchorY) * sy,
+          })
+        }
+      } else if (drag.kind === 'rotate') {
+        const angle = Math.atan2(p.y - c.y, p.x - c.x)
+        if (drag.startAngle === undefined) { drag.startAngle = angle; return }
+        const theta = angle - drag.startAngle
+        drag.lastTheta = theta
+        // Pendant le geste : cibles seules (léger) ; l'arc part au lâcher.
+        for (const m of drag.members) {
+          const arc = rotationArc(m.baseX, m.baseY, c.x, c.y, theta)
+          sidecar.setActivation(selectedCueId, m.pointId, {
+            targetXCm: arc.targetXCm, targetYCm: arc.targetYCm,
+          })
+        }
+      }
+    }
+
+    dom.addEventListener('pointermove', onMove)
+    dom.addEventListener('pointerup', endDrag)
+    dom.addEventListener('pointerleave', endDrag)
+    return () => {
+      dom.removeEventListener('pointermove', onMove)
+      dom.removeEventListener('pointerup', endDrag)
+      dom.removeEventListener('pointerleave', endDrag)
+    }
+  }, [gl, camera, raycaster, selectedCueId, snapToGrid, gridSizeCm])
+
+  if (!bounds || live.length < 2) return null
+  const { minX, minY, maxX, maxY } = bounds
+  const wM = (maxX - minX) * CM_TO_M
+  const hM = (maxY - minY) * CM_TO_M
+
+  const begin = (e: ThreeEvent<PointerEvent>, kind: DragKind, handle?: ResizeHandleDef) => {
+    e.stopPropagation()
+    const members = membersNow()
+    const b = boundsOf(members)
+    if (!b || members.length < 2) return
+    const rect = gl.domElement.getBoundingClientRect()
+    raycaster.setFromCamera(new THREE.Vector2(
+      ((e.nativeEvent.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.nativeEvent.clientY - rect.top) / rect.height) * 2 + 1,
+    ), camera)
+    const hp = new THREE.Vector3()
+    raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hp)
+    const local = stageGroupRef.current ? stageGroupRef.current.worldToLocal(hp.clone()) : hp
+    dragRef.current = {
+      kind, members, b, handle,
+      startCm: { x: local.x / CM_TO_M, y: local.z / CM_TO_M },
+      lastTheta: 0, lastSent: 0,
+    }
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const outline = [
+    new THREE.Vector3(...stageToLocal(minX, minY, 0)),
+    new THREE.Vector3(...stageToLocal(maxX, minY, 0)),
+    new THREE.Vector3(...stageToLocal(maxX, maxY, 0)),
+    new THREE.Vector3(...stageToLocal(minX, maxY, 0)),
+    new THREE.Vector3(...stageToLocal(minX, minY, 0)),
+  ].map((v) => new THREE.Vector3(v.x, 0.02, v.z))
+
+  return (
+    <group>
+      <Line points={outline} color="#ffffff" lineWidth={2} transparent opacity={0.9}
+        depthTest={false} renderOrder={1040} />
+      {/* Remplissage : lisible ET saisissable — attraper l'intérieur de la
+          boîte déplace toute la sélection (comme la zone de jeu). */}
+      <mesh
+        position={[(minX * CM_TO_M + maxX * CM_TO_M) / 2, 0.015, (minY * CM_TO_M + maxY * CM_TO_M) / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        renderOrder={1039}
+        onPointerDown={(e) => begin(e, 'move')}
+        onPointerOver={() => { document.body.style.cursor = 'move' }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        <planeGeometry args={[wM, hM]} />
+        <meshBasicMaterial color="#4f6df5" transparent opacity={0.10} depthWrite={false} depthTest={false} />
+      </mesh>
+      {RESIZE_HANDLES.map((h) => {
+        const x = minX + h.fx * (maxX - minX)
+        const y = minY + h.fz * (maxY - minY)
+        const [lx, , lz] = stageToLocal(x, y, 0)
+        return (
+          <ScreenSizedHandle
+            key={h.key}
+            position={[lx, 0.03, lz]}
+            sizePx={HANDLE_PX}
+            args={h.axis === 'both' ? [1, 1, 1] : h.axis === 'x' ? [0.35, 1, 1] : [1, 1, 0.35]}
+            color="#ffffff"
+            cursor={h.cursor}
+            renderOrder={1041}
+            onPointerDown={(e) => begin(e, 'resize', h)}
+          />
+        )
+      })}
+      <group position={[((minX + maxX) / 2) * CM_TO_M, 0, minY * CM_TO_M]}>
+        <RotateHandle widthM={0} onPointerDown={(e) => begin(e, 'rotate')} />
+      </group>
+    </group>
+  )
+}
+
 function SceneContent({
   project, positions, selectedPointId, selectedPointIds, selectedCueId, blockContext, onSelectPoint, onSelectPoints,
   onLassoRect, cameraLocked, fitToken, editingZone,
@@ -961,12 +1146,7 @@ function SceneContent({
         baseCursor: { x: number; y: number } | null }
     | { kind: 'waypoint'; pointId: string; index: number; planeY: number; lastSent: number }
     | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number }
-    | { kind: 'box-scale'; members: { pointId: string; baseX: number; baseY: number }[]
-        center: { x: number; y: number }; refCorner: { x: number; y: number }
-        planeY: number; lastSent: number }
-    | { kind: 'box-rotate'; members: { pointId: string; baseX: number; baseY: number; baseYaw: number | null }[]
-        center: { x: number; y: number }; startAngle: number | null; lastTheta: number
-        planeY: number; lastSent: number }
+
   const dragRef = useRef<SceneDrag | null>(null)
   // Sélection d'un waypoint du tracé (Suppr le retire, voir keydown).
   const [selectedWaypoint, setSelectedWaypoint] = useState<{ pointId: string; index: number } | null>(null)
@@ -1088,23 +1268,6 @@ function SceneContent({
       const drag = dragRef.current
       if (!drag) return
       dragRef.current = null
-      if (drag.kind === 'box-rotate' && selectedCueId && Math.abs(drag.lastTheta) > 1e-4) {
-        // Écriture finale : position d'arrivée + ARC de Bézier autour du
-        // pivot (le moteur les parcourt à vitesse constante), + rotation du
-        // lacet du même angle.
-        const thetaDeg = (drag.lastTheta * 180) / Math.PI
-        for (const m of drag.members) {
-          const arc = rotationArc(m.baseX, m.baseY, drag.center.x, drag.center.y, drag.lastTheta)
-          sidecar.setActivation(selectedCueId, m.pointId, {
-            targetXCm: arc.targetXCm,
-            targetYCm: arc.targetYCm,
-            pathPoints: arc.pathPoints,
-            startHandle: arc.startHandle,
-            targetHandle: arc.targetHandle,
-            ...(m.baseYaw !== null ? { targetYawDeg: m.baseYaw + thetaDeg } : {}),
-          })
-        }
-      }
       // Restore to the *locked* state, not unconditionally true — otherwise
       // finishing an actor drag would silently re-enable a locked camera.
       if (controlsRef.current) controlsRef.current.enabled = !cameraLocked
@@ -1147,41 +1310,6 @@ function SceneContent({
           }
         } else {
           sidecar.setActivation(selectedCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
-        }
-        return
-      }
-
-      if (drag.kind === 'box-scale') {
-        // Échelle libre autour du centre : le coin saisi suit le curseur,
-        // chaque membre est redistribué proportionnellement.
-        const { center, refCorner } = drag
-        const sx = Math.abs(refCorner.x - center.x) > 1e-6
-          ? (xCm - center.x) / (refCorner.x - center.x) : 1
-        const sy = Math.abs(refCorner.y - center.y) > 1e-6
-          ? (yCm - center.y) / (refCorner.y - center.y) : 1
-        for (const m of drag.members) {
-          sidecar.setActivation(selectedCueId, m.pointId, {
-            targetXCm: center.x + (m.baseX - center.x) * sx,
-            targetYCm: center.y + (m.baseY - center.y) * sy,
-          })
-        }
-        return
-      }
-
-      if (drag.kind === 'box-rotate') {
-        const { center } = drag
-        const angle = Math.atan2(yCm - center.y, xCm - center.x)
-        if (drag.startAngle === null) { drag.startAngle = angle; return }
-        const theta = angle - drag.startAngle
-        drag.lastTheta = theta
-        // Pendant le geste : cibles seulement (léger). Les ARCS de tracé
-        // sont écrits au lâcher (endDrag) — c'est là que chaque acteur
-        // reçoit son arc de cercle autour du pivot commun.
-        for (const m of drag.members) {
-          const arc = rotationArc(m.baseX, m.baseY, center.x, center.y, theta)
-          sidecar.setActivation(selectedCueId, m.pointId, {
-            targetXCm: arc.targetXCm, targetYCm: arc.targetYCm,
-          })
         }
         return
       }
@@ -1363,52 +1491,6 @@ function SceneContent({
     if (typeof anchor === 'number') setSelectedWaypoint({ pointId, index: anchor })
     if (!selectedCueId) return
     dragRef.current = { kind: 'handle', pointId, anchor, side, planeY: zCm * CM_TO_M, lastSent: 0 }
-    if (controlsRef.current) controlsRef.current.enabled = false
-  }
-
-  const boxMembers = () => {
-    const cue = liveRef.current.project.cues.find((c) => c.id === selectedCueId)
-    const out: { pointId: string; baseX: number; baseY: number; baseYaw: number | null }[] = []
-    for (const id of selectedIdsRef.current) {
-      const act = cue?.activations[id]
-      const pose = positionsRef.current[id]
-      const baseX = act?.targetXCm ?? pose?.[0]
-      const baseY = act?.targetYCm ?? pose?.[1]
-      if (baseX === undefined || baseY === undefined || baseX === null || baseY === null) continue
-      out.push({ pointId: id, baseX, baseY, baseYaw: act?.targetYawDeg ?? pose?.[3] ?? null })
-    }
-    return out
-  }
-
-  const handleBoxScaleDown = (e: ThreeEvent<PointerEvent>, refCorner: [number, number], planeZCm: number) => {
-    e.stopPropagation()
-    if (!selectedCueId) return
-    const members = boxMembers()
-    if (members.length < 2) return
-    const b = boundsOf(members, 0)
-    if (!b) return
-    dragRef.current = {
-      kind: 'box-scale', members,
-      center: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
-      refCorner: { x: refCorner[0], y: refCorner[1] },
-      planeY: planeZCm * CM_TO_M, lastSent: 0,
-    }
-    if (controlsRef.current) controlsRef.current.enabled = false
-  }
-
-  const handleBoxRotateDown = (e: ThreeEvent<PointerEvent>, planeZCm: number) => {
-    e.stopPropagation()
-    if (!selectedCueId) return
-    const members = boxMembers()
-    if (members.length < 2) return
-    const b = boundsOf(members, 0)
-    if (!b) return
-    dragRef.current = {
-      kind: 'box-rotate', members,
-      center: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
-      startAngle: null, lastTheta: 0,
-      planeY: planeZCm * CM_TO_M, lastSent: 0,
-    }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
@@ -1617,33 +1699,18 @@ function SceneContent({
             block shows its target ghost and static trajectory. By default
             all of them; selecting an actor highlights its own and dims the
             rest (context stays visible). */}
-        {/* Boîte de transformation de la sélection multiple (échelle aux
-            coins, rotation au-dessus). Visible dès 2 acteurs sélectionnés
-            avec un bloc actif — les bases suivent les cibles du bloc. */}
-        {selectedCueId && selectedPointIds.length >= 2 && (() => {
-          const cue = project.cues.find((c) => c.id === selectedCueId)
-          const members: { baseX: number; baseY: number }[] = []
-          for (const id of selectedPointIds) {
-            const act = cue?.activations[id]
-            const pose = positions[id]
-            const baseX = act?.targetXCm ?? pose?.[0]
-            const baseY = act?.targetYCm ?? pose?.[1]
-            if (baseX !== undefined && baseX !== null && baseY !== undefined && baseY !== null) {
-              members.push({ baseX, baseY })
-            }
-          }
-          const b = boundsOf(members)
-          if (!b || members.length < 2) return null
-          const zRef = selectedPointId ? positions[selectedPointId]?.[2] ?? 0 : 0
-          return (
-            <SelectionBox
-              bounds={b}
-              zCm={zRef}
-              onScaleDown={(e, corner) => handleBoxScaleDown(e, corner, zRef)}
-              onRotateDown={(e) => handleBoxRotateDown(e, zRef)}
-            />
-          )
-        })()}
+        {selectedCueId && selectedPointIds.length >= 2 && (
+          <SelectionTransform
+            project={project}
+            positions={positions}
+            selectedCueId={selectedCueId}
+            selectedPointIds={selectedPointIds}
+            stageGroupRef={stageGroupRef}
+            controlsRef={controlsRef}
+            snapToGrid={snapToGrid}
+            gridSizeCm={project.gridSizeCm}
+          />
+        )}
 
         {editEntries && project.points.map((point) => {
           const entry = editEntries[point.id]
