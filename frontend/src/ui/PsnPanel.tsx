@@ -38,8 +38,13 @@ export function PsnPanel({ project, onClose }: {
   useEffect(() => { setSystemName(project.psnSystemName) }, [project.psnSystemName])
 
   const addresses = ifaces?.addresses ?? ['0.0.0.0']
-  const upAxis = project.transformUpAxis ?? 'y'
   const fmt = (v: number) => v.toFixed(3)
+
+  // L'app n'émet plus qu'en convention OFFICIELLE (spec 2.03 : Y vertical).
+  // Un vieux projet resté en "z" est ramené à "y" silencieusement.
+  useEffect(() => {
+    if (project.transformUpAxis === 'z') sidecar.updatePsnConfig({ upAxis: 'y' })
+  }, [project.transformUpAxis])
 
   return (
     <div className="psn-overlay" onClick={onClose}>
@@ -103,19 +108,11 @@ export function PsnPanel({ project, onClose }: {
 
           <section>
             <h3>Repère de sortie</h3>
-            <label>Axe vertical
-              <select
-                value={upAxis}
-                onChange={(e) => sidecar.updatePsnConfig({ upAxis: e.target.value as 'y' | 'z' })}
-              >
-                <option value="y">Y vertical — spec officielle (Capture, MA3…)</option>
-                <option value="z">Z vertical — héritage / outils non conformes</option>
-              </select>
-            </label>
             <p className="psn-note">
-              Spec PSN 2.03 : « positive x is right, positive y is up,
-              positive z is depth ». Le lacet suit : vecteur axe-angle sur
-              l’axe vertical choisi.
+              Convention : spec PSN 2.03 — « positive x is right, positive y
+              is up, positive z is depth ». La hauteur part en pos_y, le
+              lacet en ori_y (vecteur axe-angle). Capture et MA3 suivent la
+              spec.
             </p>
             <div className="psn-grid2">
               <label>Origine X (cm)
@@ -177,14 +174,14 @@ export function PsnPanel({ project, onClose }: {
         </section>
 
         <section>
-          <h3>Moniteur — données émises {preview ? `(${preview.rateHz} Hz, axe vertical ${preview.upAxis.toUpperCase()})` : ''}</h3>
+          <h3>Moniteur — données émises {preview ? `(${preview.rateHz} Hz)` : ''}</h3>
           <table className="psn-table psn-mono">
             <thead>
               <tr>
                 <th>ID</th><th>Nom</th>
                 <th>pos_x</th>
-                <th className={upAxis === 'y' ? 'psn-up' : ''}>pos_y{upAxis === 'y' ? ' ↑' : ''}</th>
-                <th className={upAxis === 'z' ? 'psn-up' : ''}>pos_z{upAxis === 'z' ? ' ↑' : ''}</th>
+                <th className="psn-up">pos_y ↑</th>
+                <th>pos_z</th>
                 <th>ori (rad)</th>
               </tr>
             </thead>
@@ -194,8 +191,8 @@ export function PsnPanel({ project, onClose }: {
                   <td>{t.id}</td>
                   <td>{t.name}</td>
                   <td>{fmt(t.posX)}</td>
-                  <td className={upAxis === 'y' ? 'psn-up' : ''}>{fmt(t.posY)}</td>
-                  <td className={upAxis === 'z' ? 'psn-up' : ''}>{fmt(t.posZ)}</td>
+                  <td className="psn-up">{fmt(t.posY)}</td>
+                  <td>{fmt(t.posZ)}</td>
                   <td>{fmt(t.oriX)}, {fmt(t.oriY)}, {fmt(t.oriZ)}</td>
                 </tr>
               ))}

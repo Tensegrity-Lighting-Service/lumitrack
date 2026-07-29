@@ -54,6 +54,8 @@ const SNAP_RADIUS_M = 0.6
 const GHOST_PX = 15
 // Waypoints/poignées du tracé spatial : mêmes règles d'échelle écran.
 const WAYPOINT_PX = 9
+const BOX_PAD_PX = 14
+const EDGE_HIT_PX = 12
 const PATH_HANDLE_PX = 6
 // Live-state dimming in block-edit mode (§12.6): activated actors stay
 // readable, the rest is context; the ghosts/trajectories are the subject.
@@ -534,25 +536,41 @@ function ScreenSizedHandle({ position, sizePx, args, color, onPointerDown, curso
   cursor: string
   renderOrder: number
 }) {
+  // Zone de saisie ÉLARGIE : un carré invisible ~2.6x autour de la poignée
+  // visible — attraper une poignée ne demande plus une visée au pixel.
+  const hitRef = useRef<THREE.Mesh>(null)
   const ref = useRef<THREE.Mesh>(null)
   useFrame(({ camera }) => {
-    if (!ref.current) return
     const zoom = (camera as THREE.OrthographicCamera).zoom || 1
     const s = sizePx / zoom
-    ref.current.scale.set(s, s, s)
+    if (ref.current) ref.current.scale.set(s, s, s)
+    if (hitRef.current) hitRef.current.scale.set(s * 2.6, s * 2.6, s * 2.6)
   })
   return (
-    <mesh
-      ref={ref}
-      position={position}
-      renderOrder={renderOrder}
-      onPointerDown={onPointerDown}
-      onPointerOver={() => { document.body.style.cursor = cursor }}
-      onPointerOut={() => { document.body.style.cursor = 'auto' }}
-    >
-      <boxGeometry args={args} />
-      <meshBasicMaterial color={color} depthTest={false} />
-    </mesh>
+    <group>
+      <mesh
+        ref={ref}
+        position={position}
+        renderOrder={renderOrder}
+        onPointerDown={onPointerDown}
+        onPointerOver={() => { document.body.style.cursor = cursor }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        <boxGeometry args={args} />
+        <meshBasicMaterial color={color} depthTest={false} />
+      </mesh>
+      <mesh
+        ref={hitRef}
+        position={position}
+        renderOrder={renderOrder - 1}
+        onPointerDown={onPointerDown}
+        onPointerOver={() => { document.body.style.cursor = cursor }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        <boxGeometry args={[1, 0.4, 1]} />
+        <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} />
+      </mesh>
+    </group>
   )
 }
 
@@ -914,7 +932,11 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
   }
 
   const live = membersNow()
-  const bounds = boundsOf(live)
+  // Marge de la boîte en PIXELS écran (constante au zoom) : la boîte
+  // dépasse la sélection de ~14 px, elle reste lisible à toute échelle.
+  const zoomNow = (camera as THREE.OrthographicCamera).zoom || 1
+  const padCm = (BOX_PAD_PX / zoomNow) / CM_TO_M
+  const bounds = boundsOf(live, padCm)
 
   const dragRef = useRef<{
     kind: DragKind
@@ -1086,6 +1108,24 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
         <planeGeometry args={[wM, hM]} />
         <meshBasicMaterial color="#4f6df5" transparent opacity={0.10} depthWrite={false} depthTest={false} />
       </mesh>
+      {/* Arêtes saisissables sur TOUTE leur longueur : barres invisibles
+          d'épaisseur écran constante, mêmes gestes que les poignées de
+          milieu d'arête. */}
+      {([
+        { h: RESIZE_HANDLES[4], x: (minX + maxX) / 2, y: minY, horiz: true },
+        { h: RESIZE_HANDLES[5], x: (minX + maxX) / 2, y: maxY, horiz: true },
+        { h: RESIZE_HANDLES[6], x: minX, y: (minY + maxY) / 2, horiz: false },
+        { h: RESIZE_HANDLES[7], x: maxX, y: (minY + maxY) / 2, horiz: false },
+      ] as const).map(({ h, x, y, horiz }) => (
+        <EdgeHit
+          key={`edge-${h.key}`}
+          center={[x, y]}
+          lengthCm={horiz ? maxX - minX : maxY - minY}
+          horizontal={horiz}
+          cursor={h.cursor}
+          onPointerDown={(e) => begin(e, 'resize', h)}
+        />
+      ))}
       {RESIZE_HANDLES.map((h) => {
         const x = minX + h.fx * (maxX - minX)
         const y = minY + h.fz * (maxY - minY)
@@ -1103,8 +1143,92 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
           />
         )
       })}
-      <group position={[((minX + maxX) / 2) * CM_TO_M, 0, minY * CM_TO_M]}>
-        <RotateHandle widthM={0} onPointerDown={(e) => begin(e, 'rotate')} />
+      <SelectionRotateHandle
+        topCenter={[(minX + maxX) / 2, minY]}
+        onPointerDown={(e) => begin(e, 'rotate')}
+      />
+    </group>
+  )
+}
+
+/** Barre de saisie invisible le long d'une arête de la boîte : longueur
+ * monde (suit la boîte), épaisseur écran constante. */
+function EdgeHit({ center, lengthCm, horizontal, cursor, onPointerDown }: {
+  center: readonly [number, number]
+  lengthCm: number
+  horizontal: boolean
+  cursor: string
+  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const ref = useRef<THREE.Mesh>(null)
+  const lengthM = Math.max(0.05, lengthCm * CM_TO_M)
+  useFrame(({ camera }) => {
+    if (!ref.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const thick = EDGE_HIT_PX / zoom
+    ref.current.scale.set(horizontal ? lengthM : thick, 1, horizontal ? thick : lengthM)
+  })
+  const [lx, , lz] = stageToLocal(center[0], center[1], 0)
+  return (
+    <mesh
+      ref={ref}
+      position={[lx, 0.025, lz]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      renderOrder={1038}
+      onPointerDown={onPointerDown}
+      onPointerOver={() => { document.body.style.cursor = cursor }}
+      onPointerOut={() => { document.body.style.cursor = 'auto' }}
+    >
+      <planeGeometry args={[1, 1]} />
+      <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+    </mesh>
+  )
+}
+
+/** Poignée de rotation de la boîte de sélection : sphère dorée reliée au
+ * bord haut par une tige, taille/offset écran constants, hitbox élargie,
+ * renderOrder au-dessus du remplissage (elle était invisible en dessous). */
+function SelectionRotateHandle({ topCenter, onPointerDown }: {
+  topCenter: readonly [number, number]
+  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const grpRef = useRef<THREE.Group>(null)
+  const stemRef = useRef<THREE.Mesh>(null)
+  useFrame(({ camera }) => {
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const offset = ROTATE_HANDLE_OFFSET_PX / zoom
+    const s = ROTATE_HANDLE_PX / zoom
+    if (grpRef.current) {
+      grpRef.current.position.set(0, 0.04, -offset)
+      grpRef.current.scale.set(s, s, s)
+    }
+    if (stemRef.current) {
+      // Tige : du bord haut jusqu'à la sphère (plan fin étiré en Z).
+      stemRef.current.position.set(0, 0.035, -offset / 2)
+      stemRef.current.scale.set(1.2 / zoom, 1, offset)
+    }
+  })
+  const [lx, , lz] = stageToLocal(topCenter[0], topCenter[1], 0)
+  return (
+    <group position={[lx, 0, lz]}>
+      <mesh ref={stemRef} rotation={[-Math.PI / 2, 0, 0]} renderOrder={1042}>
+        <planeGeometry args={[1, 1]} />
+        <meshBasicMaterial color="#f5c84f" transparent opacity={0.8} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+      <group
+        ref={grpRef}
+        onPointerDown={onPointerDown}
+        onPointerOver={() => { document.body.style.cursor = 'grab' }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        <mesh renderOrder={1043}>
+          <sphereGeometry args={[0.55, 16, 12]} />
+          <meshBasicMaterial color="#f5c84f" depthTest={false} />
+        </mesh>
+        <mesh renderOrder={1042}>
+          <sphereGeometry args={[1.5, 10, 8]} />
+          <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} />
+        </mesh>
       </group>
     </group>
   )
