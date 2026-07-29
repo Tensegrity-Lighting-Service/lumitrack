@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { Scene } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
@@ -177,11 +177,20 @@ function App() {
   const zoomIn = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1.2 }))
   const zoomOut = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1 / 1.2 }))
 
+  // Fermeture au clic extérieur — sur POINTERDOWN avec test d'appartenance
+  // (ref.contains), pas sur `click` global : le clic d'ouverture sur ⚙
+  // continuait de remonter jusqu'à window où l'écouteur fraîchement posé
+  // (React flushe les effets synchronement sur les événements discrets) le
+  // refermait dans la même frame — le popover semblait « ne pas marcher ».
+  const gridSettingsRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!showGridSettings) return
-    const close = () => setShowGridSettings(false)
-    window.addEventListener('click', close)
-    return () => window.removeEventListener('click', close)
+    const close = (e: PointerEvent) => {
+      if (gridSettingsRef.current?.contains(e.target as Node)) return
+      setShowGridSettings(false)
+    }
+    window.addEventListener('pointerdown', close)
+    return () => window.removeEventListener('pointerdown', close)
   }, [showGridSettings])
 
   const tMs = tick?.tMs ?? 0
@@ -437,7 +446,7 @@ function App() {
           >
             #
           </button>
-          <div className="viewport-toolbar-settings">
+          <div className="viewport-toolbar-settings" ref={gridSettingsRef}>
             <button title="Réglages de la grille" onClick={() => setShowGridSettings((v) => !v)}>⚙</button>
             {showGridSettings && (
               <div className="viewport-popover" onClick={(e) => e.stopPropagation()}>
