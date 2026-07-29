@@ -1032,7 +1032,7 @@ function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZo
       <Line points={outline} color="#4ff5e0" lineWidth={1.5} dashed dashSize={0.3} gapSize={0.18}
         transparent opacity={editing ? 0.95 : 0.5} depthTest={false} renderOrder={1035} />
       <mesh
-        position={[(xCm + widthCm / 2) * CM_TO_M, 0.012, (yCm + heightCm / 2) * CM_TO_M]}
+        position={[(xCm + widthCm / 2) * CM_TO_M, 0.025, (yCm + heightCm / 2) * CM_TO_M]}
         rotation={[-Math.PI / 2, 0, 0]}
         renderOrder={1034}
         onPointerDown={(e) => begin(e, 'move')}

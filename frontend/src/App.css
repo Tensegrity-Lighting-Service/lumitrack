@@ -620,3 +620,26 @@
   background: #1f2a28; color: #7ee0d0; border: 1px solid #2d4a44; cursor: pointer;
 }
 .roster li { cursor: grab; }
+
+/* ---- Inspecteur d'acteur ---- */
+.actor-inspector {
+  border: 1px solid #2c2c36; border-radius: 6px;
+  padding: 8px 10px; margin-bottom: 10px; background: #16161c;
+}
+.actor-inspector h3 {
+  margin: 0 0 6px; font-size: 12px;
+  display: flex; align-items: center; gap: 6px;
+}
+.actor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.actor-grid label {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 11px; color: #9a9aa8;
+}
+.actor-grid input, .actor-grid select {
+  background: #1f1f27; color: #d5d5e0; border: 1px solid #30303c;
+  border-radius: 4px; padding: 3px 6px; font-size: 12px; min-width: 0;
+}
+.actor-grid input[type="color"] { padding: 1px; height: 26px; }
+.backstage-block { border-bottom: 1px solid #22222a; padding-bottom: 6px; margin-bottom: 6px; }
+.backstage-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px 6px; }
+.backstage-grid label { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; color: #8a8a99; }

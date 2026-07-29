@@ -490,6 +490,9 @@ function App() {
         <h2>Inspecteur</h2>
         {editingZone && <StagePlacementPanel project={project} />}
         {editingZone && <BackstagePanel project={project} />}
+        {!editingZone && (
+          <ActorInspector project={project} selectedPointIds={selectedPointIds} />
+        )}
         {selectedCue && selectedPointIds.length > 1 && (
           <GroupTimingPanel
             cue={selectedCue}
@@ -505,7 +508,9 @@ function App() {
             onSelectPoint={setSelectedPointId}
           />
         ) : (
-          !editingZone && <p className="hint">Sélectionne un bloc dans la timeline.</p>
+          !editingZone && selectedPointIds.length === 0 && (
+            <p className="hint">Sélectionne un acteur ou un bloc.</p>
+          )
         )}
       </aside>
 
@@ -532,6 +537,76 @@ function App() {
 // Numeric mirror of the drag handles in Scene.tsx (move/resize/rotate) —
 // same underlying sidecar.updateStageMap() calls, for precise values or a
 // mouse-free adjustment. Only shown while "Éditer la zone de jeu" is on.
+/** Inspecteur de la sélection d'acteurs (mission « inspecteur dynamique ») :
+ * un acteur -> toutes ses propriétés éditables ; plusieurs -> aperçu et
+ * rappel des outils de groupe. Toujours affiché dès qu'une sélection
+ * existe, bloc ou pas. */
+function ActorInspector({ project, selectedPointIds }: {
+  project: Project
+  selectedPointIds: string[]
+}) {
+  const zones = project.backstageZones ?? []
+  if (selectedPointIds.length === 0) return null
+  if (selectedPointIds.length > 1) {
+    const names = selectedPointIds
+      .map((id) => project.points.find((p) => p.id === id)?.name ?? id)
+    return (
+      <div className="actor-inspector">
+        <h3>{selectedPointIds.length} acteurs sélectionnés</h3>
+        <p className="group-timing-names" title={names.join(', ')}>{names.join(', ')}</p>
+        <p className="hint">Boîte de transformation dans la scène · timing groupé ci-dessous avec un bloc actif.</p>
+      </div>
+    )
+  }
+  const point = project.points.find((p) => p.id === selectedPointIds[0])
+  if (!point) return null
+  return (
+    <div className="actor-inspector">
+      <h3>
+        <span className="swatch" style={{ background: point.color }} />
+        Acteur
+      </h3>
+      <div className="actor-grid">
+        <label>Nom
+          <input
+            key={point.id + point.name}
+            defaultValue={point.name}
+            onBlur={(e) => { if (e.target.value !== point.name) sidecar.updatePoint(point.id, { name: e.target.value }) }}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          />
+        </label>
+        <label>Couleur
+          <input
+            type="color"
+            value={point.color}
+            onChange={(e) => sidecar.updatePoint(point.id, { color: e.target.value })}
+          />
+        </label>
+        <label>Numéro
+          <NumericInput value={point.number} step={1} nullable
+            onCommit={(v) => sidecar.updatePoint(point.id, { number: v })} />
+        </label>
+        <label>ID PSN
+          <NumericInput value={point.psnTrackerId} step={1} nullable
+            onCommit={(v) => sidecar.updatePoint(point.id, { psnTrackerId: v })} />
+        </label>
+        <label>Hauteur (m)
+          <NumericInput value={point.defaultHeightCm / 100} step={0.1}
+            onCommit={(v) => { if (v !== null && v >= 0) sidecar.updatePoint(point.id, { defaultHeightCm: v * 100 }) }} />
+        </label>
+        <label>Coulisse d’attache
+          <select
+            value={point.homeZoneId ?? zones[0]?.id ?? ''}
+            onChange={(e) => sidecar.updatePoint(point.id, { homeZoneId: e.target.value })}
+          >
+            {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+          </select>
+        </label>
+      </div>
+    </div>
+  )
+}
+
 function BackstagePanel({ project }: { project: Project }) {
   const zones = project.backstageZones ?? []
   const update = (id: string, patch: Partial<BackstageZone>) => {
@@ -541,19 +616,39 @@ function BackstagePanel({ project }: { project: Project }) {
     <div className="stage-placement">
       <h3>Zones backstage</h3>
       {zones.map((zone) => (
-        <div key={zone.id} className="backstage-row">
-          <input
-            value={zone.name}
-            onChange={(e) => update(zone.id, { name: e.target.value })}
-            title="Nom de la zone"
-          />
-          <button
-            title="Supprimer la zone"
-            disabled={zones.length <= 1}
-            onClick={() => sidecar.setBackstageZones(zones.filter((z) => z.id !== zone.id))}
-          >
-            ✕
-          </button>
+        <div key={zone.id} className="backstage-block">
+          <div className="backstage-row">
+            <input
+              value={zone.name}
+              onChange={(e) => update(zone.id, { name: e.target.value })}
+              title="Nom de la zone"
+            />
+            <button
+              title="Supprimer la zone"
+              disabled={zones.length <= 1}
+              onClick={() => sidecar.setBackstageZones(zones.filter((z) => z.id !== zone.id))}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="backstage-grid">
+            <label>X (m)
+              <NumericInput value={zone.xCm / 100} step={0.5}
+                onCommit={(v) => { if (v !== null) update(zone.id, { xCm: v * 100 }) }} />
+            </label>
+            <label>Y (m)
+              <NumericInput value={zone.yCm / 100} step={0.5}
+                onCommit={(v) => { if (v !== null) update(zone.id, { yCm: v * 100 }) }} />
+            </label>
+            <label>L (m)
+              <NumericInput value={zone.widthCm / 100} step={0.5}
+                onCommit={(v) => { if (v !== null && v >= 0.6) update(zone.id, { widthCm: v * 100 }) }} />
+            </label>
+            <label>P (m)
+              <NumericInput value={zone.heightCm / 100} step={0.5}
+                onCommit={(v) => { if (v !== null && v >= 0.6) update(zone.id, { heightCm: v * 100 }) }} />
+            </label>
+          </div>
         </div>
       ))}
       <button
