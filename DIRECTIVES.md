@@ -406,6 +406,32 @@ identiques à psn_defs.hpp. L'encodeur est conforme PSN 2.x selon
 l'implémentation de référence, plus seulement selon pypsn. Chunks
 optionnels non émis notés dans le README (SPEED en premier candidat).
 
+### Mission boîte de transformation 2D (2026-07-29) — LIVRÉE
+
+Arbitrages de Florian (AskUserQuestion) : sous-timeline = bandeau dans la
+timeline ; ordre de cascade = ordre de sélection 2D ; boîte de transfo
+d'abord. Livré :
+
+- **SelectionBox** : dès 2 acteurs sélectionnés avec un bloc actif —
+  rectangle englobant pointillé, 4 poignées d'échelle aux coins (échelle
+  LIBRE autour du centre, coin opposé comme référence), poignée de rotation
+  au-dessus (taille écran constante).
+- **Rotation → arcs** : `scene/transformBox.ts::rotationArc` — arc de
+  cercle exact converti en Béziers (segments <= 90°, poignée k=(4/3)tan(Δ/4)r),
+  écrit au LÂCHER dans pathPoints/startHandle/targetHandle de chaque
+  activation + rotation du lacet du même angle. Pendant le geste : cibles
+  seules (léger). Chaque acteur suit son arc autour du pivot commun — pas
+  de ligne droite.
+- Échelle/translation : trajets directs (pas d'arcs), tracés existants non
+  touchés par l'échelle.
+
+**À FAIRE ENSUITE (validé par Florian, spec arrêtée)** : sous-timeline de
+bloc — double-clic sur un bloc -> bandeau dans la timeline, une rangée par
+acteur (barre délai+fade + courbe), time-stretch d'une sélection de
+rangées, cascade de délais dans l'ORDRE DE SÉLECTION 2D (selectedPointIds
+est déjà ordonné). Nécessite `Activation.delayMs` au modèle (Python + Rust
++ parité + block context) : un acteur peut démarrer après le début du bloc.
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).

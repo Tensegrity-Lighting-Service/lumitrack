@@ -33,6 +33,8 @@ import * as THREE from 'three'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
 import type { Activation, BlockContextEntry, BlockContextMessage, PathPoint, Project, Pose } from '../types'
+import { boundsOf, rotationArc } from './transformBox'
+import type { Bounds } from './transformBox'
 
 const CM_TO_M = 0.01
 const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
@@ -269,6 +271,54 @@ function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown }
           <circleGeometry args={[1.6, 12]} />
           <meshBasicMaterial depthTest={false} transparent opacity={0} side={THREE.DoubleSide} />
         </mesh>
+      </group>
+    </group>
+  )
+}
+
+/** Boîte de transformation de la sélection multiple : rectangle englobant
+ * + poignées d'échelle aux 4 coins + poignée de rotation au-dessus. Toutes
+ * les poignées gardent une taille écran constante. */
+function SelectionBox({ bounds, zCm, onScaleDown, onRotateDown }: {
+  bounds: Bounds
+  zCm: number
+  onScaleDown: (e: ThreeEvent<PointerEvent>, corner: [number, number]) => void
+  onRotateDown: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const { minX, minY, maxX, maxY } = bounds
+  const corners: [number, number][] = [
+    [minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY],
+  ]
+  const rectPoints = [...corners, corners[0]].map(([x, y]) =>
+    new THREE.Vector3(...stageToLocal(x, y, zCm)))
+  const topCenter: [number, number] = [(minX + maxX) / 2, minY]
+  const rotRef = useRef<THREE.Group>(null)
+  useFrame(({ camera }) => {
+    if (!rotRef.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    // La poignée de rotation flotte à distance écran constante au-dessus.
+    rotRef.current.position.set(0, 0, -(ROTATE_HANDLE_OFFSET_PX / zoom))
+  })
+  const [tx, ty, tz] = stageToLocal(topCenter[0], topCenter[1], zCm)
+  return (
+    <group>
+      <Line points={rectPoints} color="#4f6df5" lineWidth={1.5} dashed dashSize={0.25} gapSize={0.15}
+        transparent opacity={0.9} depthTest={false} renderOrder={1040} />
+      {corners.map(([x, y], i) => (
+        <PathMarker
+          key={i} xCm={x} yCm={y} zCm={zCm} px={HANDLE_PX} color="#4f6df5" shape="diamond"
+          selected={false}
+          onPointerDown={(e) => onScaleDown(e, corners[(i + 2) % 4])}
+        />
+      ))}
+      <group position={[tx, ty, tz]}>
+        <group ref={rotRef}>
+          <PathMarker
+            xCm={0} yCm={0} zCm={0} px={ROTATE_HANDLE_PX} color="#f5c84f" shape="dot"
+            selected={false}
+            onPointerDown={onRotateDown}
+          />
+        </group>
       </group>
     </group>
   )
@@ -911,6 +961,12 @@ function SceneContent({
         baseCursor: { x: number; y: number } | null }
     | { kind: 'waypoint'; pointId: string; index: number; planeY: number; lastSent: number }
     | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number }
+    | { kind: 'box-scale'; members: { pointId: string; baseX: number; baseY: number }[]
+        center: { x: number; y: number }; refCorner: { x: number; y: number }
+        planeY: number; lastSent: number }
+    | { kind: 'box-rotate'; members: { pointId: string; baseX: number; baseY: number; baseYaw: number | null }[]
+        center: { x: number; y: number }; startAngle: number | null; lastTheta: number
+        planeY: number; lastSent: number }
   const dragRef = useRef<SceneDrag | null>(null)
   // Sélection d'un waypoint du tracé (Suppr le retire, voir keydown).
   const [selectedWaypoint, setSelectedWaypoint] = useState<{ pointId: string; index: number } | null>(null)
@@ -1029,8 +1085,26 @@ function SceneContent({
     }
 
     const endDrag = () => {
-      if (!dragRef.current) return
+      const drag = dragRef.current
+      if (!drag) return
       dragRef.current = null
+      if (drag.kind === 'box-rotate' && selectedCueId && Math.abs(drag.lastTheta) > 1e-4) {
+        // Écriture finale : position d'arrivée + ARC de Bézier autour du
+        // pivot (le moteur les parcourt à vitesse constante), + rotation du
+        // lacet du même angle.
+        const thetaDeg = (drag.lastTheta * 180) / Math.PI
+        for (const m of drag.members) {
+          const arc = rotationArc(m.baseX, m.baseY, drag.center.x, drag.center.y, drag.lastTheta)
+          sidecar.setActivation(selectedCueId, m.pointId, {
+            targetXCm: arc.targetXCm,
+            targetYCm: arc.targetYCm,
+            pathPoints: arc.pathPoints,
+            startHandle: arc.startHandle,
+            targetHandle: arc.targetHandle,
+            ...(m.baseYaw !== null ? { targetYawDeg: m.baseYaw + thetaDeg } : {}),
+          })
+        }
+      }
       // Restore to the *locked* state, not unconditionally true — otherwise
       // finishing an actor drag would silently re-enable a locked camera.
       if (controlsRef.current) controlsRef.current.enabled = !cameraLocked
@@ -1073,6 +1147,41 @@ function SceneContent({
           }
         } else {
           sidecar.setActivation(selectedCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
+        }
+        return
+      }
+
+      if (drag.kind === 'box-scale') {
+        // Échelle libre autour du centre : le coin saisi suit le curseur,
+        // chaque membre est redistribué proportionnellement.
+        const { center, refCorner } = drag
+        const sx = Math.abs(refCorner.x - center.x) > 1e-6
+          ? (xCm - center.x) / (refCorner.x - center.x) : 1
+        const sy = Math.abs(refCorner.y - center.y) > 1e-6
+          ? (yCm - center.y) / (refCorner.y - center.y) : 1
+        for (const m of drag.members) {
+          sidecar.setActivation(selectedCueId, m.pointId, {
+            targetXCm: center.x + (m.baseX - center.x) * sx,
+            targetYCm: center.y + (m.baseY - center.y) * sy,
+          })
+        }
+        return
+      }
+
+      if (drag.kind === 'box-rotate') {
+        const { center } = drag
+        const angle = Math.atan2(yCm - center.y, xCm - center.x)
+        if (drag.startAngle === null) { drag.startAngle = angle; return }
+        const theta = angle - drag.startAngle
+        drag.lastTheta = theta
+        // Pendant le geste : cibles seulement (léger). Les ARCS de tracé
+        // sont écrits au lâcher (endDrag) — c'est là que chaque acteur
+        // reçoit son arc de cercle autour du pivot commun.
+        for (const m of drag.members) {
+          const arc = rotationArc(m.baseX, m.baseY, center.x, center.y, theta)
+          sidecar.setActivation(selectedCueId, m.pointId, {
+            targetXCm: arc.targetXCm, targetYCm: arc.targetYCm,
+          })
         }
         return
       }
@@ -1254,6 +1363,52 @@ function SceneContent({
     if (typeof anchor === 'number') setSelectedWaypoint({ pointId, index: anchor })
     if (!selectedCueId) return
     dragRef.current = { kind: 'handle', pointId, anchor, side, planeY: zCm * CM_TO_M, lastSent: 0 }
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const boxMembers = () => {
+    const cue = liveRef.current.project.cues.find((c) => c.id === selectedCueId)
+    const out: { pointId: string; baseX: number; baseY: number; baseYaw: number | null }[] = []
+    for (const id of selectedIdsRef.current) {
+      const act = cue?.activations[id]
+      const pose = positionsRef.current[id]
+      const baseX = act?.targetXCm ?? pose?.[0]
+      const baseY = act?.targetYCm ?? pose?.[1]
+      if (baseX === undefined || baseY === undefined || baseX === null || baseY === null) continue
+      out.push({ pointId: id, baseX, baseY, baseYaw: act?.targetYawDeg ?? pose?.[3] ?? null })
+    }
+    return out
+  }
+
+  const handleBoxScaleDown = (e: ThreeEvent<PointerEvent>, refCorner: [number, number], planeZCm: number) => {
+    e.stopPropagation()
+    if (!selectedCueId) return
+    const members = boxMembers()
+    if (members.length < 2) return
+    const b = boundsOf(members, 0)
+    if (!b) return
+    dragRef.current = {
+      kind: 'box-scale', members,
+      center: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
+      refCorner: { x: refCorner[0], y: refCorner[1] },
+      planeY: planeZCm * CM_TO_M, lastSent: 0,
+    }
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const handleBoxRotateDown = (e: ThreeEvent<PointerEvent>, planeZCm: number) => {
+    e.stopPropagation()
+    if (!selectedCueId) return
+    const members = boxMembers()
+    if (members.length < 2) return
+    const b = boundsOf(members, 0)
+    if (!b) return
+    dragRef.current = {
+      kind: 'box-rotate', members,
+      center: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
+      startAngle: null, lastTheta: 0,
+      planeY: planeZCm * CM_TO_M, lastSent: 0,
+    }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
@@ -1462,6 +1617,34 @@ function SceneContent({
             block shows its target ghost and static trajectory. By default
             all of them; selecting an actor highlights its own and dims the
             rest (context stays visible). */}
+        {/* Boîte de transformation de la sélection multiple (échelle aux
+            coins, rotation au-dessus). Visible dès 2 acteurs sélectionnés
+            avec un bloc actif — les bases suivent les cibles du bloc. */}
+        {selectedCueId && selectedPointIds.length >= 2 && (() => {
+          const cue = project.cues.find((c) => c.id === selectedCueId)
+          const members: { baseX: number; baseY: number }[] = []
+          for (const id of selectedPointIds) {
+            const act = cue?.activations[id]
+            const pose = positions[id]
+            const baseX = act?.targetXCm ?? pose?.[0]
+            const baseY = act?.targetYCm ?? pose?.[1]
+            if (baseX !== undefined && baseX !== null && baseY !== undefined && baseY !== null) {
+              members.push({ baseX, baseY })
+            }
+          }
+          const b = boundsOf(members)
+          if (!b || members.length < 2) return null
+          const zRef = selectedPointId ? positions[selectedPointId]?.[2] ?? 0 : 0
+          return (
+            <SelectionBox
+              bounds={b}
+              zCm={zRef}
+              onScaleDown={(e, corner) => handleBoxScaleDown(e, corner, zRef)}
+              onRotateDown={(e) => handleBoxRotateDown(e, zRef)}
+            />
+          )
+        })()}
+
         {editEntries && project.points.map((point) => {
           const entry = editEntries[point.id]
           if (!entry) return null
