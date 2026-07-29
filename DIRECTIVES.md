@@ -386,6 +386,16 @@ Trois demandes de Florian traitées ensemble :
   Mission dialogues natifs). Le .bat fait désormais `npm install` à chaque
   lancement (nouvelles dépendances auto-installées).
 
+### Mission autosauvegarde (2026-07-29) — LIVRÉE
+
+Sauvegarde de session CONTINUE (pas « au quit » : la fermeture kill le
+sidecar sans lui laisser de handler sous Windows). Boucle asyncio : écrit
+`%APPDATA%/Lumitrack/autosave.json` ~2 s après chaque mutation (flag dirty
+armé sur tout broadcast de projet + set_project), écriture atomique
+tmp+replace. Au démarrage : reprise de l'autosave si présente, sinon démo.
+JSON simple, médias en chemins absolus (pas un bundle : pas de copie ni de
+versions/ qui gonfle). Les bundles explicites restent inchangés.
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).

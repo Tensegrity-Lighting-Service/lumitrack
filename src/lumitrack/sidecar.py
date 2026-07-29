@@ -29,6 +29,18 @@ from .core.engine import Transport, PsnBroadcaster
 logger = logging.getLogger("lumitrack.sidecar")
 
 TICK_HZ = 30
+AUTOSAVE_INTERVAL_S = 2.0
+
+
+def autosave_path() -> str:
+    """Sauvegarde de session : %APPDATA%/Lumitrack/autosave.json (Windows),
+    ~/.config/Lumitrack sinon. JSON simple (pas un bundle : les médias
+    restent référencés en chemins absolus, pas copiés — et pas de dossier
+    versions/ qui gonflerait à chaque autosave)."""
+    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
+    directory = os.path.join(base, "Lumitrack")
+    os.makedirs(directory, exist_ok=True)
+    return os.path.join(directory, "autosave.json")
 
 
 def _demo_project() -> Project:
@@ -74,7 +86,19 @@ class Session:
     process, and the set of connected frontend sockets to push to."""
 
     def __init__(self):
-        self.project = _demo_project()
+        # Reprise de session : la dernière autosauvegarde si elle existe,
+        # sinon le projet de démonstration.
+        self.project = None
+        path = autosave_path()
+        if os.path.isfile(path):
+            try:
+                self.project = Project.load(path)
+                logger.info("Session restaurée depuis %s", path)
+            except Exception:
+                logger.exception("Autosave illisible (%s) — projet de démo", path)
+        if self.project is None:
+            self.project = _demo_project()
+        self.dirty = False
         self.timeline = Timeline(self.project)
         self.transport = Transport()
         self.transport.set_duration(self.timeline.duration_ms)
@@ -93,6 +117,7 @@ class Session:
 
     def set_project(self, project: Project):
         self.project = project
+        self.dirty = True
         self.timeline = Timeline(project)
         self.transport.set_duration(self.timeline.duration_ms)
         self._apply_psn_config()
@@ -136,6 +161,28 @@ async def _tick_loop(session: Session):
     while True:
         await session.broadcast(session.tick_message())
         await asyncio.sleep(period)
+
+
+async def _autosave_loop(session: Session):
+    """Sauvegarde continue : écrit l'autosave ~2 s après la dernière
+    mutation. La fermeture de l'app TUE le sidecar (kill, aucun handler ne
+    tourne sous Windows) — c'est donc cette boucle qui garantit le
+    « sauvegardé au quit » : au moment du kill, tout est déjà sur disque.
+    Écriture ATOMIQUE (tmp + replace) : un kill en plein write ne peut pas
+    corrompre le fichier."""
+    path = autosave_path()
+    while True:
+        await asyncio.sleep(AUTOSAVE_INTERVAL_S)
+        if not session.dirty:
+            continue
+        session.dirty = False
+        try:
+            tmp = path + ".tmp"
+            session.project.save(tmp)
+            os.replace(tmp, path)
+        except Exception:
+            session.dirty = True  # on retentera au prochain tour
+            logger.exception("Échec de l'autosauvegarde")
 
 
 async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
@@ -361,6 +408,9 @@ async def _client_handler(session: Session, websocket):
             if reply is not None:
                 await websocket.send(json.dumps(reply))
             else:
+                # Toute commande qui aboutit à un broadcast de projet est une
+                # mutation : elle arme l'autosauvegarde débouncée.
+                session.dirty = True
                 await session.broadcast(session.project_message())
     finally:
         session.clients.discard(websocket)
@@ -369,6 +419,7 @@ async def _client_handler(session: Session, websocket):
 async def _run(host: str, port: int):
     session = Session()
     asyncio.create_task(_tick_loop(session))
+    asyncio.create_task(_autosave_loop(session))
     async with websockets.serve(lambda ws: _client_handler(session, ws), host, port):
         logger.info("Lumitrack sidecar listening on ws://%s:%s", host, port)
         await asyncio.Future()  # run forever
