@@ -528,7 +528,11 @@
 }
 
 /* ---- Lasso de sélection dans la scène ---- */
-.scene-canvas-wrap { position: relative; width: 100%; height: 100%; }
+.scene-canvas-wrap { position: relative; width: 100%; height: 100%; overflow: hidden; }
+/* r3f rend son propre conteneur : l'ancrer en absolu garantit que le
+   canvas suit exactement la taille du panneau (resize, fit, zoom) au lieu
+   d'hériter d'une hauteur calculée qui peut dériver d'un frame. */
+.scene-canvas-wrap > div { position: absolute !important; inset: 0; }
 .scene-lasso {
   position: absolute; pointer-events: none; z-index: 10;
   border: 1px solid rgba(79, 109, 245, 0.9);

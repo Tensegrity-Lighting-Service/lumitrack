@@ -63,6 +63,12 @@ const SNAP_MAX_POINTS = 4000 // subsampled if the floor layer is denser than thi
 // naming is completely author-dependent (this must work for any terrain a
 // user loads, not just the one glTF on hand during development).
 const SNAP_FLOOR_EPSILON_M = 0.15
+// Mappages souris/tactile des MapControls — constantes de module : drei
+// réapplique les props primitives à CHAQUE rendu (~30/s au fil des ticks),
+// un objet neuf par rendu ferait donc réécrire la config des contrôles en
+// continu pendant le zoom/fit.
+const MOUSE_MAPPING = { LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
+const TOUCH_MAPPING = { ONE: undefined as unknown as THREE.TOUCH, TWO: THREE.TOUCH.DOLLY_PAN }
 
 /** Stage (x_cm, y_cm depth, z_cm height) -> StageGroup-local metres
  * (X, Y up, Z). The group's own transform (position/rotation) then places
@@ -897,7 +903,12 @@ function SceneContent({
   const controlsRef = useRef<MapControlsImpl>(null)
   const stageGroupRef = useRef<THREE.Group>(null)
   type SceneDrag =
-    | { kind: 'target'; pointId: string; planeY: number; lastSent: number }
+    | { kind: 'target'; pointId: string; planeY: number; lastSent: number;
+        /** Transformation groupée : membres avec leur position de base, et
+         * curseur de référence (cm) fixé au premier échantillon du drag —
+         * chaque membre suit alors le MÊME delta que la souris. */
+        group: { pointId: string; baseX: number; baseY: number }[] | null
+        baseCursor: { x: number; y: number } | null }
     | { kind: 'waypoint'; pointId: string; index: number; planeY: number; lastSent: number }
     | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number }
   const dragRef = useRef<SceneDrag | null>(null)
@@ -1044,7 +1055,25 @@ function SceneContent({
       }
 
       if (drag.kind === 'target') {
-        sidecar.setActivation(selectedCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
+        if (drag.group) {
+          // Transformation groupée : delta souris depuis le premier
+          // échantillon, appliqué à la base de CHAQUE membre (les
+          // écarts entre acteurs sont préservés). Snap : sur le delta.
+          if (!drag.baseCursor) drag.baseCursor = { x: xCm, y: yCm }
+          let dx = xCm - drag.baseCursor.x
+          let dy = yCm - drag.baseCursor.y
+          if (snapToGrid && proj.gridSizeCm > 0) {
+            dx = Math.round(dx / proj.gridSizeCm) * proj.gridSizeCm
+            dy = Math.round(dy / proj.gridSizeCm) * proj.gridSizeCm
+          }
+          for (const m of drag.group) {
+            sidecar.setActivation(selectedCueId, m.pointId, {
+              targetXCm: m.baseX + dx, targetYCm: m.baseY + dy,
+            })
+          }
+        } else {
+          sidecar.setActivation(selectedCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
+        }
         return
       }
 
@@ -1287,9 +1316,29 @@ function SceneContent({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [selectedWaypoint, selectedCueId])
 
+  /** Positions de base des membres d'une transformation groupée : la cible
+   * déjà posée dans le bloc si elle existe, sinon la position vivante. */
+  const groupBases = (memberIds: string[]): { pointId: string; baseX: number; baseY: number }[] => {
+    const cue = liveRef.current.project.cues.find((c) => c.id === selectedCueId)
+    const out: { pointId: string; baseX: number; baseY: number }[] = []
+    for (const id of memberIds) {
+      const act = cue?.activations[id]
+      if (act && act.targetXCm !== null && act.targetYCm !== null) {
+        out.push({ pointId: id, baseX: act.targetXCm, baseY: act.targetYCm })
+      } else {
+        const pose = positionsRef.current[id]
+        if (pose) out.push({ pointId: id, baseX: pose[0], baseY: pose[1] })
+      }
+    }
+    return out
+  }
+
   const handleActorPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string) => {
     e.stopPropagation()
-    onSelectPoint(pointId)
+    // Glisser un acteur DÉJÀ dans la sélection multiple ne la casse pas :
+    // c'est le geste "transformer la sélection". Hors sélection : simple.
+    const inSelection = selectedIdsRef.current.includes(pointId)
+    if (!inSelection) onSelectPoint(pointId)
     if (!selectedCueId) return
     const pose = positions[pointId]
     if (!pose) return
@@ -1297,7 +1346,13 @@ function SceneContent({
     // touches Y — so local height == world height regardless of the
     // stage's placement (position/rotation) inside the terrain.
     const planeY = pose[2] * CM_TO_M
-    dragRef.current = { kind: 'target', pointId, planeY, lastSent: 0 }
+    const members = inSelection && selectedIdsRef.current.length > 1
+      ? selectedIdsRef.current : [pointId]
+    dragRef.current = {
+      kind: 'target', pointId, planeY, lastSent: 0,
+      group: members.length > 1 ? groupBases(members) : null,
+      baseCursor: null,
+    }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
@@ -1308,7 +1363,14 @@ function SceneContent({
     e.stopPropagation()
     onSelectPoint(pointId)
     if (!selectedCueId) return
-    dragRef.current = { kind: 'target', pointId, planeY: targetZCm * CM_TO_M, lastSent: 0 }
+    const inSelection = selectedIdsRef.current.includes(pointId)
+    const members = inSelection && selectedIdsRef.current.length > 1
+      ? selectedIdsRef.current : [pointId]
+    dragRef.current = {
+      kind: 'target', pointId, planeY: targetZCm * CM_TO_M, lastSent: 0,
+      group: members.length > 1 ? groupBases(members) : null,
+      baseCursor: null,
+    }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
@@ -1340,8 +1402,8 @@ function SceneContent({
         enableRotate={false}
         screenSpacePanning
         zoomToCursor
-        mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }}
-        touches={{ ONE: undefined as unknown as THREE.TOUCH, TWO: THREE.TOUCH.DOLLY_PAN }}
+        mouseButtons={MOUSE_MAPPING}
+        touches={TOUCH_MAPPING}
       />
       <ambientLight intensity={editingZone ? 0.7 : 1.1} />
       <directionalLight position={[fit.centerX, span * 3, fit.centerZ]} intensity={editingZone ? 0.4 : 0.6} />
