@@ -113,6 +113,8 @@ class Session:
             mcast_ip=self.project.psn_mcast_ip,
             port=self.project.psn_port,
             system_name=self.project.psn_system_name,
+            iface_ip=getattr(self.project, "psn_iface_ip", "0.0.0.0"),
+            rate_hz=int(getattr(self.project, "psn_rate_hz", 30)),
         )
 
     def set_project(self, project: Project):
@@ -237,6 +239,84 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             project.audio_duration_s = float(d) if d else None
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
+        return None
+
+    if msg_type == "update_psn_config":
+        # Panneau Réglages PSN : tout est projet (voyage avec le bundle).
+        proj = session.project
+        mapping = {
+            "mcastIp": ("psn_mcast_ip", str), "port": ("psn_port", int),
+            "systemName": ("psn_system_name", str),
+            "ifaceIp": ("psn_iface_ip", str), "rateHz": ("psn_rate_hz", int),
+            "originXCm": ("transform_origin_x_cm", float),
+            "originYCm": ("transform_origin_y_cm", float),
+            "invertX": ("transform_invert_x", bool),
+            "invertY": ("transform_invert_y", bool),
+            "swapXy": ("transform_swap_xy", bool),
+            "upAxis": ("transform_up_axis", str),
+        }
+        for key, (attr, cast) in mapping.items():
+            if key in msg and msg[key] is not None:
+                setattr(proj, attr, cast(msg[key]))
+        session._apply_psn_config()
+        return None
+
+    if msg_type == "list_ifaces":
+        # Adresses IPv4 locales candidates pour IP_MULTICAST_IF.
+        import socket as _socket
+        addrs = {"0.0.0.0"}
+        try:
+            for info in _socket.getaddrinfo(_socket.gethostname(), None,
+                                            family=_socket.AF_INET):
+                addrs.add(info[4][0])
+        except OSError:
+            pass
+        try:
+            # Route par défaut : révèle l'IP de l'interface active même
+            # quand gethostname ne résout pas toutes les cartes.
+            probe = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+            probe.connect(("8.8.8.8", 80))
+            addrs.add(probe.getsockname()[0])
+            probe.close()
+        except OSError:
+            pass
+        return {"type": "ifaces", "addresses": sorted(addrs)}
+
+    if msg_type == "psn_preview":
+        # Moniteur : EXACTEMENT ce que le broadcaster émettrait maintenant
+        # (même build_trackers, même transform, même convention d'axes).
+        trackers = session.broadcaster.build_trackers(session.transport.now_ms())
+        return {
+            "type": "psn_preview",
+            "running": session.broadcaster.running,
+            "packetsSent": session.broadcaster.packets_sent,
+            "dest": f"{session.project.psn_mcast_ip}:{session.project.psn_port}",
+            "ifaceIp": getattr(session.project, "psn_iface_ip", "0.0.0.0"),
+            "rateHz": int(getattr(session.project, "psn_rate_hz", 30)),
+            "upAxis": getattr(session.project, "transform_up_axis", "y"),
+            "lastError": session.broadcaster.last_error,
+            "trackers": [
+                {"id": t.id, "name": t.name,
+                 "posX": t.x_m, "posY": t.y_m, "posZ": t.z_m,
+                 "oriX": t.ori_x, "oriY": t.ori_y, "oriZ": t.ori_z}
+                for t in trackers
+            ],
+        }
+
+    if msg_type == "update_point":
+        point = session.project.point_by_id(msg.get("pointId", ""))
+        if point is None:
+            return {"type": "error", "message": "Unknown point id"}
+        if "name" in msg:
+            point.name = msg["name"]
+        if "number" in msg:
+            point.number = msg["number"]
+        if "color" in msg:
+            point.color = msg["color"]
+        if "psnTrackerId" in msg:
+            point.psn_tracker_id = msg["psnTrackerId"]
+        if "defaultHeightCm" in msg and msg["defaultHeightCm"] is not None:
+            point.default_height_cm = float(msg["defaultHeightCm"])
         return None
 
     if msg_type == "psn_start":

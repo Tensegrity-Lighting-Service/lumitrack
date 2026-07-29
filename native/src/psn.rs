@@ -48,16 +48,19 @@ fn header_bytes(timestamp_us: u64, frame_id: u8, packet_count: u8) -> Vec<u8> {
     out
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Tracker {
     pub id: u16,
     pub name: String,
     pub x_m: f32,
     pub y_m: f32,
     pub z_m: f32,
-    /// Lacet en radians — seul angle porteur de sens pour un projecteur
-    /// porté (§12.5) ; envoyé en 3e float du chunk ORI comme en Python.
-    pub yaw_rad: f32,
+    /// PSN_DATA_TRACKER_ORI : VECTEUR AXE-ANGLE (spec 2.03 p.9). Le lacet
+    /// porte sur le composant de l'axe vertical de la convention de sortie
+    /// (ori_y en Y-up officiel, ori_z en héritage Z-up).
+    pub ori_x: f32,
+    pub ori_y: f32,
+    pub ori_z: f32,
 }
 
 pub fn build_data_packet(trackers: &[Tracker], timestamp_us: u64, frame_id: u8, packet_count: u8) -> Vec<u8> {
@@ -72,9 +75,9 @@ pub fn build_data_packet(trackers: &[Tracker], timestamp_us: u64, frame_id: u8, 
         let pos_chunk = chunk(DATA_TRACKER_POS, &pos, false);
 
         let mut ori = Vec::with_capacity(12);
-        ori.extend_from_slice(&0f32.to_le_bytes());
-        ori.extend_from_slice(&0f32.to_le_bytes());
-        ori.extend_from_slice(&t.yaw_rad.to_le_bytes());
+        ori.extend_from_slice(&t.ori_x.to_le_bytes());
+        ori.extend_from_slice(&t.ori_y.to_le_bytes());
+        ori.extend_from_slice(&t.ori_z.to_le_bytes());
         let ori_chunk = chunk(DATA_TRACKER_ORI, &ori, false);
 
         let mut body = pos_chunk;
@@ -200,7 +203,8 @@ mod tests {
     fn trackers(n: usize) -> Vec<Tracker> {
         (0..n).map(|i| Tracker {
             id: i as u16, name: format!("Point {i}"),
-            x_m: i as f32, y_m: 2.5, z_m: 0.0, yaw_rad: 0.25 * i as f32,
+            x_m: i as f32, y_m: 2.5, z_m: 0.0,
+            ori_y: 0.25 * i as f32, ..Default::default()
         }).collect()
     }
 
@@ -228,7 +232,7 @@ mod tests {
     #[test]
     fn single_oversized_tracker_still_gets_a_packet() {
         let big = vec![Tracker {
-            id: 1, name: "x".repeat(64), x_m: 0.0, y_m: 0.0, z_m: 0.0, yaw_rad: 0.0,
+            id: 1, name: "x".repeat(64), ..Default::default()
         }];
         let packets = split_info_packets(&big, "s", 0, 0, 32); // max ridicule
         assert_eq!(packets.len(), 1); // jamais perdu, même trop gros

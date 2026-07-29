@@ -25,7 +25,9 @@ fn packets_are_byte_identical_to_python() {
             x_m: t["x"].as_f64().unwrap() as f32,
             y_m: t["y"].as_f64().unwrap() as f32,
             z_m: t["z"].as_f64().unwrap() as f32,
-            yaw_rad: t["yaw"].as_f64().unwrap() as f32,
+            ori_x: t["oriX"].as_f64().unwrap_or(0.0) as f32,
+            ori_y: t["oriY"].as_f64().unwrap_or(0.0) as f32,
+            ori_z: t["oriZ"].as_f64().unwrap_or(0.0) as f32,
         }).collect();
 
         let data = build_data_packet(&trackers, ts_us, 7, 2);

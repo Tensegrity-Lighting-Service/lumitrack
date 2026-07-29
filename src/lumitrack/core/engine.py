@@ -182,12 +182,17 @@ class PsnBroadcaster:
             pose = poses.get(point.id)
             if pose is None:
                 continue  # never invent a position at (0,0)
-            x_m, y_m, z_m = transform.to_metres(pose.x_cm, pose.y_cm, pose.z_cm)
+            x_m, y_m, z_m = transform.to_psn(pose.x_cm, pose.y_cm, pose.z_cm)
+            yaw_rad = math.radians(pose.yaw_deg)
+            # ORI = vecteur axe-angle : le lacet tourne autour de l'axe
+            # VERTICAL de la convention de sortie (spec 2.03 : Y-up).
+            up_y = getattr(transform, "up_axis", "y") == "y"
             trackers.append(Tracker(
                 id=point.resolved_tracker_id(index),
                 name=point.name or f"Point {index + 1}",
                 x_m=x_m, y_m=y_m, z_m=z_m,
-                yaw_rad=math.radians(pose.yaw_deg),
+                ori_y=yaw_rad if up_y else 0.0,
+                ori_z=0.0 if up_y else yaw_rad,
             ))
         return trackers
 

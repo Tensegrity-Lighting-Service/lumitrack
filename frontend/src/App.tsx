@@ -6,6 +6,7 @@ import { sidecar, useBlockContext, useConnected, useProject, usePsnRunning, useT
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
+import { PsnPanel } from './ui/PsnPanel'
 import type { Activation, Cue, Point, Project } from './types'
 
 const ROSTER_MIN = 160
@@ -171,6 +172,7 @@ function App() {
   const [snapToGrid, setSnapToGrid] = useState(false)
   const [zoomAction, setZoomAction] = useState({ token: 0, factor: 1 })
   const [showGridSettings, setShowGridSettings] = useState(false)
+  const [showPsnPanel, setShowPsnPanel] = useState(false)
 
   const zoomIn = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1.2 }))
   const zoomOut = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1 / 1.2 }))
@@ -325,6 +327,8 @@ function App() {
           checked: psnRunning,
           onClick: () => (psnRunning ? sidecar.psnStop() : sidecar.psnStart()),
         },
+        { separator: true } as const,
+        { label: 'Réglages PSN…', onClick: () => setShowPsnPanel(true) },
       ],
     },
   ]
@@ -483,6 +487,8 @@ function App() {
       </aside>
 
       <HorizontalResizer area="hhandle" onDeltaY={(dy) => setTimelineHeight((h) => clamp(h - dy, TIMELINE_MIN, TIMELINE_MAX))} />
+
+      {showPsnPanel && <PsnPanel project={project} onClose={() => setShowPsnPanel(false)} />}
 
       <footer className="timeline-dock">
         <CueTimeline

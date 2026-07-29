@@ -182,11 +182,22 @@ class Project:
     psn_system_name: str = "Lumitrack"
     psn_mcast_ip: str = "236.10.10.10"
     psn_port: int = 56565
+    # Interface réseau de sortie (0.0.0.0 = choix de l'OS) et fréquence
+    # d'émission (mission panneau PSN 2026-07-29).
+    psn_iface_ip: str = "0.0.0.0"
+    psn_rate_hz: int = 30
     transform_origin_x_cm: float = 0.0
     transform_origin_y_cm: float = 0.0
     transform_invert_x: bool = False
     transform_invert_y: bool = False
     transform_swap_xy: bool = False
+    # Convention d'axe vertical de la sortie PSN. La spec officielle 2.03
+    # (p.8) est explicite : « positive x is right, positive y is up and
+    # positive z is depth » — Y VERTICAL (Capture suit la spec ; MA Lighting
+    # est co-auteur). "y" (défaut, conforme) envoie (x, hauteur, profondeur)
+    # et le lacet en ori_y ; "z" (héritage) envoie la hauteur en Z et le
+    # lacet en ori_z, pour les outils qui dévient de la spec.
+    transform_up_axis: str = "y"
     # Where the stage rectangle (stage_width_cm x stage_height_cm, local
     # origin at its own top-left corner) sits inside the terrain glTF's own
     # world space — purely a 3D-view/editing placement, unrelated to
@@ -295,6 +306,9 @@ class Project:
             "transformInvertX": self.transform_invert_x,
             "transformInvertY": self.transform_invert_y,
             "transformSwapXy": self.transform_swap_xy,
+            "transformUpAxis": self.transform_up_axis,
+            "psnIfaceIp": self.psn_iface_ip,
+            "psnRateHz": self.psn_rate_hz,
             "stageMapOriginXM": self.stage_map_origin_x_m,
             "stageMapOriginZM": self.stage_map_origin_z_m,
             "stageMapRotationDeg": self.stage_map_rotation_deg,
@@ -339,6 +353,9 @@ class Project:
             transform_invert_x=bool(d.get("transformInvertX", False)),
             transform_invert_y=bool(d.get("transformInvertY", False)),
             transform_swap_xy=bool(d.get("transformSwapXy", False)),
+            transform_up_axis=d.get("transformUpAxis", "y"),
+            psn_iface_ip=d.get("psnIfaceIp", "0.0.0.0"),
+            psn_rate_hz=int(d.get("psnRateHz", 30)),
             stage_map_origin_x_m=float(d.get("stageMapOriginXM", 0.0)),
             stage_map_origin_z_m=float(d.get("stageMapOriginZM", 0.0)),
             stage_map_rotation_deg=float(d.get("stageMapRotationDeg", 0.0)),

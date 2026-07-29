@@ -15,5 +15,5 @@ with open(out, "w") as f:
     for case in doc["cases"]:
         if case["n"] == 92:
             for t in case["trackers"]:
-                f.write(f"EXPECT {t['id']} {t['x']} {t['y']} {t['z']} {t['yaw']} {t['name']}\n")
+                f.write(f"EXPECT {t['id']} {t['x']} {t['y']} {t['z']} {t['oriY']} {t['name']}\n")
 print("écrit :", out)

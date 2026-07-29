@@ -22,7 +22,7 @@ from lumitrack.core import timecode as tc
 
 def _trackers(n, name_len=10):
     return [Tracker(id=i, name=("T" * name_len) + str(i),
-                    x_m=i * 0.5, y_m=-i * 0.25, z_m=1.0, yaw_rad=0.1 * i)
+                    x_m=i * 0.5, y_m=-i * 0.25, z_m=1.0, ori_y=0.1 * i)
             for i in range(n)]
 
 
@@ -41,11 +41,13 @@ def test_data_packet_roundtrip():
 
 def test_data_packet_orientation_roundtrip():
     pypsn = pytest.importorskip("pypsn")
-    trackers = [Tracker(id=0, name="A", yaw_rad=math.pi / 2)]
+    trackers = [Tracker(id=0, name="A", ori_y=math.pi / 2)]
     decoded = pypsn.parse_psn_packet(build_data_packet(trackers))
-    assert decoded.trackers[0].ori.z == pytest.approx(math.pi / 2)
+    # Convention officielle (spec 2.03) : Y est l'axe vertical, le lacet est
+    # donc un vecteur axe-angle porté par ori_y.
+    assert decoded.trackers[0].ori.y == pytest.approx(math.pi / 2)
     assert decoded.trackers[0].ori.x == pytest.approx(0.0)
-    assert decoded.trackers[0].ori.y == pytest.approx(0.0)
+    assert decoded.trackers[0].ori.z == pytest.approx(0.0)
 
 
 def test_info_packet_roundtrip():

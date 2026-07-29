@@ -69,14 +69,14 @@ class Tracker:
     x_m: float = 0.0
     y_m: float = 0.0
     z_m: float = 0.0
-    # Orientation, radians. Only "yaw" (rotation about the vertical axis)
-    # is meaningful for a hand-carried fixture (CONCEPTION.md §12.5/§12.13 —
-    # pitch/roll are left at 0 pending confirmation they're ever needed).
-    # Sent as PSN_DATA_TRACKER_ORI, now mandatory (§2.3 "piste
-    # d'amélioration" -> corrected to required in §12.5). Which axis of the
-    # 3-float ORI chunk actually carries yaw on the receiving console is a
-    # convention to calibrate on the real prevvisu, same as position (§4/§6).
-    yaw_rad: float = 0.0
+    # PSN_DATA_TRACKER_ORI est un VECTEUR AXE-ANGLE (spec 2.03 p.9 : axe de
+    # rotation, longueur = angle en radians). Une rotation autour de la
+    # verticale doit donc porter sur le composant de l'axe vertical de la
+    # convention choisie : ori_y en convention officielle (Y-up), ori_z en
+    # héritage Z-up. Le moteur (engine.build_trackers) choisit le composant.
+    ori_x: float = 0.0
+    ori_y: float = 0.0
+    ori_z: float = 0.0
 
 
 def build_data_packet(trackers: Iterable[Tracker], frame_id: int = 0,
@@ -86,7 +86,7 @@ def build_data_packet(trackers: Iterable[Tracker], frame_id: int = 0,
     tracker_chunks = b""
     for t in trackers:
         pos_chunk = _chunk(DATA_TRACKER_POS, struct.pack("<fff", t.x_m, t.y_m, t.z_m), has_subchunks=False)
-        ori_chunk = _chunk(DATA_TRACKER_ORI, struct.pack("<fff", 0.0, 0.0, t.yaw_rad), has_subchunks=False)
+        ori_chunk = _chunk(DATA_TRACKER_ORI, struct.pack("<fff", t.ori_x, t.ori_y, t.ori_z), has_subchunks=False)
         tracker_chunks += _chunk(t.id, pos_chunk + ori_chunk, has_subchunks=True)
 
     tracker_list = _chunk(DATA_TRACKER_LIST, tracker_chunks, has_subchunks=True)

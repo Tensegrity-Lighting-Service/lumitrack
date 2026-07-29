@@ -87,6 +87,9 @@ export interface Project {
   transformInvertX: boolean
   transformInvertY: boolean
   transformSwapXy: boolean
+  transformUpAxis: 'y' | 'z'
+  psnIfaceIp: string
+  psnRateHz: number
   stageMapOriginXM: number
   stageMapOriginZM: number
   stageMapRotationDeg: number
@@ -155,6 +158,35 @@ export interface AckMessage {
   type: 'ack'
 }
 
+export interface IfacesMessage {
+  type: 'ifaces'
+  addresses: string[]
+}
+
+export interface PsnPreviewTracker {
+  id: number
+  name: string
+  posX: number
+  posY: number
+  posZ: number
+  oriX: number
+  oriY: number
+  oriZ: number
+}
+
+export interface PsnPreviewMessage {
+  type: 'psn_preview'
+  running: boolean
+  packetsSent: number
+  dest: string
+  ifaceIp: string
+  rateHz: number
+  upAxis: 'y' | 'z'
+  lastError: string | null
+  trackers: PsnPreviewTracker[]
+}
+
 export type ServerMessage =
   | ProjectMessage | TickMessage | BlockContextMessage
   | ErrorMessage | SavedMessage | AckMessage
+  | IfacesMessage | PsnPreviewMessage

@@ -14,7 +14,7 @@ def trackers(n, unicode_names=False):
         name = f"Pointé {i} ✦" if unicode_names else f"Point {i}"
         out.append(psn.Tracker(id=i * 7 % 65536, name=name,
                                x_m=1.5 * i - 3.0, y_m=2.5 + 0.1 * i, z_m=0.01 * i,
-                               yaw_rad=0.1 * i))
+                               ori_y=0.1 * i, ori_z=0.02 * i))
     return out
 
 cases = []
@@ -24,7 +24,8 @@ with mock.patch("time.monotonic", return_value=FIXED_MONOTONIC):
         cases.append({
             "n": n, "unicode": uni,
             "trackers": [{"id": t.id, "name": t.name, "x": t.x_m, "y": t.y_m,
-                          "z": t.z_m, "yaw": t.yaw_rad} for t in ts],
+                          "z": t.z_m, "oriX": t.ori_x, "oriY": t.ori_y,
+                          "oriZ": t.ori_z} for t in ts],
             "data_hex": psn.build_data_packet(ts, frame_id=7, packet_count=2).hex(),
             "info_hex": psn.build_info_packet(ts, system_name="Lumitrack ✓", frame_id=7, packet_count=2).hex(),
             "split_data_hex": [p.hex() for p in psn.split_data_packets(ts, frame_id=9)],

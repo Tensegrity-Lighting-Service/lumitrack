@@ -6,7 +6,7 @@
 // re-renders from them — every edit is sent as a command and only takes
 // effect once the sidecar echoes back a fresh `project` snapshot.
 import { useSyncExternalStore } from 'react'
-import type { BlockContextMessage, Project, ServerMessage, TickMessage } from './types'
+import type { BlockContextMessage, IfacesMessage, Project, PsnPreviewMessage, ServerMessage, TickMessage } from './types'
 
 const SIDECAR_PORT = 17845
 const RECONNECT_DELAY_MS = 1000
@@ -18,6 +18,8 @@ class SidecarClient {
   connected = false
   psnRunning = false
   lastError: string | null = null
+  ifaces: IfacesMessage | null = null
+  psnPreview: PsnPreviewMessage | null = null
 
   private ws: WebSocket | null = null
   private listeners = new Set<() => void>()
@@ -50,6 +52,10 @@ class SidecarClient {
         this.tick = msg
       } else if (msg.type === 'block_context') {
         this.blockContext = msg
+      } else if (msg.type === 'ifaces') {
+        this.ifaces = msg
+      } else if (msg.type === 'psn_preview') {
+        this.psnPreview = msg
       } else if (msg.type === 'error') {
         this.lastError = msg.message
         console.error('[sidecar]', msg.message)
@@ -84,6 +90,23 @@ class SidecarClient {
   // ---- PSN (§12.9: stays independent of edit vs. playback mode) ----
   psnStart() { this.send({ type: 'psn_start' }) }
   psnStop() { this.send({ type: 'psn_stop' }) }
+  updatePsnConfig(patch: {
+    mcastIp?: string; port?: number; systemName?: string
+    ifaceIp?: string; rateHz?: number
+    originXCm?: number; originYCm?: number
+    invertX?: boolean; invertY?: boolean; swapXy?: boolean
+    upAxis?: 'y' | 'z'
+  }) {
+    this.send({ type: 'update_psn_config', ...patch })
+  }
+  listIfaces() { this.send({ type: 'list_ifaces' }) }
+  requestPsnPreview() { this.send({ type: 'psn_preview' }) }
+  updatePoint(pointId: string, patch: {
+    name?: string; number?: number | null; color?: string
+    psnTrackerId?: number | null; defaultHeightCm?: number
+  }) {
+    this.send({ type: 'update_point', pointId, ...patch })
+  }
 
   // ---- editing ----
   addPoint(name: string, number?: number) {
@@ -164,6 +187,14 @@ export function useBlockContext(): BlockContextMessage | null {
 
 export function useConnected(): boolean {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.connected)
+}
+
+export function useIfaces(): IfacesMessage | null {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.ifaces)
+}
+
+export function usePsnPreview(): PsnPreviewMessage | null {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.psnPreview)
 }
 
 export function usePsnRunning(): boolean {

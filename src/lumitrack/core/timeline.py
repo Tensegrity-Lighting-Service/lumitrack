@@ -514,12 +514,13 @@ class OutputTransform:
 
     def __init__(self, origin_x_cm: float = 0.0, origin_y_cm: float = 0.0,
                  invert_x: bool = False, invert_y: bool = False,
-                 swap_xy: bool = False):
+                 swap_xy: bool = False, up_axis: str = "y"):
         self.origin_x_cm = origin_x_cm
         self.origin_y_cm = origin_y_cm
         self.invert_x = invert_x
         self.invert_y = invert_y
         self.swap_xy = swap_xy
+        self.up_axis = up_axis
 
     def to_metres(self, x_cm: float, y_cm: float, z_cm: float = 0.0):
         x = (x_cm - self.origin_x_cm) / 100.0
@@ -533,6 +534,16 @@ class OutputTransform:
             x, y = y, x
         return x, y, z
 
+    def to_psn(self, x_cm: float, y_cm: float, z_cm: float = 0.0):
+        """-> (pos_x, pos_y, pos_z) au sens de la SPEC PSN 2.03 p.8 :
+        « positive x is right, positive y is up, positive z is depth ».
+        up_axis "y" (conforme) : la hauteur part en Y, la profondeur du
+        plateau en Z ; "z" (héritage) : hauteur en Z."""
+        x, y, h = self.to_metres(x_cm, y_cm, z_cm)
+        if self.up_axis == "y":
+            return x, h, y
+        return x, y, h
+
     def centre_on(self, project: Project):
         self.origin_x_cm = project.stage_width_cm / 2.0
         self.origin_y_cm = project.stage_height_cm / 2.0
@@ -545,4 +556,5 @@ class OutputTransform:
             invert_x=project.transform_invert_x,
             invert_y=project.transform_invert_y,
             swap_xy=project.transform_swap_xy,
+            up_axis=getattr(project, "transform_up_axis", "y"),
         )

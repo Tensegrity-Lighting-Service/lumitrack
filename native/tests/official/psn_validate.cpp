@@ -56,8 +56,9 @@ int main(int argc, char** argv) {
                    t.get_pos().x, t.get_pos().y, t.get_pos().z, x, y, z);
             return 1;
         }
-        if (std::fabs(t.get_ori().z - yaw) > 1e-5f) {
-            printf("ECHEC: tracker %d ori.z %f != %f\n", id, t.get_ori().z, yaw);
+        // Spec 2.03 : ORI = vecteur axe-angle, lacet sur l'axe VERTICAL Y.
+        if (std::fabs(t.get_ori().y - yaw) > 1e-5f) {
+            printf("ECHEC: tracker %d ori.y %f != %f\n", id, t.get_ori().y, yaw);
             return 1;
         }
         if (iti->second != name) {

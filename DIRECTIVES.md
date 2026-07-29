@@ -432,6 +432,35 @@ rangées, cascade de délais dans l'ORDRE DE SÉLECTION 2D (selectedPointIds
 est déjà ordonné). Nécessite `Activation.delayMs` au modèle (Python + Rust
 + parité + block context) : un acteur peut démarrer après le début du bloc.
 
+### Mission panneau PSN + conformité d'axes (2026-07-29) — LIVRÉE
+
+Question de Florian (« dans Capture Y c'est l'axe vertical ») vérifiée dans
+la spec officielle 2.03 (PDF dans psn-cpp/doc, p.8) : « positive x is
+right, positive y is up, positive z is depth » — **Y VERTICAL est la
+convention officielle** (MA Lighting co-auteur). Deux corrections de
+conformité + panneau complet :
+
+- **Moteur** : `transform_up_axis` ("y" défaut conforme / "z" héritage) —
+  `OutputTransform.to_psn` envoie (x, hauteur, profondeur) en Y-up ; ORI
+  corrigé en VECTEUR AXE-ANGLE (spec p.9) : le lacet porte sur ori_y en
+  Y-up (avant : toujours ori_z, non conforme). Tracker Python/Rust : champs
+  ori_x/y/z. Nouveaux champs projet : psn_iface_ip, psn_rate_hz. Fixtures
+  octets régénérées, 70 pytest + 34 cargo verts, harnais SDK officiel
+  revalidé (92 trackers, lacet vérifié sur ori_y).
+- **Sidecar** : update_psn_config (tout voyage avec le projet),
+  list_ifaces (énumération IPv4 locales), psn_preview (moniteur : MÊME
+  build_trackers que l'émission), update_point (ID PSN, nom, n°, couleur,
+  hauteur).
+- **Panneau** (menu Sortie → Réglages PSN…) : état/start-stop/compteur de
+  trames, carte réseau (liste détectée), multicast/port/nom/fréquence,
+  repère (axe vertical Y/Z avec note spec, origine, inversions, swap),
+  table des trackers (ID PSN éditable par acteur, ID émis résolu),
+  moniteur live 2 Hz (pos_x/y/z + ori, colonne verticale surlignée ↑).
+
+ATTENTION changement de sortie : les projets existants passent de Z-up à
+Y-up par défaut — c'est la correction de conformité ; l'option Z reste dans
+le panneau pour les outils qui dévient.
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).
