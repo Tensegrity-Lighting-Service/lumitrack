@@ -77,6 +77,22 @@ const SNAP_FLOOR_EPSILON_M = 0.15
 const MOUSE_MAPPING = { LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: undefined as unknown as THREE.MOUSE, RIGHT: THREE.MOUSE.PAN }
 const TOUCH_MAPPING = { ONE: undefined as unknown as THREE.TOUCH, TWO: THREE.TOUCH.DOLLY_PAN }
 
+// Bornes du zoom orthographique (px par mètre-monde, en gros). MIN dézoome
+// jusqu'à voir une aréna de plusieurs centaines de mètres, MAX descend au
+// millimètre par pixel.
+const MIN_SCENE_ZOOM = 0.5
+const MAX_SCENE_ZOOM = 5000
+// Sensibilité molette : facteur de zoom par unité de deltaY. Un cran de
+// molette classique (~120) donne ≈ ±15 % ; un trackpad (petits deltas
+// continus) produit un zoom proportionnel et doux.
+const WHEEL_ZOOM_BASE = 0.9988
+// Vitesse de convergence de l'animation (1/s) : ~90 % de l'écart absorbé
+// en ~180 ms, indépendant du framerate.
+const ZOOM_CONVERGE_RATE = 13
+// Réutilisés chaque frame par le verrouillage d'ancre (zéro allocation).
+const ZOOM_GROUND_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+const ZOOM_HIT = new THREE.Vector3()
+
 /** Stage (x_cm, y_cm depth, z_cm height) -> StageGroup-local metres
  * (X, Y up, Z). The group's own transform (position/rotation) then places
  * this into world space — children never need the placement themselves. */
@@ -1531,18 +1547,105 @@ function SceneContent({
     }
   }, [camera, size.width, size.height, terrainBounds !== null, fitToken, cameraLocked])
 
-  // Viewport +/- buttons (top-right of the scene panel). Multiplies zoom
-  // around the current view centre — mouse-wheel zoom already goes to the
-  // cursor via MapControls' zoomToCursor, this is just the button variant.
+  // ---- Zoom molette fluide, ancré au curseur ----
+  // Le `zoomToCursor` natif de three.js calcule sa correction d'ancre UNE
+  // fois par cran de molette ; avec `enableDamping`, le zoom réel s'étale
+  // ensuite sur plusieurs frames et l'ancre dérive → les à-coups constatés.
+  // On reprend la technique des apps cartographiques (MapLibre/Google
+  // Maps) et de camera-controls : la molette ne zoome jamais directement,
+  // elle pousse une CIBLE + mémorise le point-MONDE sous le curseur ; une
+  // boucle par frame fait converger cam.zoom exponentiellement puis
+  // re-projette le curseur et translate caméra + target pour que ce
+  // point-monde reste exactement sous le pointeur À CHAQUE frame.
+  // L'ancre est re-verrouillée par frame, jamais par évènement.
+  const zoomAnimRef = useRef<{ target: number; ndc: THREE.Vector2; anchor: THREE.Vector3 } | null>(null)
+  const cameraLockedRef = useRef(cameraLocked)
+  cameraLockedRef.current = cameraLocked
+
+  const startZoom = useCallback((factor: number, ndc: THREE.Vector2) => {
+    const cam = camera as THREE.OrthographicCamera
+    const anim = zoomAnimRef.current
+    const base = anim ? anim.target : cam.zoom
+    const target = Math.min(MAX_SCENE_ZOOM, Math.max(MIN_SCENE_ZOOM, base * factor))
+    // Point-monde actuellement sous le curseur : c'est LUI qui doit rester
+    // immobile pendant toute la convergence.
+    raycaster.setFromCamera(ndc, cam)
+    if (!raycaster.ray.intersectPlane(ZOOM_GROUND_PLANE, ZOOM_HIT)) return
+    if (anim) {
+      anim.target = target
+      anim.ndc.copy(ndc)
+      anim.anchor.copy(ZOOM_HIT)
+    } else {
+      zoomAnimRef.current = { target, ndc: ndc.clone(), anchor: ZOOM_HIT.clone() }
+    }
+  }, [camera, raycaster])
+
+  useEffect(() => {
+    const dom = gl.domElement
+    // Écouteur en phase CAPTURE sur le parent du canvas : il passe avant
+    // celui des MapControls (posé sur le canvas lui-même), et le
+    // stopPropagation garantit qu'ils ne voient jamais la molette — leur
+    // zoom (enableZoom) ne sert plus qu'au pincement tactile.
+    const holder = dom.parentElement ?? dom
+    const onWheel = (e: WheelEvent) => {
+      if (cameraLockedRef.current) return
+      e.preventDefault()
+      e.stopPropagation()
+      // deltaMode 1 = lignes (Firefox), 2 = pages → ramené en pixels.
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 120 : e.deltaY
+      const rect = dom.getBoundingClientRect()
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      )
+      startZoom(Math.pow(WHEEL_ZOOM_BASE, dy), ndc)
+    }
+    holder.addEventListener('wheel', onWheel, { passive: false, capture: true })
+    return () => holder.removeEventListener('wheel', onWheel, true)
+  }, [gl, startZoom])
+
+  // Convergence + verrouillage d'ancre. Tourne APRÈS l'update des
+  // MapControls (drei l'enregistre en priorité -1) : le pan amorti est déjà
+  // appliqué quand on recale la caméra.
+  useFrame((_, delta) => {
+    const anim = zoomAnimRef.current
+    if (!anim) return
+    const cam = camera as THREE.OrthographicCamera
+    const gap = Math.log(anim.target / cam.zoom)
+    const done = Math.abs(gap) < 0.002
+    if (done) {
+      cam.zoom = anim.target
+    } else {
+      const k = 1 - Math.exp(-ZOOM_CONVERGE_RATE * Math.min(delta, 0.05))
+      cam.zoom = cam.zoom * Math.exp(gap * k)
+    }
+    cam.updateProjectionMatrix()
+    cam.updateMatrixWorld()
+    // Verrouillage : après CE pas de zoom, le point-monde mémorisé doit se
+    // retrouver sous le curseur — on translate d'exactement la dérive.
+    raycaster.setFromCamera(anim.ndc, cam)
+    if (raycaster.ray.intersectPlane(ZOOM_GROUND_PLANE, ZOOM_HIT)) {
+      const dx = anim.anchor.x - ZOOM_HIT.x
+      const dz = anim.anchor.z - ZOOM_HIT.z
+      cam.position.x += dx
+      cam.position.z += dz
+      const ctl = controlsRef.current
+      if (ctl) {
+        ctl.target.x += dx
+        ctl.target.z += dz
+      }
+    }
+    if (done) zoomAnimRef.current = null
+  })
+
+  // Boutons +/- du viewport : même animation, ancrée au centre de la vue.
   const zoomActionTokenRef = useRef(-1)
   useEffect(() => {
     if (zoomAction.token === zoomActionTokenRef.current) return
     zoomActionTokenRef.current = zoomAction.token
     if (cameraLocked) return
-    const cam = camera as THREE.OrthographicCamera
-    cam.zoom = Math.max(0.01, cam.zoom * zoomAction.factor)
-    cam.updateProjectionMatrix()
-  }, [camera, zoomAction, cameraLocked])
+    startZoom(zoomAction.factor, new THREE.Vector2(0, 0))
+  }, [zoomAction, cameraLocked, startZoom])
 
   useEffect(() => {
     const dom = gl.domElement
@@ -1975,9 +2078,11 @@ function SceneContent({
     <>
       <OrthographicCamera makeDefault near={0.1} far={span * 20} />
       {/* Souris 2026 : clic gauche = lasso/sélection (plus jamais la
-          caméra), clic droit OU gauche+droit = pan, molette = zoom au
-          curseur. Tactile : 1 doigt = sélection/drag, 2 doigts = pincer
-          pour zoomer + déplacer (type iPad). */}
+          caméra), clic droit OU gauche+droit = pan. La molette est gérée
+          par NOTRE zoom fluide (capture ci-dessus) — les MapControls ne la
+          voient jamais ; leur zoomToCursor ne sert plus qu'au pincement
+          tactile (1 doigt = sélection/drag, 2 doigts = pincer + déplacer,
+          type iPad). */}
       <MapControls
         ref={controlsRef}
         enabled={!cameraLocked}

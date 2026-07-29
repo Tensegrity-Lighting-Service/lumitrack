@@ -14,6 +14,7 @@
 // relâchement — même modèle que la lib remplacée, sans tempête de
 // broadcasts pendant le geste.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { Cue, Project } from '../types'
 import { sidecar } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
@@ -192,7 +193,13 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
       const next = Math.abs(Math.log(remaining)) < 0.01
         ? state.target
         : current * Math.exp(Math.log(remaining) * 0.25)
-      setPxPerMs(next)
+      // Commit ATOMIQUE : sans flushSync, React re-rend les blocs en
+      // asynchrone alors que scrollLeft part tout de suite au DOM — le
+      // navigateur peignait une frame avec le nouveau scroll mais les
+      // anciennes positions de blocs ("les blocs vibrent en partant loin
+      // avant de revenir"). flushSync force le re-layout des blocs AVANT
+      // de poser scrollLeft : les deux arrivent dans la même peinture.
+      flushSync(() => setPxPerMs(next))
       el.scrollLeft = Math.max(0, state.anchorT * next - state.offsetX)
       if (next !== state.target) {
         state.raf = requestAnimationFrame(step)
