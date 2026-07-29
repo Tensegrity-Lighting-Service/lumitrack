@@ -15,6 +15,16 @@ def rand_project(n_points, n_cues):
     p = Project(name="parity")
     p.points = [Point(id=f"p{i}", name=f"P{i}", default_height_cm=random.choice([0.0, 120.0]))
                 for i in range(n_points)]
+    # Zones backstage : 2 zones, attaches réparties, certains points sans
+    # AUCUNE activation (couvre le repli slot + les entrées en fondu).
+    p.backstage_zones = [
+        {"id": "bsA", "name": "Jardin", "xCm": -500.0, "yCm": 0.0,
+         "widthCm": 300.0, "heightCm": 900.0},
+        {"id": "bsB", "name": "Cour", "xCm": 5600.0, "yCm": 500.0,
+         "widthCm": 240.0, "heightCm": 600.0},
+    ]
+    for pt in p.points:
+        pt.home_zone_id = random.choice(["bsA", "bsB", None])
     easings = ["linear", "smooth", "ease-in", "ease-out", "bounce", "spring", "exponential"]
 
     def rand_curve():

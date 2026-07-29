@@ -46,6 +46,10 @@ class Point:
     color: str = "#4F6DF5"
     psn_tracker_id: Optional[int] = None  # falls back to `number` when None
     default_height_cm: float = DEFAULT_HEIGHT_CM
+    # Zone backstage d'attache (mission backstage 2026-07-29) : là où
+    # l'acteur EXISTE tant qu'aucune activation ne l'a saisi — visible en
+    # scène et émis en PSN. None -> première zone du projet.
+    home_zone_id: Optional[str] = None
 
     def resolved_tracker_id(self, fallback_index: int) -> int:
         if self.psn_tracker_id is not None:
@@ -61,6 +65,7 @@ class Point:
             "id": self.id, "name": self.name, "number": self.number,
             "color": self.color, "psnTrackerId": self.psn_tracker_id,
             "defaultHeightCm": self.default_height_cm,
+            "homeZoneId": self.home_zone_id,
         }
 
     @classmethod
@@ -69,6 +74,7 @@ class Point:
             id=d["id"], name=d.get("name", ""), number=d.get("number"),
             color=d.get("color", "#4F6DF5"), psn_tracker_id=d.get("psnTrackerId"),
             default_height_cm=float(d.get("defaultHeightCm", DEFAULT_HEIGHT_CM)),
+            home_zone_id=d.get("homeZoneId"),
         )
 
 
@@ -171,6 +177,11 @@ class Project:
     grid_size_cm: float = 50.0
     points: list = field(default_factory=list)  # list[Point]
     cues: list = field(default_factory=list)     # list[Cue]
+    # Zones backstage : rectangles nommés en coordonnées scène (souvent HORS
+    # de la zone de jeu) — points d'entrée/sortie des acteurs. Un acteur
+    # sans activation vit dans sa zone (grille auto, voir
+    # timeline.backstage_slot) et le PSN l'émet.
+    backstage_zones: list = field(default_factory=list)  # [{id,name,xCm,yCm,widthCm,heightCm}]
     floor_image_path: Optional[str] = None
     terrain_gltf_path: Optional[str] = None
     audio_path: Optional[str] = None
@@ -214,6 +225,23 @@ class Project:
     terrain_rotation_deg: float = 0.0
 
     # ---------- helpers ----------
+
+    def ensure_backstage(self):
+        """Zone backstage par défaut (au bord jardin de la zone de jeu) si
+        le projet n'en a aucune, et attache chaque acteur orphelin à la
+        première zone. Idempotent — appelé au chargement et à la création."""
+        if not self.backstage_zones:
+            self.backstage_zones.append({
+                "id": "backstage-1", "name": "Backstage",
+                "xCm": -500.0, "yCm": 0.0,
+                "widthCm": 400.0,
+                "heightCm": min(1200.0, float(self.stage_height_cm)),
+            })
+        zone_ids = {z["id"] for z in self.backstage_zones}
+        first = self.backstage_zones[0]["id"]
+        for pt in self.points:
+            if pt.home_zone_id not in zone_ids:
+                pt.home_zone_id = first
 
     def sort_cues(self):
         self.cues.sort(key=lambda c: c.start_ms)
@@ -316,6 +344,7 @@ class Project:
             "stageMapOriginZM": self.stage_map_origin_z_m,
             "stageMapRotationDeg": self.stage_map_rotation_deg,
             "terrainRotationDeg": self.terrain_rotation_deg,
+            "backstageZones": self.backstage_zones,
             "points": [p.to_dict() for p in self.points],
             "cues": [
                 {
@@ -365,6 +394,7 @@ class Project:
             stage_map_rotation_deg=float(d.get("stageMapRotationDeg", 0.0)),
             terrain_rotation_deg=float(d.get("terrainRotationDeg", 0.0)),
         )
+        proj.backstage_zones = list(d.get("backstageZones") or [])
         proj.points = [Point.from_dict(p) for p in d.get("points", [])]
         for c in d.get("cues", []):
             activations = {
@@ -378,6 +408,7 @@ class Project:
                 color=c.get("color", "#4F6DF5"),
                 lane=int(c["lane"]) if c.get("lane") is not None else -1,
             ))
+        proj.ensure_backstage()
         proj.sort_cues()
         # Migration multi-pistes : les projets d'avant "lane" empilaient les
         # blocs automatiquement (glouton) — on rejoue cet empaquetage UNE

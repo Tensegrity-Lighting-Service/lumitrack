@@ -477,6 +477,32 @@ Unités : AFFICHAGE en mètres (X/Y/Z, zone, grille, origines PSN) et
 secondes (fades) — le modèle interne reste cm/ms, conversions dans les
 champs uniquement. Moniteur PSN déjà en mètres (protocole).
 
+### Mission zones backstage (2026-07-29) — LIVRÉE
+
+Demande de Florian (acteur ajouté invisible) + concept validé par
+AskUserQuestion : zone par défaut créée par projet, placement en grille
+auto, drop sans bloc = bloc créé au playhead.
+
+- **Modèle** : `Project.backstage_zones` [{id,name,xCm,yCm,widthCm,
+  heightCm}], `Point.home_zone_id`, `ensure_backstage()` (zone « Backstage »
+  par défaut au bord jardin + attaches manquantes — appelé au chargement,
+  création, import, add_point). Sidecar : set_backstage_zones (état
+  complet), update_point homeZoneId.
+- **Moteur** (Python + Rust, parité régénérée avec 2 zones et des points
+  SANS activation) : `backstage_slot` (grille auto 60 cm, ordre roster par
+  zone, même constante des deux côtés) ; un acteur sans activation VIT dans
+  sa zone (visible + émis PSN) ; première apparition = FONDU depuis le slot
+  (fini le snap) — y compris tracés spatiaux et départ du block context
+  (la trajectoire d'ENTRÉE se dessine depuis la coulisse). 76 pytest, 34
+  cargo.
+- **UI** : zones dessinées (pointillé sarcelle + nom en CanvasTexture
+  hors-ligne), éditables en mode « Éditer la zone de jeu » (corps = move,
+  coin BR = resize, panneau : renommer/supprimer/ajouter). Roster
+  draggable : drop sur la scène = activer dans le bloc sélectionné à
+  l'endroit du drop (ou bloc « Entrée » créé au playhead) ; Alt+drop sur
+  une zone = changer l'ATTACHE. Sortir/se déplacer entre coulisses = blocs
+  normaux ciblant les zones (tout l'attirail tracés/délais s'applique).
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).

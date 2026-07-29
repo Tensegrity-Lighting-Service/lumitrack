@@ -257,6 +257,38 @@ def path_position(start_xy, act, target_xy, p: float):
     return tuple(target_xy)
 
 
+# ---------------------------------------------------------- backstage ------
+
+BACKSTAGE_SPACING_CM = 60.0
+
+
+def backstage_slot(project: Project, point_id: str):
+    """-> (x_cm, y_cm) de la place de l'acteur dans sa zone backstage, ou
+    None (aucune zone). Grille auto (arbitrage Florian) : rangées espacées
+    de BACKSTAGE_SPACING_CM, dans l'ordre du roster parmi les occupants de
+    la MÊME zone — même constante dans native/src/timeline.rs (parité)."""
+    if not project.backstage_zones:
+        return None
+    zones = {z["id"]: z for z in project.backstage_zones}
+    default_id = project.backstage_zones[0]["id"]
+
+    def zone_of(pt):
+        return pt.home_zone_id if pt.home_zone_id in zones else default_id
+
+    me = project.point_by_id(point_id)
+    if me is None:
+        return None
+    my_zone_id = zone_of(me)
+    zone = zones[my_zone_id]
+    occupants = [pt.id for pt in project.points if zone_of(pt) == my_zone_id]
+    idx = occupants.index(point_id)
+    cols = max(1, int(float(zone["widthCm"]) // BACKSTAGE_SPACING_CM))
+    row, col = divmod(idx, cols)
+    x = float(zone["xCm"]) + BACKSTAGE_SPACING_CM / 2.0 + col * BACKSTAGE_SPACING_CM
+    y = float(zone["yCm"]) + BACKSTAGE_SPACING_CM / 2.0 + row * BACKSTAGE_SPACING_CM
+    return x, y
+
+
 # --------------------------------------------------------- axis resolver ---
 
 _AXIS_FIELDS = {
@@ -287,7 +319,7 @@ def _axis_keyframes(project: Project, point_id: str, axis: str):
     return kfs
 
 
-def _resolve_axis(kfs, t_ms: float) -> Optional[float]:
+def _resolve_axis(kfs, t_ms: float, first_origin: Optional[float] = None) -> Optional[float]:
     governing = None
     governing_index = -1
     for i, kf in enumerate(kfs):
@@ -301,7 +333,9 @@ def _resolve_axis(kfs, t_ms: float) -> Optional[float]:
 
     start, fade_end, target, act, _cue_id, axis = governing
     if governing_index == 0:
-        origin = target  # first appearance: no prior value, snap to target
+        # Première apparition : depuis la zone backstage si l'acteur en a
+        # une (ENTRÉE en fondu, mission backstage) — sinon snap historique.
+        origin = first_origin if first_origin is not None else target
     else:
         # L'origine est la position RÉELLEMENT résolue à l'instant où ce
         # keyframe démarre — évaluée sur la chaîne des prédécesseurs (fix
@@ -348,9 +382,19 @@ def resolve_positions(project: Project, t_ms: float) -> dict:
     for point in project.points:
         kfs_x = _axis_keyframes(project, point.id, "x")
         kfs_y = _axis_keyframes(project, point.id, "y")
-        x = _resolve_axis(kfs_x, t_ms)
-        y = _resolve_axis(kfs_y, t_ms)
+        slot = backstage_slot(project, point.id)
+        x = _resolve_axis(kfs_x, t_ms, slot[0] if slot else None)
+        y = _resolve_axis(kfs_y, t_ms, slot[1] if slot else None)
         if x is None or y is None:
+            # Aucune activation démarrée : l'acteur EXISTE dans sa zone
+            # backstage (visible + émis PSN). Sans zone : invisible, comme
+            # avant — jamais de fausse position.
+            if slot is None:
+                continue
+            result[point.id] = Pose(
+                x_cm=slot[0], y_cm=slot[1],
+                z_cm=point.default_height_cm, yaw_deg=0.0,
+            )
             continue
         # Tracé spatial (motion path) : quand le MÊME cue gouverne x ET y,
         # que son activation porte un tracé courbe et qu'on est en plein
@@ -360,11 +404,11 @@ def resolve_positions(project: Project, t_ms: float) -> dict:
         # est partiellement écrasé, comme n'importe quelle cible.
         ix = _governing_index(kfs_x, t_ms)
         iy = _governing_index(kfs_y, t_ms)
-        if ix > 0 and iy > 0 and kfs_x[ix][4] == kfs_y[iy][4]:
+        if ix >= 0 and iy >= 0 and kfs_x[ix][4] == kfs_y[iy][4]:
             start, fade_end, _tx, act, _cid, _ax = kfs_x[ix]
             if act.has_spatial_path() and fade_end > start and t_ms < fade_end:
-                ox = _resolve_axis(kfs_x[:ix], start)
-                oy = _resolve_axis(kfs_y[:iy], start)
+                ox = _resolve_axis(kfs_x[:ix], start) if ix > 0 else (slot[0] if slot else None)
+                oy = _resolve_axis(kfs_y[:iy], start) if iy > 0 else (slot[1] if slot else None)
                 origin = (ox if ox is not None else kfs_x[ix][2],
                           oy if oy is not None else kfs_y[iy][2])
                 target = (kfs_x[ix][2], kfs_y[iy][2])
@@ -437,7 +481,13 @@ def resolve_block_context(project: Project, cue_id: str,
                 continue
             index = next(i for i, kf in enumerate(kfs) if kf[4] == cue_id)
             if index == 0:
-                axis_start[axis] = value  # first appearance: snap, no travel
+                # Première apparition : la trajectoire d'ENTRÉE part de la
+                # zone backstage quand l'acteur en a une.
+                slot = backstage_slot(project, point.id)
+                if slot is not None and axis in ("x", "y"):
+                    axis_start[axis] = slot[0] if axis == "x" else slot[1]
+                else:
+                    axis_start[axis] = value
                 sources[axis] = None
             else:
                 resolved = _resolve_axis(kfs[:index], cue.start_ms)

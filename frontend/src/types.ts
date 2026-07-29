@@ -10,6 +10,19 @@ export interface Point {
   color: string
   psnTrackerId: number | null
   defaultHeightCm: number
+  /** Zone backstage d'attache — null = première zone du projet. */
+  homeZoneId: string | null
+}
+
+/** Zone backstage : rectangle nommé en coordonnées scène (souvent hors de
+ * la zone de jeu) — point d'entrée/sortie des acteurs. */
+export interface BackstageZone {
+  id: string
+  name: string
+  xCm: number
+  yCm: number
+  widthCm: number
+  heightCm: number
 }
 
 // Nœud de courbe du graph editor — même format que core/timeline.py
@@ -94,6 +107,7 @@ export interface Project {
   stageMapOriginZM: number
   stageMapRotationDeg: number
   terrainRotationDeg: number
+  backstageZones: BackstageZone[]
   points: Point[]
   cues: Cue[]
 }

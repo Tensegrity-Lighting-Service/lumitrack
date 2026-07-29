@@ -7,7 +7,7 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
 import { PsnPanel } from './ui/PsnPanel'
-import type { Activation, Cue, Point, Project } from './types'
+import type { Activation, BackstageZone, Cue, Point, Project } from './types'
 
 const ROSTER_MIN = 160
 const ROSTER_MAX = 420
@@ -380,6 +380,11 @@ function App() {
             <li
               key={point.id}
               className={selectedPointIds.includes(point.id) ? 'selected' : ''}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('application/x-lumitrack-point', point.id)
+                e.dataTransfer.effectAllowed = 'copy'
+              }}
               onClick={(e) => {
                 // Ctrl/Cmd : bascule ; Shift : plage depuis le principal ;
                 // clic nu : sélection simple (re-clic = désélection).
@@ -419,6 +424,7 @@ function App() {
         <Scene
           project={project}
           positions={positions}
+          tMs={tMs}
           selectedPointId={selectedPointId}
           selectedPointIds={selectedPointIds}
           onSelectPoints={setSelectedPointIds}
@@ -483,6 +489,7 @@ function App() {
       <aside className="inspector">
         <h2>Inspecteur</h2>
         {editingZone && <StagePlacementPanel project={project} />}
+        {editingZone && <BackstagePanel project={project} />}
         {selectedCue && selectedPointIds.length > 1 && (
           <GroupTimingPanel
             cue={selectedCue}
@@ -525,6 +532,48 @@ function App() {
 // Numeric mirror of the drag handles in Scene.tsx (move/resize/rotate) —
 // same underlying sidecar.updateStageMap() calls, for precise values or a
 // mouse-free adjustment. Only shown while "Éditer la zone de jeu" is on.
+function BackstagePanel({ project }: { project: Project }) {
+  const zones = project.backstageZones ?? []
+  const update = (id: string, patch: Partial<BackstageZone>) => {
+    sidecar.setBackstageZones(zones.map((z) => (z.id === id ? { ...z, ...patch } : z)))
+  }
+  return (
+    <div className="stage-placement">
+      <h3>Zones backstage</h3>
+      {zones.map((zone) => (
+        <div key={zone.id} className="backstage-row">
+          <input
+            value={zone.name}
+            onChange={(e) => update(zone.id, { name: e.target.value })}
+            title="Nom de la zone"
+          />
+          <button
+            title="Supprimer la zone"
+            disabled={zones.length <= 1}
+            onClick={() => sidecar.setBackstageZones(zones.filter((z) => z.id !== zone.id))}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      <button
+        className="backstage-add"
+        onClick={() => sidecar.setBackstageZones([...zones, {
+          id: `backstage-${Date.now()}`,
+          name: `Backstage ${zones.length + 1}`,
+          xCm: project.stageWidthCm + 100,
+          yCm: 0,
+          widthCm: 400,
+          heightCm: Math.min(1200, project.stageHeightCm),
+        }])}
+      >
+        + Zone backstage
+      </button>
+      <p className="hint">Glisse un acteur du roster sur une zone avec Alt pour l’y attacher. Les zones se déplacent/redimensionnent dans la scène.</p>
+    </div>
+  )
+}
+
 function StagePlacementPanel({ project }: { project: Project }) {
   return (
     <div className="stage-placement">

@@ -55,6 +55,38 @@ fn act_axis_progress(act: &Activation, axis: Axis, progress: f64) -> f64 {
     apply_easing(&act.easing, progress)
 }
 
+pub const BACKSTAGE_SPACING_CM: f64 = 60.0;
+
+/// Port de `backstage_slot` : place de l'acteur dans sa zone (grille auto,
+/// ordre du roster parmi les occupants de la même zone), None sans zone.
+fn backstage_slot(project: &Project, point_id: &str) -> Option<(f64, f64)> {
+    if project.backstage_zones.is_empty() {
+        return None;
+    }
+    let default_id = project.backstage_zones[0].id.clone();
+    let zone_of = |pt: &crate::model::Point| -> String {
+        match &pt.home_zone_id {
+            Some(id) if project.backstage_zones.iter().any(|z| &z.id == id) => id.clone(),
+            _ => default_id.clone(),
+        }
+    };
+    let me = project.points.iter().find(|p| p.id == point_id)?;
+    let my_zone_id = zone_of(me);
+    let zone = project.backstage_zones.iter().find(|z| z.id == my_zone_id)?;
+    let occupants: Vec<&str> = project.points.iter()
+        .filter(|p| zone_of(p) == my_zone_id)
+        .map(|p| p.id.as_str())
+        .collect();
+    let idx = occupants.iter().position(|id| *id == point_id)? as f64;
+    let cols = ((zone.width_cm / BACKSTAGE_SPACING_CM).floor() as i64).max(1) as f64;
+    let row = (idx / cols).floor();
+    let col = idx - row * cols;
+    Some((
+        zone.x_cm + BACKSTAGE_SPACING_CM / 2.0 + col * BACKSTAGE_SPACING_CM,
+        zone.y_cm + BACKSTAGE_SPACING_CM / 2.0 + row * BACKSTAGE_SPACING_CM,
+    ))
+}
+
 /// Port de `_axis_keyframes` : un keyframe par cue dont l'activation de ce
 /// point touche cet axe, trié par start_ms (tri stable).
 fn axis_keyframes<'a>(project: &'a Project, point_id: &str, axis: Axis) -> Vec<Keyframe<'a>> {
@@ -99,6 +131,10 @@ fn governing_index(kfs: &[Keyframe], t_ms: f64) -> Option<usize> {
 }
 
 fn resolve_axis(kfs: &[Keyframe], t_ms: f64) -> Option<f64> {
+    resolve_axis_with_origin(kfs, t_ms, None)
+}
+
+fn resolve_axis_with_origin(kfs: &[Keyframe], t_ms: f64, first_origin: Option<f64>) -> Option<f64> {
     let mut governing: Option<(usize, &Keyframe)> = None;
     for (i, kf) in kfs.iter().enumerate() {
         if kf.start_ms <= t_ms {
@@ -111,8 +147,10 @@ fn resolve_axis(kfs: &[Keyframe], t_ms: f64) -> Option<f64> {
     // Port du fix « téléportation » : l'origine est la position résolue à
     // l'instant du départ (chaîne des prédécesseurs), pas la cible brute du
     // keyframe précédent.
+    // Première apparition : depuis la zone backstage si fournie (entrée en
+    // fondu, mission backstage) — sinon snap historique.
     let origin = if index == 0 {
-        kf.value
+        first_origin.unwrap_or(kf.value)
     } else {
         resolve_axis(&kfs[..index], kf.start_ms).unwrap_or(kf.value)
     };
@@ -145,18 +183,36 @@ pub fn resolve_positions(project: &Project, t_ms: f64) -> BTreeMap<String, Pose>
     for point in &project.points {
         let kfs_x = axis_keyframes(project, &point.id, Axis::X);
         let kfs_y = axis_keyframes(project, &point.id, Axis::Y);
-        let x = resolve_axis(&kfs_x, t_ms);
-        let y = resolve_axis(&kfs_y, t_ms);
-        let (Some(mut x), Some(mut y)) = (x, y) else { continue };
+        let slot = backstage_slot(project, &point.id);
+        let x = resolve_axis_with_origin(&kfs_x, t_ms, slot.map(|s| s.0));
+        let y = resolve_axis_with_origin(&kfs_y, t_ms, slot.map(|s| s.1));
+        let (Some(mut x), Some(mut y)) = (x, y) else {
+            // Aucune activation démarrée : l'acteur vit dans sa zone.
+            if let Some((sx, sy)) = slot {
+                result.insert(point.id.clone(), Pose {
+                    x_cm: sx, y_cm: sy,
+                    z_cm: point.default_height_cm, yaw_deg: 0.0,
+                });
+            }
+            continue;
+        };
         // Tracé spatial : même sémantique que le Python (même cue gouverne
         // x ET y, tracé présent, en plein fade, pas une première
         // apparition) — sinon résolution par axe inchangée.
         if let (Some(ix), Some(iy)) = (governing_index(&kfs_x, t_ms), governing_index(&kfs_y, t_ms)) {
-            if ix > 0 && iy > 0 && kfs_x[ix].cue_id == kfs_y[iy].cue_id {
+            if kfs_x[ix].cue_id == kfs_y[iy].cue_id {
                 let kf = &kfs_x[ix];
                 if has_spatial_path(kf.act) && kf.fade_end_ms > kf.start_ms && t_ms < kf.fade_end_ms {
-                    let ox = resolve_axis(&kfs_x[..ix], kf.start_ms).unwrap_or(kfs_x[ix].value);
-                    let oy = resolve_axis(&kfs_y[..iy], kf.start_ms).unwrap_or(kfs_y[iy].value);
+                    let ox = if ix > 0 {
+                        resolve_axis(&kfs_x[..ix], kf.start_ms).unwrap_or(kfs_x[ix].value)
+                    } else {
+                        slot.map(|s| s.0).unwrap_or(kfs_x[ix].value)
+                    };
+                    let oy = if iy > 0 {
+                        resolve_axis(&kfs_y[..iy], kf.start_ms).unwrap_or(kfs_y[iy].value)
+                    } else {
+                        slot.map(|s| s.1).unwrap_or(kfs_y[iy].value)
+                    };
                     let origin = (ox, oy);
                     let target = (kfs_x[ix].value, kfs_y[iy].value);
                     let progress = (t_ms - kf.start_ms) / (kf.fade_end_ms - kf.start_ms);
@@ -241,7 +297,15 @@ pub fn resolve_block_context(
                     let index = kfs.iter().position(|kf| kf.cue_id == cue_id)
                         .expect("le cue touche cet axe donc il a un keyframe");
                     if index == 0 {
-                        axis_start.insert(axis, Some(value)); // 1re apparition : snap
+                        // 1re apparition : la trajectoire d'ENTRÉE part de
+                        // la zone backstage quand l'acteur en a une.
+                        let slot = backstage_slot(project, &point.id);
+                        let start_v = match (slot, axis) {
+                            (Some((sx, _)), Axis::X) => sx,
+                            (Some((_, sy)), Axis::Y) => sy,
+                            _ => value,
+                        };
+                        axis_start.insert(axis, Some(start_v));
                         sources.insert(axis.key(), None);
                     } else {
                         // Fix téléportation : départ = position résolue au
@@ -312,6 +376,7 @@ mod tests {
         Point {
             id: id.into(), name: id.to_uppercase(), number: None,
             color: "#fff".into(), psn_tracker_id: None, default_height_cm: 0.0,
+            home_zone_id: None,
         }
     }
 
@@ -333,6 +398,7 @@ mod tests {
         Project {
             name: "t".into(), stage_width_cm: 5000.0, stage_height_cm: 3000.0,
             audio_duration_s: None, points, cues: cues_v,
+            backstage_zones: Vec::new(),
         }
     }
 

@@ -78,6 +78,7 @@ def _demo_project() -> Project:
     project.cues = [cue_a, cue_b, cue_c]
     project.transform_origin_x_cm = project.stage_width_cm / 2
     project.transform_origin_y_cm = project.stage_height_cm / 2
+    project.ensure_backstage()
     return project
 
 
@@ -315,6 +316,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             point.color = msg["color"]
         if "psnTrackerId" in msg:
             point.psn_tracker_id = msg["psnTrackerId"]
+        if "homeZoneId" in msg:
+            point.home_zone_id = msg["homeZoneId"]
         if "defaultHeightCm" in msg and msg["defaultHeightCm"] is not None:
             point.default_height_cm = float(msg["defaultHeightCm"])
         return None
@@ -347,12 +350,32 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             project.grid_size_cm = max(1.0, float(msg["gridSizeCm"]))
         return None
 
+    if msg_type == "set_backstage_zones":
+        # Liste complète des zones (création/édition/suppression en un seul
+        # message — le panneau envoie l'état entier, simple et sans dérive).
+        zones = []
+        for z in msg.get("zones") or []:
+            if not z.get("id"):
+                continue
+            zones.append({
+                "id": str(z["id"]), "name": str(z.get("name") or "Backstage"),
+                "xCm": float(z.get("xCm", 0.0)), "yCm": float(z.get("yCm", 0.0)),
+                "widthCm": max(60.0, float(z.get("widthCm", 400.0))),
+                "heightCm": max(60.0, float(z.get("heightCm", 400.0))),
+            })
+        session.project.backstage_zones = zones
+        session.project.ensure_backstage()
+        return None
+
     if msg_type == "add_point":
         pid = msg.get("id") or str(uuid.uuid4())
         session.project.points.append(Point(
             id=pid, name=msg.get("name", "Point"), number=msg.get("number"),
             color=msg.get("color", "#4F6DF5"),
         ))
+        # Attache backstage immédiate : le nouvel acteur apparaît dans sa
+        # zone au lieu d'être invisible (mission backstage).
+        session.project.ensure_backstage()
         return None
 
     if msg_type == "add_cue":
@@ -456,11 +479,15 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         return None
 
     if msg_type == "import_stancz":
-        session.set_project(import_stancz(msg["path"]))
+        project = import_stancz(msg["path"])
+        project.ensure_backstage()
+        session.set_project(project)
         return None
 
     if msg_type == "new_project":
-        session.set_project(Project(name=msg.get("name", "Untitled")))
+        project = Project(name=msg.get("name", "Untitled"))
+        project.ensure_backstage()
+        session.set_project(project)
         return None
 
     if msg_type == "save_bundle":

@@ -603,3 +603,20 @@
 .psn-table .swatch { margin-right: 6px; }
 .psn-mono { font-family: ui-monospace, monospace; }
 .psn-up { color: #4ff58c; }
+
+/* ---- Zones backstage (panneau) ---- */
+.backstage-row { display: flex; gap: 6px; margin-bottom: 5px; }
+.backstage-row input {
+  flex: 1; font-size: 12px; padding: 3px 6px;
+  background: #1f1f27; color: #d5d5e0; border: 1px solid #30303c; border-radius: 4px;
+}
+.backstage-row button {
+  font-size: 11px; padding: 2px 7px; border-radius: 4px;
+  background: #1f1f27; color: #b9b9c6; border: 1px solid #30303c; cursor: pointer;
+}
+.backstage-row button:disabled { opacity: 0.35; cursor: default; }
+.backstage-add {
+  font-size: 11px; padding: 3px 8px; border-radius: 4px; margin-top: 2px;
+  background: #1f2a28; color: #7ee0d0; border: 1px solid #2d4a44; cursor: pointer;
+}
+.roster li { cursor: grab; }

@@ -32,7 +32,7 @@ import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
-import type { Activation, BlockContextEntry, BlockContextMessage, PathPoint, Project, Pose } from '../types'
+import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, PathPoint, Project, Pose } from '../types'
 import { boundsOf, rotationArc } from './transformBox'
 import type { Bounds } from './transformBox'
 
@@ -905,6 +905,160 @@ function DarkenMask({ maskBounds, stageGroupRef, widthM, heightM }: {
  * horizontal plane at the actor's height and throttles setActivation calls,
  * pointerup releases MapControls again. */
 
+/** Étiquette de texte hors-ligne : nom rendu dans un CanvasTexture (pas de
+ * police réseau type troika), plan à taille écran constante. */
+function ZoneLabel({ text, xCm, yCm }: { text: string; xCm: number; yCm: number }) {
+  const ref = useRef<THREE.Mesh>(null)
+  const texture = useMemo(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 256
+    canvas.height = 40
+    const ctx = canvas.getContext('2d')!
+    ctx.font = '600 24px system-ui, sans-serif'
+    ctx.fillStyle = '#7ee0d0'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, 6, 20)
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.anisotropy = 4
+    return tex
+  }, [text])
+  useFrame(({ camera }) => {
+    if (!ref.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const h = 16 / zoom
+    ref.current.scale.set(h * (256 / 40), h, 1)
+  })
+  const [lx, , lz] = stageToLocal(xCm, yCm, 0)
+  return (
+    <mesh ref={ref} position={[lx + 0.05, 0.05, lz + 0.05]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={1036}>
+      <planeGeometry args={[1, 1]} />
+      <meshBasicMaterial map={texture} transparent depthTest={false} depthWrite={false} />
+    </mesh>
+  )
+}
+
+/** Zone backstage : rectangle pointillé sarcelle + nom. En mode « Éditer la
+ * zone de jeu », le corps se déplace et le coin bas-droit redimensionne
+ * (mêmes poignées écran que partout ailleurs). */
+function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZones }: {
+  zone: BackstageZone
+  editing: boolean
+  stageGroupRef: React.RefObject<THREE.Group | null>
+  controlsRef: React.RefObject<MapControlsImpl | null>
+  allZones: BackstageZone[]
+}) {
+  const { camera, raycaster, gl } = useThree()
+  const dragRef = useRef<{ kind: 'move' | 'resize'; startCm: { x: number; y: number }
+    orig: BackstageZone; lastSent: number } | null>(null)
+
+  useEffect(() => {
+    if (!editing) return
+    const dom = gl.domElement
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+    const hit = new THREE.Vector3()
+    const hitCm = (e: PointerEvent) => {
+      const rect = dom.getBoundingClientRect()
+      raycaster.setFromCamera(new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      ), camera)
+      if (!raycaster.ray.intersectPlane(plane, hit) || !stageGroupRef.current) return null
+      const local = stageGroupRef.current.worldToLocal(hit.clone())
+      return { x: local.x / CM_TO_M, y: local.z / CM_TO_M }
+    }
+    const send = (patch: Partial<BackstageZone>) => {
+      sidecar.setBackstageZones(allZones.map((z) => (z.id === zone.id ? { ...z, ...patch } : z)))
+    }
+    const onMove = (e: PointerEvent) => {
+      const drag = dragRef.current
+      if (!drag) return
+      const now = performance.now()
+      if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
+      drag.lastSent = now
+      const p = hitCm(e)
+      if (!p) return
+      if (drag.kind === 'move') {
+        send({ xCm: drag.orig.xCm + (p.x - drag.startCm.x), yCm: drag.orig.yCm + (p.y - drag.startCm.y) })
+      } else {
+        send({
+          widthCm: Math.max(60, drag.orig.widthCm + (p.x - drag.startCm.x)),
+          heightCm: Math.max(60, drag.orig.heightCm + (p.y - drag.startCm.y)),
+        })
+      }
+    }
+    const onUp = () => {
+      dragRef.current = null
+      if (controlsRef.current) controlsRef.current.enabled = true
+    }
+    dom.addEventListener('pointermove', onMove)
+    dom.addEventListener('pointerup', onUp)
+    dom.addEventListener('pointerleave', onUp)
+    return () => {
+      dom.removeEventListener('pointermove', onMove)
+      dom.removeEventListener('pointerup', onUp)
+      dom.removeEventListener('pointerleave', onUp)
+    }
+  }, [editing, gl, camera, raycaster, zone, allZones])
+
+  const begin = (e: ThreeEvent<PointerEvent>, kind: 'move' | 'resize') => {
+    if (!editing) return
+    e.stopPropagation()
+    const rect = gl.domElement.getBoundingClientRect()
+    raycaster.setFromCamera(new THREE.Vector2(
+      ((e.nativeEvent.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.nativeEvent.clientY - rect.top) / rect.height) * 2 + 1,
+    ), camera)
+    const hp = new THREE.Vector3()
+    raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hp)
+    const local = stageGroupRef.current ? stageGroupRef.current.worldToLocal(hp.clone()) : hp
+    dragRef.current = {
+      kind, orig: { ...zone },
+      startCm: { x: local.x / CM_TO_M, y: local.z / CM_TO_M },
+      lastSent: 0,
+    }
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const { xCm, yCm, widthCm, heightCm } = zone
+  const outline = [
+    [xCm, yCm], [xCm + widthCm, yCm], [xCm + widthCm, yCm + heightCm], [xCm, yCm + heightCm], [xCm, yCm],
+  ].map(([x, y]) => {
+    const [lx, , lz] = stageToLocal(x, y, 0)
+    return new THREE.Vector3(lx, 0.015, lz)
+  })
+  const [brx, , brz] = stageToLocal(xCm + widthCm, yCm + heightCm, 0)
+  return (
+    <group>
+      <Line points={outline} color="#4ff5e0" lineWidth={1.5} dashed dashSize={0.3} gapSize={0.18}
+        transparent opacity={editing ? 0.95 : 0.5} depthTest={false} renderOrder={1035} />
+      <mesh
+        position={[(xCm + widthCm / 2) * CM_TO_M, 0.012, (yCm + heightCm / 2) * CM_TO_M]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        renderOrder={1034}
+        onPointerDown={(e) => begin(e, 'move')}
+        onPointerOver={() => { if (editing) document.body.style.cursor = 'move' }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        <planeGeometry args={[widthCm * CM_TO_M, heightCm * CM_TO_M]} />
+        <meshBasicMaterial color="#4ff5e0" transparent opacity={editing ? 0.10 : 0.045}
+          depthWrite={false} depthTest={false} />
+      </mesh>
+      <ZoneLabel text={zone.name} xCm={xCm} yCm={yCm} />
+      {editing && (
+        <ScreenSizedHandle
+          position={[brx, 0.03, brz]}
+          sizePx={HANDLE_PX}
+          args={[1, 1, 1]}
+          color="#4ff5e0"
+          cursor="nwse-resize"
+          renderOrder={1041}
+          onPointerDown={(e) => begin(e, 'resize')}
+        />
+      )}
+    </group>
+  )
+}
+
 /** Boîte de transformation de la sélection multiple — MÊME modèle que
  * l'édition de la zone de jeu (ZoneOutline/ZoneHandles) : contour +
  * remplissage translucide (draggable = déplacer toute la sélection),
@@ -1244,12 +1398,13 @@ function SelectionRotateHandle({ topCenter, onPointerDown }: {
 }
 
 function SceneContent({
-  project, positions, selectedPointId, selectedPointIds, selectedCueId, blockContext, onSelectPoint, onSelectPoints,
+  project, positions, tMs, selectedPointId, selectedPointIds, selectedCueId, blockContext, onSelectPoint, onSelectPoints,
   onLassoRect, cameraLocked, fitToken, editingZone,
   gridOpacity, snapToGrid, zoomAction,
 }: {
   project: Project
   positions: Record<string, Pose>
+  tMs: number
   selectedPointId: string | null
   selectedPointIds: string[]
   selectedCueId: string | null
@@ -1292,6 +1447,8 @@ function SceneContent({
   selectedIdsRef.current = selectedPointIds
   const positionsRef = useRef(positions)
   positionsRef.current = positions
+  const tMsRef = useRef(tMs)
+  tMsRef.current = tMs
   const [terrainBounds, setTerrainBounds] = useState<PlanarBounds | null>(null)
   const onTerrainBounds = useCallback((b: PlanarBounds) => setTerrainBounds(b), [])
   const [snapPoints, setSnapPoints] = useState<SnapPoint[]>([])
@@ -1658,6 +1815,58 @@ function SceneContent({
     sidecar.setActivation(selectedCueId, pointId, { pathPoints: wps })
   }
 
+  // Drag & drop du roster vers la scène (mission backstage) : dépôt sur le
+  // sol = activer l'acteur dans le bloc sélectionné à cet endroit — ou dans
+  // un bloc créé au playhead s'il n'y en a pas (arbitrage Florian). Dépôt
+  // avec Alt sur une zone backstage = changer la zone d'ATTACHE de
+  // l'acteur (sans créer de mouvement).
+  useEffect(() => {
+    const dom = gl.domElement
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+    const hit = new THREE.Vector3()
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('application/x-lumitrack-point')) {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+      }
+    }
+    const onDrop = (e: DragEvent) => {
+      const pointId = e.dataTransfer?.getData('application/x-lumitrack-point')
+      if (!pointId) return
+      e.preventDefault()
+      const rect = dom.getBoundingClientRect()
+      raycaster.setFromCamera(new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      ), camera)
+      if (!raycaster.ray.intersectPlane(plane, hit) || !stageGroupRef.current) return
+      const local = stageGroupRef.current.worldToLocal(hit.clone())
+      const xCm = local.x / CM_TO_M
+      const yCm = local.z / CM_TO_M
+      const proj = liveRef.current.project
+      const zone = (proj.backstageZones ?? []).find((z) =>
+        xCm >= z.xCm && xCm <= z.xCm + z.widthCm && yCm >= z.yCm && yCm <= z.yCm + z.heightCm)
+      if (zone && e.altKey) {
+        // Alt+drop sur une zone : changer l'attache (position de repos).
+        sidecar.updatePoint(pointId, { homeZoneId: zone.id })
+        return
+      }
+      let cueId = selectedCueId
+      if (!cueId) {
+        cueId = crypto.randomUUID()
+        sidecar.addCue('Entrée', tMsRef.current, 2000, '#4FF5E0', 0, cueId)
+      }
+      sidecar.setActivation(cueId, pointId, { targetXCm: xCm, targetYCm: yCm })
+      onSelectPoint(pointId)
+    }
+    dom.addEventListener('dragover', onDragOver)
+    dom.addEventListener('drop', onDrop)
+    return () => {
+      dom.removeEventListener('dragover', onDragOver)
+      dom.removeEventListener('drop', onDrop)
+    }
+  }, [gl, camera, raycaster, selectedCueId, onSelectPoint])
+
   // Suppr retire le waypoint sélectionné AVANT que le raccourci global ne
   // supprime le bloc (phase capture + stopPropagation) ; Échap désélectionne
   // le waypoint sans lâcher le bloc.
@@ -1800,6 +2009,19 @@ function SceneContent({
 
         <ZoneOutline widthM={widthM} heightM={heightM} editing={editingZone} />
 
+        {/* Zones backstage : points d'entrée/sortie des acteurs (mission
+            backstage). Éditables en mode « Éditer la zone de jeu ». */}
+        {(project.backstageZones ?? []).map((zone) => (
+          <BackstageZoneOverlay
+            key={zone.id}
+            zone={zone}
+            editing={editingZone}
+            stageGroupRef={stageGroupRef}
+            controlsRef={controlsRef}
+            allZones={project.backstageZones}
+          />
+        ))}
+
         {editingZone && (
           <ZoneHandles
             project={project}
@@ -1898,6 +2120,7 @@ function SceneContent({
 export function Scene(props: {
   project: Project
   positions: Record<string, Pose>
+  tMs: number
   selectedPointId: string | null
   selectedPointIds: string[]
   selectedCueId: string | null

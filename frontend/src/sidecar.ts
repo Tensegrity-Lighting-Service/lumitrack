@@ -6,7 +6,7 @@
 // re-renders from them — every edit is sent as a command and only takes
 // effect once the sidecar echoes back a fresh `project` snapshot.
 import { useSyncExternalStore } from 'react'
-import type { BlockContextMessage, IfacesMessage, Project, PsnPreviewMessage, ServerMessage, TickMessage } from './types'
+import type { BackstageZone, BlockContextMessage, IfacesMessage, Project, PsnPreviewMessage, ServerMessage, TickMessage } from './types'
 
 const SIDECAR_PORT = 17845
 const RECONNECT_DELAY_MS = 1000
@@ -104,6 +104,7 @@ class SidecarClient {
   updatePoint(pointId: string, patch: {
     name?: string; number?: number | null; color?: string
     psnTrackerId?: number | null; defaultHeightCm?: number
+    homeZoneId?: string | null
   }) {
     this.send({ type: 'update_point', pointId, ...patch })
   }
@@ -115,8 +116,12 @@ class SidecarClient {
   updateStageMap(patch: { originXM?: number; originZM?: number; rotationDeg?: number; widthCm?: number; heightCm?: number; gridSizeCm?: number; terrainRotationDeg?: number }) {
     this.send({ type: 'update_stage_map', ...patch })
   }
-  addCue(name: string, startMs: number, durationMs: number, color?: string, lane?: number) {
-    this.send({ type: 'add_cue', name, startMs, durationMs, color, lane })
+  addCue(name: string, startMs: number, durationMs: number, color?: string, lane?: number, id?: string) {
+    this.send({ type: 'add_cue', name, startMs, durationMs, color, lane, id })
+  }
+  /** État complet des zones backstage (création/édition/suppression). */
+  setBackstageZones(zones: BackstageZone[]) {
+    this.send({ type: 'set_backstage_zones', zones })
   }
   updateCue(cueId: string, patch: { name?: string; startMs?: number; durationMs?: number; color?: string; lane?: number }) {
     this.send({ type: 'update_cue', cueId, ...patch })

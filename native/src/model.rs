@@ -19,6 +19,9 @@ pub struct Point {
     pub psn_tracker_id: Option<u16>,
     #[serde(default)]
     pub default_height_cm: f64,
+    /// Zone backstage d'attache (mission backstage) — None = première zone.
+    #[serde(default)]
+    pub home_zone_id: Option<String>,
 }
 
 fn default_color() -> String { "#4F6DF5".to_string() }
@@ -55,6 +58,22 @@ pub struct Activation {
 fn default_fade_ms() -> f64 { 1000.0 }
 fn default_easing() -> String { "linear".to_string() }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackstageZone {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub x_cm: f64,
+    #[serde(default)]
+    pub y_cm: f64,
+    #[serde(default)]
+    pub width_cm: f64,
+    #[serde(default)]
+    pub height_cm: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cue {
@@ -88,6 +107,9 @@ pub struct Project {
     pub points: Vec<Point>,
     #[serde(default)]
     pub cues: Vec<Cue>,
+    /// Zones backstage : points d'entrée/sortie des acteurs.
+    #[serde(default)]
+    pub backstage_zones: Vec<BackstageZone>,
 }
 
 fn default_stage_w() -> f64 { 5000.0 }
@@ -150,6 +172,7 @@ mod tests {
         let mut p = Project {
             name: "t".into(), stage_width_cm: 0.0, stage_height_cm: 0.0,
             audio_duration_s: None, points: vec![], cues: vec![],
+            backstage_zones: vec![],
         };
         p.cues.push(Cue {
             id: "A".into(), name: "A".into(), color: default_color(),

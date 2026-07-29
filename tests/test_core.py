@@ -548,3 +548,67 @@ def test_sequential_blocks_still_track_from_target():
         "p1": Activation(target_x_cm=300.0, fade_ms=1000.0, easing="linear")}))
     assert resolve_positions(p, 2000.0)["p1"].x_cm == 100.0
     assert abs(resolve_positions(p, 2500.0)["p1"].x_cm - 200.0) < 1e-6
+
+
+# ----------------------------------------------------------- backstage -----
+
+def _bs_project():
+    from lumitrack.core.project import Project, Point
+    p = Project(name="bs", stage_height_cm=3000)
+    p.points = [Point(id=f"p{i}", name=f"P{i}") for i in range(3)]
+    p.ensure_backstage()
+    return p
+
+
+def test_backstage_default_zone_and_slots():
+    from lumitrack.core.timeline import backstage_slot, BACKSTAGE_SPACING_CM
+    p = _bs_project()
+    assert len(p.backstage_zones) == 1
+    assert all(pt.home_zone_id == p.backstage_zones[0]["id"] for pt in p.points)
+    s0 = backstage_slot(p, "p0")
+    s1 = backstage_slot(p, "p1")
+    assert s0 is not None and s1 is not None
+    assert s0 != s1  # pas d'empilement
+    zone = p.backstage_zones[0]
+    for s in (s0, s1):
+        assert zone["xCm"] <= s[0] <= zone["xCm"] + zone["widthCm"]
+    assert abs(s1[0] - s0[0]) == BACKSTAGE_SPACING_CM or abs(s1[1] - s0[1]) == BACKSTAGE_SPACING_CM
+
+
+def test_backstage_actor_without_activation_is_visible_and_fades_in():
+    from lumitrack.core.project import Cue, Activation
+    from lumitrack.core.timeline import resolve_positions, backstage_slot
+    p = _bs_project()
+    slot = backstage_slot(p, "p0")
+    # Sans activation : l'acteur vit dans sa zone (visible + PSN).
+    pose = resolve_positions(p, 0.0)["p0"]
+    assert (pose.x_cm, pose.y_cm) == slot
+    # Entrée en scène : FONDU depuis la zone, plus de snap.
+    p.cues.append(Cue(id="in", name="Entrée", start_ms=1000, duration_ms=2000, activations={
+        "p0": Activation(target_x_cm=2000.0, target_y_cm=1000.0,
+                         fade_ms=2000.0, easing="linear")}))
+    mid = resolve_positions(p, 2000.0)["p0"]
+    assert abs(mid.x_cm - (slot[0] + 2000.0) / 2) < 1e-6
+    assert abs(mid.y_cm - (slot[1] + 1000.0) / 2) < 1e-6
+    assert resolve_positions(p, 3000.0)["p0"].x_cm == 2000.0
+
+
+def test_backstage_entrance_trajectory_in_block_context():
+    from lumitrack.core.project import Cue, Activation
+    from lumitrack.core.timeline import resolve_block_context, backstage_slot
+    p = _bs_project()
+    slot = backstage_slot(p, "p1")
+    p.cues.append(Cue(id="in", name="Entrée", start_ms=0, duration_ms=1000, activations={
+        "p1": Activation(target_x_cm=1500.0, target_y_cm=800.0, fade_ms=1000.0)}))
+    entry = resolve_block_context(p, "in")["entries"]["p1"]
+    assert entry["startPose"][0] == slot[0]
+    assert entry["startPose"][1] == slot[1]
+    assert len(entry["path"]) > 0  # la trajectoire d'entrée est dessinée
+
+
+def test_backstage_roundtrip():
+    from lumitrack.core.project import Project
+    p = _bs_project()
+    p2 = Project.from_dict(p.to_dict())
+    assert p2.backstage_zones == p.backstage_zones
+    assert p2.points[0].home_zone_id == p.points[0].home_zone_id
