@@ -450,6 +450,13 @@ function App() {
                   />
                 </label>
                 <label>
+                  Rotation du modèle 3D (°)
+                  <NumericInput
+                    value={project.terrainRotationDeg ?? 0} step={15}
+                    onCommit={(v) => { if (v !== null) sidecar.updateStageMap({ terrainRotationDeg: v }) }}
+                  />
+                </label>
+                <label>
                   Taille de la grille (m)
                   <NumericInput
                     value={project.gridSizeCm / 100} step={0.1}

@@ -93,6 +93,7 @@ export interface Project {
   stageMapOriginXM: number
   stageMapOriginZM: number
   stageMapRotationDeg: number
+  terrainRotationDeg: number
   points: Point[]
   cues: Cue[]
 }

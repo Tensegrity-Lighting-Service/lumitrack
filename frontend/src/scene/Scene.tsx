@@ -111,21 +111,30 @@ export interface SnapPoint { x: number; z: number }
  * for any venue survey. Grandstands/roof/rigging sit well above the floor
  * so they're naturally excluded; whatever's drawn on the ground (pitch
  * lines, markings, thresholds) is exactly what's left. */
-function Terrain({ path, onBounds, onSnapPoints }: {
+function Terrain({ path, rotationDeg, onBounds, onSnapPoints }: {
   path: string
+  rotationDeg: number
   onBounds: (bounds: PlanarBounds) => void
   onSnapPoints: (points: SnapPoint[]) => void
 }) {
   const url = useMemo(() => convertFileSrc(path), [path])
   const { scene } = useGLTF(url)
+  const groupRef = useRef<THREE.Group>(null)
+  // Bornes et points de snap recalculés APRÈS application de la rotation
+  // (matrices monde à jour) — sinon le snap viserait l'ancien terrain.
   useEffect(() => {
-    const box = new THREE.Box3().setFromObject(scene)
+    const g = groupRef.current
+    if (!g) return
+    g.rotation.y = -THREE.MathUtils.degToRad(rotationDeg)
+    g.updateWorldMatrix(true, true)
+
+    const box = new THREE.Box3().setFromObject(g)
     onBounds({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z })
 
     const floorY = box.min.y + SNAP_FLOOR_EPSILON_M
     const points: SnapPoint[] = []
     const v = new THREE.Vector3()
-    scene.traverse((node) => {
+    g.traverse((node) => {
       if (points.length >= SNAP_MAX_POINTS) return
       if (!(node instanceof THREE.Mesh)) return
       const position = node.geometry.getAttribute('position')
@@ -136,8 +145,8 @@ function Terrain({ path, onBounds, onSnapPoints }: {
       }
     })
     onSnapPoints(points)
-  }, [scene, onBounds, onSnapPoints])
-  return <primitive object={scene} />
+  }, [scene, rotationDeg, onBounds, onSnapPoints])
+  return <group ref={groupRef}><primitive object={scene} /></group>
 }
 
 function GenericFloor({ widthM, heightM }: { widthM: number; heightM: number }) {
@@ -1771,7 +1780,7 @@ function SceneContent({
 
       <Suspense fallback={<GenericFloor widthM={widthM} heightM={heightM} />}>
         {project.terrainGltfPath
-          ? <Terrain path={project.terrainGltfPath} onBounds={onTerrainBounds} onSnapPoints={onSnapPoints} />
+          ? <Terrain path={project.terrainGltfPath} rotationDeg={project.terrainRotationDeg ?? 0} onBounds={onTerrainBounds} onSnapPoints={onSnapPoints} />
           : null}
       </Suspense>
 

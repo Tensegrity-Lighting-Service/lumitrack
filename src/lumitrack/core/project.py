@@ -209,6 +209,9 @@ class Project:
     stage_map_origin_x_m: float = 0.0
     stage_map_origin_z_m: float = 0.0
     stage_map_rotation_deg: float = 0.0
+    # Rotation du MODÈLE 3D (terrain glTF) autour de son origine, en degrés
+    # — indépendante de la rotation de la zone de jeu (mission 2026-07-29).
+    terrain_rotation_deg: float = 0.0
 
     # ---------- helpers ----------
 
@@ -312,6 +315,7 @@ class Project:
             "stageMapOriginXM": self.stage_map_origin_x_m,
             "stageMapOriginZM": self.stage_map_origin_z_m,
             "stageMapRotationDeg": self.stage_map_rotation_deg,
+            "terrainRotationDeg": self.terrain_rotation_deg,
             "points": [p.to_dict() for p in self.points],
             "cues": [
                 {
@@ -359,6 +363,7 @@ class Project:
             stage_map_origin_x_m=float(d.get("stageMapOriginXM", 0.0)),
             stage_map_origin_z_m=float(d.get("stageMapOriginZM", 0.0)),
             stage_map_rotation_deg=float(d.get("stageMapRotationDeg", 0.0)),
+            terrain_rotation_deg=float(d.get("terrainRotationDeg", 0.0)),
         )
         proj.points = [Point.from_dict(p) for p in d.get("points", [])]
         for c in d.get("cues", []):
