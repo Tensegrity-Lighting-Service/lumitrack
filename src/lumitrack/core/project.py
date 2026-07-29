@@ -151,6 +151,11 @@ class Cue:
     duration_ms: float
     activations: dict = field(default_factory=dict)  # point_id -> Activation
     color: str = "#4F6DF5"
+    # Piste de la timeline (mission multi-pistes 2026-07-29) : les blocs se
+    # placent LIBREMENT sur une piste choisie, ils ne sont plus empilés
+    # automatiquement. Migration : projets sans "lane" -> empaquetage
+    # glouton une seule fois au chargement (from_dict).
+    lane: int = 0
 
     def activation_end_ms(self) -> float:
         """Latest moment any activation in this cue is still fading."""
@@ -298,6 +303,7 @@ class Project:
                 {
                     "id": c.id, "name": c.name, "color": c.color,
                     "startMs": c.start_ms, "durationMs": c.duration_ms,
+                    "lane": c.lane,
                     "activations": {
                         pid: a.to_dict() for pid, a in c.activations.items()
                     },
@@ -348,8 +354,25 @@ class Project:
                 duration_ms=float(c.get("durationMs", 0)),
                 activations=activations,
                 color=c.get("color", "#4F6DF5"),
+                lane=int(c["lane"]) if c.get("lane") is not None else -1,
             ))
         proj.sort_cues()
+        # Migration multi-pistes : les projets d'avant "lane" empilaient les
+        # blocs automatiquement (glouton) — on rejoue cet empaquetage UNE
+        # fois pour que rien ne se chevauche visuellement au chargement.
+        if any(c.lane < 0 for c in proj.cues):
+            lane_ends: list = []
+            for c in proj.cues:  # déjà triés par start_ms
+                if c.lane >= 0:
+                    continue
+                for i, end in enumerate(lane_ends):
+                    if end <= c.start_ms:
+                        c.lane = i
+                        lane_ends[i] = c.start_ms + c.duration_ms
+                        break
+                else:
+                    c.lane = len(lane_ends)
+                    lane_ends.append(c.start_ms + c.duration_ms)
         return proj
 
     def save(self, path: str):

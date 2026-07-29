@@ -92,10 +92,10 @@ class SidecarClient {
   updateStageMap(patch: { originXM?: number; originZM?: number; rotationDeg?: number; widthCm?: number; heightCm?: number; gridSizeCm?: number }) {
     this.send({ type: 'update_stage_map', ...patch })
   }
-  addCue(name: string, startMs: number, durationMs: number, color?: string) {
-    this.send({ type: 'add_cue', name, startMs, durationMs, color })
+  addCue(name: string, startMs: number, durationMs: number, color?: string, lane?: number) {
+    this.send({ type: 'add_cue', name, startMs, durationMs, color, lane })
   }
-  updateCue(cueId: string, patch: { name?: string; startMs?: number; durationMs?: number; color?: string }) {
+  updateCue(cueId: string, patch: { name?: string; startMs?: number; durationMs?: number; color?: string; lane?: number }) {
     this.send({ type: 'update_cue', cueId, ...patch })
   }
   deleteCue(cueId: string) {

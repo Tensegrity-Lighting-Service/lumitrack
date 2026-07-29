@@ -311,7 +311,7 @@ mod tests {
         for (pid, a) in acts { activations.insert(pid.to_string(), a); }
         Cue {
             id: id.into(), name: id.into(), color: "#fff".into(),
-            start_ms, duration_ms: 1000.0, activations,
+            start_ms, duration_ms: 1000.0, activations, lane: 0,
         }
     }
 

@@ -33,19 +33,6 @@ const CONTENT_PAD_PX = 160
 
 const CUE_PALETTE = ['#4F6DF5', '#F5734F', '#B06FE0', '#4FF58C', '#4FF5E0', '#F5C84F']
 
-/** Greedy interval packing: each cue goes in the first lane whose last cue
- * has already ended by the time this one starts, else it opens a new lane.
- * Same idea as packing overlapping events onto columns in a calendar. */
-function packLanes(cues: Cue[]): Cue[][] {
-  const sorted = [...cues].sort((a, b) => a.startMs - b.startMs)
-  const lanes: Cue[][] = []
-  for (const cue of sorted) {
-    const lane = lanes.find((l) => l[l.length - 1].startMs + l[l.length - 1].durationMs <= cue.startMs)
-    if (lane) lane.push(cue)
-    else lanes.push([cue])
-  }
-  return lanes.length ? lanes : [[]]
-}
 
 // Pas de graduation adaptatif : le plus petit pas qui laisse >= ~80 px
 // entre deux labels. Les sous-graduations (step/5) apparaissent dès 12 px.
@@ -80,11 +67,14 @@ interface DragState {
   cueId: string
   mode: 'move' | 'resize-l' | 'resize-r'
   startClientX: number
+  startClientY: number
   origStartMs: number
   origDurationMs: number
+  origLane: number
   /** Proposition courante (affichée pendant le geste, committée au lâcher). */
   startMs: number
   durationMs: number
+  lane: number
   moved: boolean
 }
 
@@ -108,7 +98,10 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   onSelectCue: (cueId: string | null) => void
 }) {
   const cues = project.cues
-  const lanes = useMemo(() => packLanes(cues), [cues])
+  // Pistes persistantes (mission multi-pistes) : chaque bloc porte sa
+  // `lane`, plus d'empilement automatique. Toujours au moins 3 pistes et
+  // une piste vide en bas pour y déposer un bloc.
+  const laneCount = Math.max(3, ...cues.map((c) => (c.lane ?? 0) + 2))
   const [showGraph, setShowGraph] = useState(false)
 
   // Le graph editor édite l'activation du point sélectionné dans le bloc
@@ -272,6 +265,11 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     const threshold = SNAP_PX / effPxPerMs
     let best = ms
     let bestDist = threshold
+    // Grille temporelle : aimante aussi sur la sous-graduation courante
+    // (comportement Logic « snap to grid », Alt pour désactiver).
+    const minor = chooseTickStep(effPxPerMs) / 5
+    const gridCand = Math.round(ms / minor) * minor
+    if (Math.abs(gridCand - ms) < bestDist) { bestDist = Math.abs(gridCand - ms); best = gridCand }
     const excluded = cues.find((c) => c.id === excludeCueId)
     for (const cand of snapCandidates) {
       // Ne pas snapper un bloc sur ses propres bords d'origine.
@@ -289,9 +287,11 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     const el = e.currentTarget
     el.setPointerCapture(e.pointerId)
     const initial: DragState = {
-      cueId: cue.id, mode, startClientX: e.clientX,
+      cueId: cue.id, mode, startClientX: e.clientX, startClientY: e.clientY,
       origStartMs: cue.startMs, origDurationMs: cue.durationMs,
-      startMs: cue.startMs, durationMs: cue.durationMs, moved: false,
+      origLane: cue.lane ?? 0,
+      startMs: cue.startMs, durationMs: cue.durationMs, lane: cue.lane ?? 0,
+      moved: false,
     }
     dragRef.current = initial
     setDrag(initial)
@@ -303,7 +303,11 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
       const noSnap = ev.altKey
       let startMs = d.origStartMs
       let dur = d.origDurationMs
+      let lane = d.origLane
       if (d.mode === 'move') {
+        // Déplacement vertical = changement de piste (drop possible sur la
+        // piste vide du bas — une nouvelle piste vide apparaît derrière).
+        lane = Math.max(0, d.origLane + Math.round((ev.clientY - d.startClientY) / LANE_H))
         startMs = Math.max(0, d.origStartMs + deltaMs)
         const snappedStart = snap(startMs, d.cueId, noSnap)
         if (snappedStart !== startMs) {
@@ -324,7 +328,8 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
         dur = end - startMs
       }
       const moved = d.moved || Math.abs(ev.clientX - d.startClientX) > 3
-      const next = { ...d, startMs, durationMs: dur, moved }
+        || Math.abs(ev.clientY - d.startClientY) > LANE_H / 2
+      const next = { ...d, startMs, durationMs: dur, lane, moved }
       dragRef.current = next
       setDrag(next)
     }
@@ -336,7 +341,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
       dragRef.current = null
       setDrag(null)
       if (d && d.moved) {
-        sidecar.updateCue(d.cueId, { startMs: d.startMs, durationMs: d.durationMs })
+        sidecar.updateCue(d.cueId, { startMs: d.startMs, durationMs: d.durationMs, lane: d.lane })
       }
     }
     el.addEventListener('pointermove', onMove)
@@ -363,7 +368,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     if (name && name !== cue.name) sidecar.updateCue(cue.id, { name })
   }, [])
 
-  const lanesHeight = lanes.length * LANE_H
+  const lanesHeight = laneCount * LANE_H
   const playheadPx = tMs * effPxPerMs
 
   return (
@@ -407,10 +412,12 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
               Audio
             </div>
           )}
-          <div className="tl-header tl-header-cues" style={{ height: lanesHeight }}>
-            <span className="tl-header-chip" style={{ background: '#f5734f' }} />
-            Cues
-          </div>
+          {Array.from({ length: laneCount }, (_, i) => (
+            <div key={i} className="tl-header tl-header-lane" style={{ height: LANE_H }}>
+              <span className="tl-header-chip" style={{ background: i === 0 ? '#f5734f' : '#3a3f4a' }} />
+              Piste {i + 1}
+            </div>
+          ))}
           {graphVisible && (
             <div className="tl-header tl-header-graph" style={{ height: GRAPH_H }}>
               <span className="tl-header-chip" style={{ background: '#4ff5e0' }} />
@@ -459,37 +466,54 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                 if (e.target === e.currentTarget) onSelectCue(null)
               }}
             >
-              {lanes.map((laneCues, laneIndex) =>
-                laneCues.map((cue) => {
-                  const isDragging = drag?.cueId === cue.id
-                  const startMs = isDragging ? drag.startMs : cue.startMs
-                  const dur = isDragging ? drag.durationMs : cue.durationMs
-                  const count = Object.keys(cue.activations).length
-                  return (
-                    <div
-                      key={cue.id}
-                      className={`cue-block${cue.id === selectedCueId ? ' cue-block-selected' : ''}${isDragging ? ' cue-block-dragging' : ''}`}
-                      style={{
-                        '--cue-color': cue.color,
-                        left: startMs * effPxPerMs,
-                        width: Math.max(4, dur * effPxPerMs),
-                        top: laneIndex * LANE_H + 2,
-                        height: LANE_H - 6,
-                      } as React.CSSProperties}
-                      onPointerDown={(e) => beginBlockDrag(e, cue, 'move')}
-                      onDoubleClick={() => renameCue(cue)}
-                    >
-                      <div className="cue-block-header">
-                        <span className="cue-block-name">{cue.name}</span>
-                        <span className="cue-block-count">{count}</span>
-                      </div>
-                      <div className="cue-block-body" />
-                      <div className="cue-resize cue-resize-l" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-l')} />
-                      <div className="cue-resize cue-resize-r" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-r')} />
+              {/* Bandes de pistes alternées + séparateurs (sous les blocs). */}
+              {Array.from({ length: laneCount }, (_, i) => (
+                <div
+                  key={i}
+                  className={`tl-lane-stripe${i % 2 ? ' tl-lane-stripe-alt' : ''}${drag && drag.mode === 'move' && drag.lane === i ? ' tl-lane-stripe-drop' : ''}`}
+                  style={{ top: i * LANE_H, height: LANE_H }}
+                />
+              ))}
+              {/* Grille temporelle en arrière-plan, alignée sur la règle. */}
+              <div className="tl-grid">
+                {ticks.map((tick) => (
+                  <div
+                    key={tick.ms}
+                    className={`tl-grid-line${tick.label !== null ? ' tl-grid-line-major' : ''}`}
+                    style={{ left: tick.ms * effPxPerMs }}
+                  />
+                ))}
+              </div>
+              {cues.map((cue) => {
+                const isDragging = drag?.cueId === cue.id
+                const startMs = isDragging ? drag.startMs : cue.startMs
+                const dur = isDragging ? drag.durationMs : cue.durationMs
+                const laneIndex = isDragging ? drag.lane : (cue.lane ?? 0)
+                const count = Object.keys(cue.activations).length
+                return (
+                  <div
+                    key={cue.id}
+                    className={`cue-block${cue.id === selectedCueId ? ' cue-block-selected' : ''}${isDragging ? ' cue-block-dragging' : ''}`}
+                    style={{
+                      '--cue-color': cue.color,
+                      left: startMs * effPxPerMs,
+                      width: Math.max(4, dur * effPxPerMs),
+                      top: laneIndex * LANE_H + 2,
+                      height: LANE_H - 6,
+                    } as React.CSSProperties}
+                    onPointerDown={(e) => beginBlockDrag(e, cue, 'move')}
+                    onDoubleClick={() => renameCue(cue)}
+                  >
+                    <div className="cue-block-header">
+                      <span className="cue-block-name">{cue.name}</span>
+                      <span className="cue-block-count">{count}</span>
                     </div>
-                  )
-                }),
-              )}
+                    <div className="cue-block-body" />
+                    <div className="cue-resize cue-resize-l" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-l')} />
+                    <div className="cue-resize cue-resize-r" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-r')} />
+                  </div>
+                )
+              })}
             </div>
 
             {graphVisible && selectedCue && (

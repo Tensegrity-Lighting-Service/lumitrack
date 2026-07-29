@@ -473,3 +473,65 @@
   display: flex; flex-direction: column; gap: 3px;
   font-size: 11px; color: #9a9aa8; flex: 1;
 }
+
+/* ---- Timeline multi-pistes + polish (mission "clean comme Logic") ---- */
+.tl-lane-stripe {
+  position: absolute; left: 0; right: 0;
+  background: #17171d;
+  border-bottom: 1px solid #1f1f26;
+  pointer-events: none;
+}
+.tl-lane-stripe-alt { background: #15151a; }
+.tl-lane-stripe-drop { background: rgba(79, 109, 245, 0.10); }
+.tl-grid { position: absolute; inset: 0; pointer-events: none; }
+.tl-grid-line {
+  position: absolute; top: 0; bottom: 0; width: 1px;
+  background: rgba(255, 255, 255, 0.028);
+}
+.tl-grid-line-major { background: rgba(255, 255, 255, 0.07); }
+.tl-header-lane { font-size: 10.5px; color: #8a8a99; }
+
+/* Lissage visuel : les blocs glissent en douceur vers toute position
+   décidée ailleurs (echo backend, snap au lâcher) — jamais pendant le drag
+   lui-même, où la main doit rester maîtresse au pixel près. */
+.cue-block {
+  transition: left 140ms cubic-bezier(0.25, 0.1, 0.25, 1),
+              width 140ms cubic-bezier(0.25, 0.1, 0.25, 1),
+              top 140ms cubic-bezier(0.25, 0.1, 0.25, 1),
+              box-shadow 140ms ease, filter 140ms ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.cue-block:hover { filter: brightness(1.12); }
+.cue-block-selected {
+  box-shadow: 0 0 0 1.5px var(--cue-color), 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+.cue-block-dragging {
+  transition: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  z-index: 4;
+}
+
+/* Playhead fluide : les ticks arrivent à ~30 Hz, la transition linéaire
+   comble les 33 ms entre deux — même technique que les DAW web. */
+.tl-playhead {
+  transition: left 90ms linear;
+  width: 1.5px;
+  background: #f2f2f7;
+  box-shadow: 0 0 6px rgba(242, 242, 247, 0.55);
+}
+.tl-playhead::before {
+  content: '';
+  position: absolute; top: 0; left: -4.5px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid #f2f2f7;
+}
+
+/* ---- Lasso de sélection dans la scène ---- */
+.scene-canvas-wrap { position: relative; width: 100%; height: 100%; }
+.scene-lasso {
+  position: absolute; pointer-events: none; z-index: 10;
+  border: 1px solid rgba(79, 109, 245, 0.9);
+  background: rgba(79, 109, 245, 0.12);
+  border-radius: 2px;
+}

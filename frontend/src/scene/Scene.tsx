@@ -870,15 +870,19 @@ function DarkenMask({ maskBounds, stageGroupRef, widthM, heightM }: {
  * horizontal plane at the actor's height and throttles setActivation calls,
  * pointerup releases MapControls again. */
 function SceneContent({
-  project, positions, selectedPointId, selectedCueId, blockContext, onSelectPoint, cameraLocked, fitToken, editingZone,
+  project, positions, selectedPointId, selectedPointIds, selectedCueId, blockContext, onSelectPoint, onSelectPoints,
+  onLassoRect, cameraLocked, fitToken, editingZone,
   gridOpacity, snapToGrid, zoomAction,
 }: {
   project: Project
   positions: Record<string, Pose>
   selectedPointId: string | null
+  selectedPointIds: string[]
   selectedCueId: string | null
   blockContext: BlockContextMessage | null
   onSelectPoint: (pointId: string) => void
+  onSelectPoints: (ids: string[]) => void
+  onLassoRect: (rect: { x: number; y: number; w: number; h: number } | null) => void
   cameraLocked: boolean
   fitToken: number
   editingZone: boolean
@@ -902,6 +906,12 @@ function SceneContent({
   // Lus par le onMove global au moment de l'évènement (l'effet ne dépend
   // pas du project : il se ré-abonnerait à chaque écho sinon).
   const liveRef = useRef<{ project: Project; entries: Record<string, BlockContextEntry> | null }>({ project, entries: null })
+  // Lasso : rectangle écran en cours (px, repère du canvas).
+  const lassoRef = useRef<{ x0: number; y0: number; x1: number; y1: number; additive: boolean } | null>(null)
+  const selectedIdsRef = useRef(selectedPointIds)
+  selectedIdsRef.current = selectedPointIds
+  const positionsRef = useRef(positions)
+  positionsRef.current = positions
   const [terrainBounds, setTerrainBounds] = useState<PlanarBounds | null>(null)
   const onTerrainBounds = useCallback((b: PlanarBounds) => setTerrainBounds(b), [])
   const [snapPoints, setSnapPoints] = useState<SnapPoint[]>([])
@@ -1083,15 +1093,109 @@ function SceneContent({
       }
     }
 
+    // ---- lasso (clic gauche sur le vide) + pan gauche+droit ----
+    const lassoStart = (e: PointerEvent) => {
+      // r3f a déjà traité le pointerdown : si un acteur/ghost/waypoint a
+      // armé un drag, pas de lasso. Pas de lasso non plus en édition de
+      // zone, ni au clic droit seul (pan MapControls).
+      if (e.button !== 0 || dragRef.current || editingZone) return
+      const rect = dom.getBoundingClientRect()
+      lassoRef.current = {
+        x0: e.clientX - rect.left, y0: e.clientY - rect.top,
+        x1: e.clientX - rect.left, y1: e.clientY - rect.top,
+        additive: e.ctrlKey || e.metaKey,
+      }
+    }
+
+    const chordPan = (e: PointerEvent): boolean => {
+      // Gauche+droit enfoncés ensemble : pan manuel de la caméra ortho
+      // (1 px écran = 1/zoom unité monde ; up caméra = -Z, donc dy écran
+      // suit +Z monde tel quel).
+      if ((e.buttons & 3) !== 3 || cameraLocked) return false
+      lassoRef.current = null
+      onLassoRect(null)
+      const cam = camera as THREE.OrthographicCamera
+      const dx = -e.movementX / cam.zoom
+      const dz = -e.movementY / cam.zoom
+      cam.position.x += dx
+      cam.position.z += dz
+      if (controlsRef.current) {
+        controlsRef.current.target.x += dx
+        controlsRef.current.target.z += dz
+        controlsRef.current.update()
+      }
+      return true
+    }
+
+    const lassoMove = (e: PointerEvent) => {
+      if (chordPan(e)) return
+      const l = lassoRef.current
+      if (!l) return
+      const rect = dom.getBoundingClientRect()
+      l.x1 = e.clientX - rect.left
+      l.y1 = e.clientY - rect.top
+      if (Math.abs(l.x1 - l.x0) + Math.abs(l.y1 - l.y0) > 6) {
+        onLassoRect({
+          x: Math.min(l.x0, l.x1), y: Math.min(l.y0, l.y1),
+          w: Math.abs(l.x1 - l.x0), h: Math.abs(l.y1 - l.y0),
+        })
+      }
+    }
+
+    const lassoEnd = () => {
+      const l = lassoRef.current
+      lassoRef.current = null
+      onLassoRect(null)
+      if (!l) return
+      const w = Math.abs(l.x1 - l.x0)
+      const h = Math.abs(l.y1 - l.y0)
+      if (w < 6 && h < 6) return // simple clic sur le vide : géré ailleurs
+      if (!stageGroupRef.current) return
+      const rect = dom.getBoundingClientRect()
+      const [minX, maxX] = [Math.min(l.x0, l.x1), Math.max(l.x0, l.x1)]
+      const [minY, maxY] = [Math.min(l.y0, l.y1), Math.max(l.y0, l.y1)]
+      const inside: string[] = []
+      const v = new THREE.Vector3()
+      for (const point of liveRef.current.project.points) {
+        const pose = positionsRef.current[point.id]
+        if (!pose) continue
+        v.set(...stageToLocal(pose[0], pose[1], pose[2]))
+        stageGroupRef.current.localToWorld(v)
+        v.project(camera)
+        const sx = ((v.x + 1) / 2) * rect.width
+        const sy = ((1 - v.y) / 2) * rect.height
+        if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) inside.push(point.id)
+      }
+      if (l.additive) {
+        const current = new Set(selectedIdsRef.current)
+        for (const id of inside) current.add(id)
+        onSelectPoints([...current])
+      } else {
+        onSelectPoints(inside)
+      }
+    }
+
+    const onContextMenu = (e: Event) => e.preventDefault()
+
     dom.addEventListener('pointermove', onMove)
     dom.addEventListener('pointerup', endDrag)
     dom.addEventListener('pointerleave', endDrag)
+    dom.addEventListener('pointerdown', lassoStart)
+    dom.addEventListener('pointermove', lassoMove)
+    dom.addEventListener('pointerup', lassoEnd)
+    dom.addEventListener('pointerleave', lassoEnd)
+    dom.addEventListener('contextmenu', onContextMenu)
     return () => {
       dom.removeEventListener('pointermove', onMove)
       dom.removeEventListener('pointerup', endDrag)
       dom.removeEventListener('pointerleave', endDrag)
+      dom.removeEventListener('pointerdown', lassoStart)
+      dom.removeEventListener('pointermove', lassoMove)
+      dom.removeEventListener('pointerup', lassoEnd)
+      dom.removeEventListener('pointerleave', lassoEnd)
+      dom.removeEventListener('contextmenu', onContextMenu)
     }
-  }, [gl, camera, raycaster, selectedCueId, cameraLocked, snapToGrid, project.gridSizeCm])
+  }, [gl, camera, raycaster, selectedCueId, cameraLocked, snapToGrid, project.gridSizeCm, editingZone, onLassoRect, onSelectPoints])
 
   // Block-edit mode (§12.6): entries only trusted when the context echoes
   // the currently selected cue — a stale context from a just-deselected or
@@ -1226,12 +1330,18 @@ function SceneContent({
   return (
     <>
       <OrthographicCamera makeDefault near={0.1} far={span * 20} />
+      {/* Souris 2026 : clic gauche = lasso/sélection (plus jamais la
+          caméra), clic droit OU gauche+droit = pan, molette = zoom au
+          curseur. Tactile : 1 doigt = sélection/drag, 2 doigts = pincer
+          pour zoomer + déplacer (type iPad). */}
       <MapControls
         ref={controlsRef}
         enabled={!cameraLocked}
         enableRotate={false}
         screenSpacePanning
         zoomToCursor
+        mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }}
+        touches={{ ONE: undefined as unknown as THREE.TOUCH, TWO: THREE.TOUCH.DOLLY_PAN }}
       />
       <ambientLight intensity={editingZone ? 0.7 : 1.1} />
       <directionalLight position={[fit.centerX, span * 3, fit.centerZ]} intensity={editingZone ? 0.4 : 0.6} />
@@ -1277,7 +1387,7 @@ function SceneContent({
               key={point.id}
               pose={pose}
               color={point.color}
-              selected={point.id === selectedPointId}
+              selected={selectedPointIds.includes(point.id)}
               draggable={Boolean(selectedCueId)}
               opacity={editEntries === null ? 1
                 : editEntries[point.id] ? EDIT_ACTIVATED_OPACITY : EDIT_BYSTANDER_OPACITY}
@@ -1344,9 +1454,11 @@ export function Scene(props: {
   project: Project
   positions: Record<string, Pose>
   selectedPointId: string | null
+  selectedPointIds: string[]
   selectedCueId: string | null
   blockContext: BlockContextMessage | null
   onSelectPoint: (pointId: string) => void
+  onSelectPoints: (ids: string[]) => void
   cameraLocked: boolean
   fitToken: number
   editingZone: boolean
@@ -1354,9 +1466,20 @@ export function Scene(props: {
   snapToGrid: boolean
   zoomAction: { token: number; factor: number }
 }) {
+  // Rectangle du lasso : dessiné en HTML au-dessus du canvas (le canvas ne
+  // peut pas rendre de DOM) — SceneContent pilote, ce wrapper affiche.
+  const [lassoRect, setLassoRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   return (
-    <Canvas>
-      <SceneContent {...props} />
-    </Canvas>
+    <div className="scene-canvas-wrap">
+      <Canvas>
+        <SceneContent {...props} onLassoRect={setLassoRect} />
+      </Canvas>
+      {lassoRect && (
+        <div
+          className="scene-lasso"
+          style={{ left: lassoRect.x, top: lassoRect.y, width: lassoRect.w, height: lassoRect.h }}
+        />
+      )}
+    </div>
   )
 }

@@ -476,3 +476,28 @@ def test_spatial_path_handles_and_roundtrip(tmp_path):
     # Les poignées influencent le parcours (départ tiré vers +y).
     early = resolve_positions(p2, 1200.0)["p1"]
     assert early.y_cm > 50.0
+
+
+# ------------------------------------------------------ pistes (timeline) --
+
+def test_lane_roundtrip_and_migration(tmp_path):
+    import json
+    from lumitrack.core.project import Project, Cue
+    p = Project(name="lanes")
+    p.cues.append(Cue(id="a", name="A", start_ms=0, duration_ms=2000, lane=2))
+    d = p.to_dict()
+    assert d["cues"][0]["lane"] == 2
+    assert Project.from_dict(d).cues[0].lane == 2
+    # Migration : un projet SANS lane et avec chevauchements retrouve
+    # l'ancien empilement glouton (aucun chevauchement sur une même piste).
+    legacy = Project(name="old")
+    legacy.cues = [Cue(id="a", name="A", start_ms=0, duration_ms=3000),
+                   Cue(id="b", name="B", start_ms=1000, duration_ms=3000),
+                   Cue(id="c", name="C", start_ms=3500, duration_ms=1000)]
+    d = legacy.to_dict()
+    for c in d["cues"]:
+        del c["lane"]
+    migrated = Project.from_dict(json.loads(json.dumps(d)))
+    lanes = {c.id: c.lane for c in migrated.cues}
+    assert lanes["a"] == 0 and lanes["b"] == 1
+    assert lanes["c"] == 0  # la piste 0 est libre à 3500 ms

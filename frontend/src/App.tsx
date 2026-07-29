@@ -3,6 +3,8 @@ import './App.css'
 import { Scene } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import { sidecar, useBlockContext, useConnected, useProject, usePsnRunning, useTick } from './sidecar'
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
 import type { Activation, Cue, Point, Project } from './types'
 
@@ -209,6 +211,25 @@ function App() {
     else sidecar.clearBlockContext()
   }, [selectedCue, project])
 
+  // Drag & drop de fichiers sur la fenêtre : routage par extension —
+  // audio -> piste audio, .stancz -> import, .lumitrack/.bundle -> ouvrir.
+  // (Événement natif Tauri : contrairement au drop HTML5, il porte les
+  // vrais chemins disque, que le sidecar peut ouvrir.)
+  useEffect(() => {
+    const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac']
+    let unlisten: (() => void) | null = null
+    getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type !== 'drop') return
+      for (const path of event.payload.paths) {
+        const ext = path.split('.').pop()?.toLowerCase() ?? ''
+        if (AUDIO_EXT.includes(ext)) sidecar.setAudio({ path })
+        else if (ext === 'stancz') sidecar.importStancz(path)
+        else if (ext === 'lumitrack' || ext === 'bundle') sidecar.loadBundle(path)
+      }
+    }).then((fn) => { unlisten = fn }).catch(() => { /* hors Tauri (dev navigateur) */ })
+    return () => { if (unlisten) unlisten() }
+  }, [])
+
   // Global shortcuts. Skipped while typing in an input/select/color-picker
   // so Space/Delete keep their normal text-editing meaning there.
   useEffect(() => {
@@ -252,26 +273,38 @@ function App() {
           const name = window.prompt('Nom du nouveau projet ?', 'Untitled')
           if (name) sidecar.newProject(name)
         } },
-        { label: 'Importer .stancz…', onClick: () => {
-          const path = window.prompt('Chemin du fichier .stancz à importer :')
-          if (path) sidecar.importStancz(path)
+        { label: 'Importer .stancz…', onClick: async () => {
+          const path = await openDialog({
+            title: 'Importer un projet Stancz',
+            filters: [{ name: 'Projet Stancz', extensions: ['stancz'] }],
+          })
+          if (typeof path === 'string') sidecar.importStancz(path)
         } },
         { separator: true } as const,
-        { label: 'Importer un audio…', onClick: () => {
-          const path = window.prompt('Chemin du fichier audio (mp3, m4a, wav…) :')
-          if (path) sidecar.setAudio({ path })
+        { label: 'Importer un audio…', onClick: async () => {
+          const path = await openDialog({
+            title: 'Importer un fichier audio',
+            filters: [{ name: 'Audio', extensions: ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac'] }],
+          })
+          if (typeof path === 'string') sidecar.setAudio({ path })
         } },
         { label: 'Retirer l’audio', disabled: !project.audioPath, onClick: () => {
           sidecar.setAudio({ path: null })
         } },
         { separator: true } as const,
-        { label: 'Enregistrer (bundle)…', onClick: () => {
-          const path = window.prompt('Dossier .bundle où enregistrer :')
+        { label: 'Enregistrer (bundle)…', onClick: async () => {
+          const path = await saveDialog({
+            title: 'Enregistrer le projet',
+            defaultPath: `${project.name || 'Projet'}.lumitrack`,
+          })
           if (path) sidecar.saveBundle(path)
         } },
-        { label: 'Ouvrir (bundle)…', onClick: () => {
-          const path = window.prompt('Dossier .bundle à ouvrir :')
-          if (path) sidecar.loadBundle(path)
+        { label: 'Ouvrir (bundle)…', onClick: async () => {
+          const path = await openDialog({
+            title: 'Ouvrir un projet (.lumitrack)',
+            directory: true,
+          })
+          if (typeof path === 'string') sidecar.loadBundle(path)
         } },
       ],
     },
@@ -374,6 +407,8 @@ function App() {
           project={project}
           positions={positions}
           selectedPointId={selectedPointId}
+          selectedPointIds={selectedPointIds}
+          onSelectPoints={setSelectedPointIds}
           selectedCueId={selectedCueId}
           blockContext={blockContext}
           onSelectPoint={setSelectedPointId}

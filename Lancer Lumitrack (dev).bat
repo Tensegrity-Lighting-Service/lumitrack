@@ -16,11 +16,12 @@ powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 17845 -State Lis
 
 cd /d "%~dp0frontend"
 
-if not exist node_modules (
-    echo Premiere installation, ca peut prendre une minute...
-    call npm install
-    if errorlevel 1 goto :error
-)
+rem npm install tourne a CHAQUE lancement (quasi instantane quand rien n'a
+rem change) : les nouvelles dependances ajoutees par le superviseur sont
+rem installees sans intervention manuelle.
+echo Verification des dependances...
+call npm install
+if errorlevel 1 goto :error
 
 echo Lancement de Lumitrack (sidecar Python + fenetre Tauri)...
 call npm run tauri dev

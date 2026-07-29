@@ -235,6 +235,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             start_ms=float(msg.get("startMs", session.project.next_start_ms())),
             duration_ms=float(msg.get("durationMs", 1000.0)),
             color=msg.get("color", "#4F6DF5"),
+            lane=max(0, int(msg.get("lane", 0))),
         )
         session.project.cues.append(cue)
         session.project.sort_cues()
@@ -254,6 +255,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             cue.duration_ms = float(msg["durationMs"])
         if "color" in msg:
             cue.color = msg["color"]
+        if "lane" in msg:
+            cue.lane = max(0, int(msg["lane"]))
         session.project.sort_cues()
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)

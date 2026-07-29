@@ -68,6 +68,10 @@ pub struct Cue {
     /// dict Python (ordre d'insertion) l'était de fait pour la résolution.
     #[serde(default)]
     pub activations: BTreeMap<String, Activation>,
+    /// Piste de la timeline (placement libre des blocs) — sans effet sur la
+    /// résolution, mais fait partie du format de projet.
+    #[serde(default)]
+    pub lane: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +154,7 @@ mod tests {
         p.cues.push(Cue {
             id: "A".into(), name: "A".into(), color: default_color(),
             start_ms: 1000.0, duration_ms: 4000.0, activations: BTreeMap::new(),
+            lane: 0,
         });
         assert_eq!(p.duration_ms(), 5000.0);
         p.audio_duration_s = Some(120.0);

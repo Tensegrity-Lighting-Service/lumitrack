@@ -360,6 +360,32 @@ Reste ouvert (souhait exprimé, pas encore construit) : hiérarchie du roster
 (équipes en sous-dossiers, appartenance multiple — spec §12.2/§12.10,
 référence UX ContainerBox de Friction). Prochaine mission logique.
 
+### Mission timeline pro + entrées scène + fichiers (2026-07-29) — LIVRÉE
+
+Trois demandes de Florian traitées ensemble :
+
+- **Timeline multi-pistes** : `Cue.lane` persistant (Python+Rust+format,
+  migration des projets sans lane par l'ancien empaquetage glouton). Blocs
+  placés librement : drag vertical = changement de piste, piste vide
+  permanente en bas pour déposer, min 3 pistes, en-têtes « Piste N ».
+  Grille temporelle en arrière-plan alignée sur la règle (majeures +
+  mineures), snap à la sous-graduation (Alt désactive). Polish « Logic » :
+  bandes alternées, transitions douces sur les blocs (jamais pendant le
+  drag), playhead lissé (transition 90 ms entre ticks 30 Hz) avec triangle
+  et halo, ombres/hover.
+- **Entrées scène 2026** : clic gauche = LASSO de sélection (rectangle
+  écran, Ctrl = additif, projection des acteurs via la caméra), clic droit
+  OU gauche+droit = pan (chord pan manuel, menu contextuel neutralisé),
+  molette = zoom curseur, tactile : 1 doigt = sélection/drag, 2 doigts =
+  pincement zoom + pan (MapControls touches). Multi-sélection surlignée.
+- **Fichiers** : drag & drop sur la fenêtre (audio -> piste, .stancz ->
+  import, .lumitrack/.bundle -> ouvrir ; événement natif Tauri, vrais
+  chemins). Menus : vrais dialogues fichiers (tauri-plugin-dialog ajouté :
+  Cargo.toml + lib.rs + capability + npm) à la place des window.prompt
+  (restent : nouveau projet, renommage — dialogues texte à traiter en
+  Mission dialogues natifs). Le .bat fait désormais `npm install` à chaque
+  lancement (nouvelles dépendances auto-installées).
+
 ### Boucle de dev
 
 Moteur : développé et testé dans le cloud du superviseur (`cargo test`).

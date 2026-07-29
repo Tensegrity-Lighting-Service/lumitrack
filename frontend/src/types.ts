@@ -61,6 +61,8 @@ export interface Cue {
   color: string
   startMs: number
   durationMs: number
+  /** Piste de la timeline (placement libre des blocs). */
+  lane: number
   activations: Record<string, Activation>
 }
 
