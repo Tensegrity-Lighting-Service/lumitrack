@@ -348,6 +348,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             project.stage_height_cm = max(1.0, float(msg["heightCm"]))
         if "gridSizeCm" in msg:
             project.grid_size_cm = max(1.0, float(msg["gridSizeCm"]))
+        if "terrainRotationDeg" in msg and msg["terrainRotationDeg"] is not None:
+            project.terrain_rotation_deg = float(msg["terrainRotationDeg"])
         return None
 
     if msg_type == "set_backstage_zones":

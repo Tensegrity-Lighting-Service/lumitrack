@@ -66,13 +66,17 @@ async function computePeaksAsync(
   return { min, max, bucketMs: (buffer.duration * 1000) / buckets, durationS: buffer.duration }
 }
 
-export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, scrollLeft, viewportWidth, height }: {
+export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, scrollElRef, viewportWidth, height }: {
   audioPath: string
   knownDurationS: number | null
   tMs: number
   playing: boolean
   pxPerMs: number
-  scrollLeft: number
+  /** L'élément scrollé de la timeline : la waveform lit scrollLeft EN
+   * DIRECT dessus et se redessine sur son événement scroll — le passage
+   * par un état React ajoutait une frame de retard, visible en zoomant
+   * (waveform désalignée un instant à chaque cran). */
+  scrollElRef: React.RefObject<HTMLDivElement | null>
   viewportWidth: number
   height: number
 }) {
@@ -146,43 +150,62 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
   // Dessin de la fenêtre visible uniquement : le canvas fait la largeur du
   // viewport et se repositionne à scrollLeft — un canvas à la largeur du
   // contenu complet exploserait à fort zoom (plusieurs millions de px).
+  // Redessin : sur changement de zoom/pics (effet) ET sur l'événement
+  // scroll de l'élément (rAF-batché), en lisant scrollLeft en direct.
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || viewportWidth <= 0) return
-    const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.floor(viewportWidth * dpr)
-    canvas.height = Math.floor(height * dpr)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.scale(dpr, dpr)
-    ctx.clearRect(0, 0, viewportWidth, height)
-    if (!peaks) {
-      ctx.fillStyle = '#3a405230'
-      ctx.fillRect(0, height / 2 - 1, viewportWidth, 2)
-      ctx.fillStyle = '#7a7a88'
-      ctx.font = '11px system-ui, sans-serif'
-      ctx.fillText('Décodage de l’audio…', 8, height / 2 - 6)
-      return
-    }
-    const mid = height / 2
-    const amp = (height / 2) * 0.92
-    ctx.fillStyle = '#4f6df5'
-    for (let x = 0; x < viewportWidth; x++) {
-      const t0 = (scrollLeft + x) / pxPerMs
-      const t1 = (scrollLeft + x + 1) / pxPerMs
-      const b0 = Math.floor(t0 / peaks.bucketMs)
-      const b1 = Math.min(peaks.max.length - 1, Math.max(b0, Math.floor(t1 / peaks.bucketMs)))
-      if (b0 >= peaks.max.length || b0 < 0) continue
-      let lo = 0, hi = 0
-      for (let b = b0; b <= b1; b++) {
-        if (peaks.min[b] < lo) lo = peaks.min[b]
-        if (peaks.max[b] > hi) hi = peaks.max[b]
+    let raf = 0
+
+    const draw = () => {
+      const scrollLeft = scrollElRef.current?.scrollLeft ?? 0
+      const dpr = window.devicePixelRatio || 1
+      canvas.width = Math.floor(viewportWidth * dpr)
+      canvas.height = Math.floor(height * dpr)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.scale(dpr, dpr)
+      ctx.clearRect(0, 0, viewportWidth, height)
+      if (!peaks) {
+        ctx.fillStyle = '#3a405230'
+        ctx.fillRect(0, height / 2 - 1, viewportWidth, 2)
+        ctx.fillStyle = '#7a7a88'
+        ctx.font = '11px system-ui, sans-serif'
+        ctx.fillText('Décodage de l’audio…', 8, height / 2 - 6)
+        return
       }
-      const y0 = mid - hi * amp
-      const y1 = mid - lo * amp
-      ctx.fillRect(x, y0, 1, Math.max(1, y1 - y0))
+      const mid = height / 2
+      const amp = (height / 2) * 0.92
+      ctx.fillStyle = '#4f6df5'
+      for (let x = 0; x < viewportWidth; x++) {
+        const t0 = (scrollLeft + x) / pxPerMs
+        const t1 = (scrollLeft + x + 1) / pxPerMs
+        const b0 = Math.floor(t0 / peaks.bucketMs)
+        const b1 = Math.min(peaks.max.length - 1, Math.max(b0, Math.floor(t1 / peaks.bucketMs)))
+        if (b0 >= peaks.max.length || b0 < 0) continue
+        let lo = 0, hi = 0
+        for (let b = b0; b <= b1; b++) {
+          if (peaks.min[b] < lo) lo = peaks.min[b]
+          if (peaks.max[b] > hi) hi = peaks.max[b]
+        }
+        const y0 = mid - hi * amp
+        const y1 = mid - lo * amp
+        ctx.fillRect(x, y0, 1, Math.max(1, y1 - y0))
+      }
     }
-  }, [peaks, pxPerMs, scrollLeft, viewportWidth, height])
+
+    draw()
+    const el = scrollElRef.current
+    const onScroll = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(draw)
+    }
+    el?.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      cancelAnimationFrame(raf)
+      el?.removeEventListener('scroll', onScroll)
+    }
+  }, [peaks, pxPerMs, viewportWidth, height, scrollElRef])
 
   return (
     <>

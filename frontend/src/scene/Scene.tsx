@@ -1996,8 +1996,11 @@ function SceneContent({
       <StageGroup project={project} groupRef={stageGroupRef}>
         {!project.terrainGltfPath && <GenericFloor widthM={widthM} heightM={heightM} />}
 
+        {/* +3 cm : la grille se dessinait À la hauteur du plancher du
+            terrain (y=0 des deux côtés) — le test de profondeur la faisait
+            disparaître sous le sol. Fix « grille invisible » 2026-07-29. */}
         <Grid
-          position={[widthM / 2, 0, heightM / 2]}
+          position={[widthM / 2, 0.03, heightM / 2]}
           args={[widthM, heightM]}
           cellSize={project.gridSizeCm * CM_TO_M}
           sectionSize={project.gridSizeCm * CM_TO_M * 10}

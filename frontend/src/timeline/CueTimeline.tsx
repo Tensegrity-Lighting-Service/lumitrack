@@ -452,7 +452,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                   tMs={tMs}
                   playing={playing}
                   pxPerMs={effPxPerMs}
-                  scrollLeft={scrollLeft}
+                  scrollElRef={scrollRef}
                   viewportWidth={viewportWidth}
                   height={AUDIO_H}
                 />
