@@ -71,7 +71,10 @@ const SNAP_FLOOR_EPSILON_M = 0.15
 // réapplique les props primitives à CHAQUE rendu (~30/s au fil des ticks),
 // un objet neuf par rendu ferait donc réécrire la config des contrôles en
 // continu pendant le zoom/fit.
-const MOUSE_MAPPING = { LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
+// Clic molette : AUCUNE action (le dolly au drag molette était trop
+// brutal — retiré à la demande de Florian). Le zoom reste sur la molette
+// qui tourne, amorti, au pointeur.
+const MOUSE_MAPPING = { LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: undefined as unknown as THREE.MOUSE, RIGHT: THREE.MOUSE.PAN }
 const TOUCH_MAPPING = { ONE: undefined as unknown as THREE.TOUCH, TWO: THREE.TOUCH.DOLLY_PAN }
 
 /** Stage (x_cm, y_cm depth, z_cm height) -> StageGroup-local metres
