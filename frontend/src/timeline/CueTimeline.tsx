@@ -205,12 +205,27 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
       // laissant au scroll-event (asynchrone, frame suivante), la grille
       // était générée avec l'ANCIEN scroll et le NOUVEAU zoom pendant
       // toute l'animation → règle/grille désynchronisées des blocs.
+      //
+      // `el.scrollLeft` posé AVANT le flushSync, pas après (résiduel
+      // trouvé le 2026-07-31 : « le zoom timeline est toujours
+      // asynchrone ») : AudioTrack lit `scroller.scrollLeft` en DIRECT
+      // depuis le DOM (pas l'état React) dans un useLayoutEffect qui se
+      // redéclenche PENDANT ce même flushSync (pxPerMs a changé). Poser
+      // scrollLeft après le flush le laissait lire l'ANCIENNE position à
+      // chaque frame de l'animation → les tuiles de waveform visibles
+      // restaient calculées pour la fenêtre précédente jusqu'à ce que
+      // l'event 'scroll' natif (asynchrone) rattrape, un vrai retard
+      // pendant toute la durée du zoom lissé. L'écriture DOM d'une
+      // propriété comme scrollLeft est synchrone (contrairement à
+      // l'event 'scroll' qu'elle déclenche) : la faire précéder le
+      // flushSync garantit que tout ce qui se relit pendant le re-rendu
+      // voit déjà la valeur à jour.
       const nsl = Math.max(0, state.anchorT * next - state.offsetX)
+      el.scrollLeft = nsl
       flushSync(() => {
         setPxPerMs(next)
         setScrollLeft(nsl)
       })
-      el.scrollLeft = nsl
       if (next !== state.target) {
         state.raf = requestAnimationFrame(step)
       } else {
