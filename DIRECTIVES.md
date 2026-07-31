@@ -167,7 +167,11 @@ timeline documenté et validé par le superviseur.
 - [x] Mission 2 — Inspecteur fiable *(✅ validée en UI le 2026-07-28 soir,
   codée par le superviseur, voir verdict)*
 - [ ] Mission 3 — Finitions desktop (dialogues natifs, undo/redo, rotation)
-  *(mission courante)*
+  *(mission courante — undo/redo livré le 2026-07-31, voir note ci-dessous ;
+  restent : 2 `window.prompt` (nouveau projet, renommage de bloc dans
+  CueTimeline.tsx) et à vérifier si la rotation souris existe déjà pour un
+  acteur seul en mode édition de bloc, distincte de la boîte de
+  transformation multi-sélection déjà livrée)*
 - [ ] Mission 4 — Timeline pro
 
 ## Verdicts du superviseur
@@ -535,3 +539,54 @@ revenir à leur place » — deux bugs distincts, deux fixes (commit 065ea4b).
   (scaleX pendant le geste, re-layout au repos, façon Figma/Maps) — gardée
   en plan B si le re-rendu par frame devenait lourd ; le bug réel était
   l'ordre de peinture, pas le coût du re-layout.
+
+## Fix calage terrain → PSN + numéro/abrégé acteur — 2026-07-31
+
+Florian a signalé un écart spatial entre Lumitrack et Capture sur un projet
+réel (même terrain glTF des deux côtés, 91,4 m de largeur). Diagnostic :
+`stage_map_origin_x_m/z_m/rotation_deg` (placement de la zone de jeu dans
+le terrain, gizmo 3D) n'alimentait pas la sortie PSN — seul
+`transform_origin_*` (ancré sur le coin haut-gauche de la zone) le faisait,
+deux repères indépendants. Sur ce projet (zone 91,4×55 m centrée sur le
+terrain), l'écart mesuré était d'~45 m (une demi-largeur de scène). Fixé
+dans `OutputTransform.to_metres` (Python **et** son miroir Rust
+`native/src/transform.rs`, tenu à parité) : le placement terrain est
+maintenant plié dans le calcul, origin/invert/swap devenant un réglage fin
+appliqué par-dessus. Défaut (0,0,0°) = no-op, aucun changement pour un
+projet sans terrain. `update_stage_map` rafraîchit aussi le transform du
+broadcaster en direct (oubli avant ce fix). Détail : CONCEPTION.md §14.4.
+Numéro Stancz (ou initiales) affiché sur chaque acteur dans la scène et le
+Roster (commit `3b899cf`), demande indépendante traitée dans la foulée.
+
+## CI + undo/redo — 2026-07-31
+
+Deux chantiers choisis par Florian (AskUserQuestion) suite à une demande
+« conventions de codage standard + UI/UX robuste » :
+
+- **CI** (`.github/workflows/ci.yml`) : rien ne tournait automatiquement
+  jusqu'ici. Trois jobs indépendants sur `ubuntu-latest` — `pytest`,
+  `cargo test` (native/), `npm run build` (frontend) — à chaque push/PR.
+- **Undo/redo** — enfin livré, le manque le plus flagrant documenté depuis
+  le début du MVP (§13.1.10). Historique backend-autoritaire dans
+  `sidecar.py` (snapshots JSON du projet, commandes `undo`/`redo`) :
+  **coalescé par fenêtre de temps** (0,7 s) plutôt qu'un snapshot par
+  message réseau, sinon un simple drag d'acteur (~30 messages/s) aurait
+  demandé des dizaines de Ctrl+Z pour être défait — un geste continu reste
+  UN SEUL pas d'annulation, une vraie pause en ouvre un nouveau. Périmètre :
+  commandes de contenu annulables (points, cues, activations, zones
+  backstage, placement de la zone) ; transport, réglages réseau/sortie PSN
+  et lecture seule hors périmètre ; remplacer le projet entier (nouveau/
+  import/bundle) vide l'historique plutôt que de le rendre annulable.
+  `project_message()` expose `undoAvailable`/`redoAvailable`. Frontend :
+  Ctrl+Z/Ctrl+Maj+Z (désactivés pendant la saisie texte, même convention
+  qu'Espace/Suppr) + menu Édition grisé en conséquence. 12 tests pytest
+  dédiés (`tests/test_undo.py`) : aller-retour simple, coalescage de
+  rafale, séparation par vraie pause, pile redo invalidée par une nouvelle
+  édition, no-op silencieux sur pile vide, remplacement de projet.
+
+**Non fait dans ce lot** (choix explicites de Florian, pas des oublis) :
+corriger les 5 avertissements oxlint existants (react-hooks exhaustive-deps
+dans Scene.tsx/AudioTrack.tsx), ajouter ruff côté Python, formaliser
+rustfmt/clippy strict. Les 2 `window.prompt` restants (Mission 3) n'ont pas
+non plus été traités — hors du périmètre choisi (undo/redo, pas dialogues
+natifs).
