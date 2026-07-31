@@ -1313,7 +1313,12 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     }
   }, [gl, camera, raycaster, selectedCueId, snapToGrid, gridSizeCm])
 
-  if (!bounds || live.length < 2) return null
+  // Un seul acteur : la boîte s'affiche quand même (rotation à la souris,
+  // §13.1.10 Mission 3 — sinon aucun outil de rotation n'existe hors
+  // multi-sélection). Redimensionner n'a pas de sens pour un point seul :
+  // les poignées/arêtes de resize sont masquées dans ce cas (voir plus bas).
+  if (!bounds || live.length < 1) return null
+  const singleMember = live.length === 1
   const { minX, minY, maxX, maxY } = bounds
   const wM = (maxX - minX) * CM_TO_M
   const hM = (maxY - minY) * CM_TO_M
@@ -1322,7 +1327,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     e.stopPropagation()
     const members = membersNow()
     const b = boundsOf(members)
-    if (!b || members.length < 2) return
+    if (!b || members.length < 1) return
     const rect = gl.domElement.getBoundingClientRect()
     raycaster.setFromCamera(new THREE.Vector2(
       ((e.nativeEvent.clientX - rect.left) / rect.width) * 2 - 1,
@@ -1376,8 +1381,9 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       </mesh>
       {/* Arêtes saisissables sur TOUTE leur longueur : barres invisibles
           d'épaisseur écran constante, mêmes gestes que les poignées de
-          milieu d'arête. */}
-      {([
+          milieu d'arête. Masquées pour un acteur seul : redimensionner un
+          point unique n'a pas de sens. */}
+      {!singleMember && ([
         { h: RESIZE_HANDLES[4], x: (minX + maxX) / 2, y: minY, horiz: true },
         { h: RESIZE_HANDLES[5], x: (minX + maxX) / 2, y: maxY, horiz: true },
         { h: RESIZE_HANDLES[6], x: minX, y: (minY + maxY) / 2, horiz: false },
@@ -1392,7 +1398,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
           onPointerDown={(e) => begin(e, 'resize', h)}
         />
       ))}
-      {RESIZE_HANDLES.map((h) => {
+      {!singleMember && RESIZE_HANDLES.map((h) => {
         const x = minX + h.fx * (maxX - minX)
         const y = minY + h.fz * (maxY - minY)
         const [lx, , lz] = stageToLocal(x, y, 0)
@@ -2267,7 +2273,7 @@ function SceneContent({
             block shows its target ghost and static trajectory. By default
             all of them; selecting an actor highlights its own and dims the
             rest (context stays visible). */}
-        {selectedCueId && selectedPointIds.length >= 2 && (
+        {selectedCueId && selectedPointIds.length >= 1 && (
           <SelectionTransform
             project={project}
             positions={positions}
