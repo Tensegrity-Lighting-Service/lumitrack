@@ -625,10 +625,18 @@ relative, LTP inter-groupes), reportés en v1.1.
   supprimé, remplacé par un bouton « Gérer… » ouvrant le panneau.
 - 8 tests pytest dédiés (modèle + protocole fil), 119 tests au total.
 
-**Non fait** (hors périmètre choisi par Florian) : pas de glisser-déposer
-pour réordonner DIRECTEMENT dans la colonne de gauche au-delà de ce que le
-popup fournit (le popup gère l'ordre) ; pas d'étalement/disposition en
-grille automatique au dépôt d'un groupe entier dans la scène (la boîte de
-transformation multi-acteurs sert à réarranger ensuite à la main) ; pas de
-groupes animables (§12.2) — pas d'appartenance multiple, pas d'animation
-de groupe relative, pas de résolution LTP inter-groupes.
+**Non fait** (hors périmètre choisi par Florian) : pas d'étalement/
+disposition en grille automatique au dépôt d'un groupe entier dans la
+scène (la boîte de transformation multi-acteurs sert à réarranger ensuite
+à la main) ; pas de groupes animables (§12.2) — pas d'appartenance
+multiple, pas d'animation de groupe relative, pas de résolution LTP
+inter-groupes.
+
+**Correction le même jour** : Florian a préféré un vrai système façon
+navigateur de fichiers (dossiers + glisser-déposer direct) au popup
+d'édition en lot décrit ci-dessus — RosterManagerPanel est retiré, la
+colonne de gauche EST maintenant l'explorateur (dossiers créés/renommés en
+ligne, glisser un acteur sur un dossier range ET réordonne en un seul
+geste, glisser un dossier sur un autre les réordonne entre eux, Suppr
+supprime la sélection). Modèle et sidecar inchangés — seule la couche
+frontend a changé de forme.
