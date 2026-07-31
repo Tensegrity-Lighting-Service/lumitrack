@@ -7,7 +7,6 @@ import {
   useRedoAvailable, useTick, useUndoAvailable,
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
-import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
@@ -232,13 +231,18 @@ function App() {
   }, [showGridSettings])
 
   // Explorateur du roster (mission "roster explorateur", 2026-07-31) : le
-  // dépôt (dragover/drop) est posé en listeners NATIFS sur le conteneur,
-  // pas en props React onDragOver/onDrop directement sur les lignes — le
-  // seul autre récepteur de drag-and-drop du projet (Scene.tsx, dépôt sur
-  // la scène 3D) utilise déjà ce pattern, jamais l'inverse ; le glisser
-  // d'un acteur sur un dossier ne déclenchait rien avec des props React,
-  // signe que ce couple onDragOver/onDrop synthétique n'est pas fiable
-  // dans ce WebView. `rosterProjectRef` évite un effet à re-brancher à
+  // dépôt (dragover/drop) est posé en listeners natifs sur le conteneur —
+  // même pattern que Scene.tsx (dépôt sur la scène 3D). Vrai coupable du
+  // "ça ne marche pas du tout", trouvé après coup : `dragDropEnabled` de
+  // Tauri est activé par défaut, et sur Windows ça DÉSACTIVE le drag-and-
+  // drop HTML5 dans la webview (la doc du champ le dit noir sur blanc :
+  // "Disabling it is required to use HTML5 drag and drop on the frontend
+  // on Windows") — aucun événement dragover/drop n'atteignait le DOM,
+  // React ou natif, peu importe. Fixé dans tauri.conf.json
+  // (dragDropEnabled: false), au prix du drop de fichiers OS sur la
+  // fenêtre (ancien useEffect onDragDropEvent, retiré) — sans perte
+  // fonctionnelle, "Importer…"/"Ouvrir…" au menu couvraient déjà les
+  // mêmes imports. `rosterProjectRef` évite un effet à re-brancher à
   // chaque changement de projet (le `<ul>` lui-même ne change jamais).
   const rosterListRef = useRef<HTMLUListElement>(null)
   const rosterProjectRef = useRef(project)
@@ -352,28 +356,6 @@ function App() {
     if (selectedCue) sidecar.resolveBlockContext(selectedCue.id)
     else sidecar.clearBlockContext()
   }, [selectedCue, project])
-
-  // Drag & drop de fichiers sur la fenêtre : routage par extension —
-  // audio -> piste audio, .stancz -> import, .lumitrack/.bundle -> ouvrir.
-  // (Événement natif Tauri : contrairement au drop HTML5, il porte les
-  // vrais chemins disque, que le sidecar peut ouvrir.)
-  useEffect(() => {
-    const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac']
-    let unlisten: (() => void) | null = null
-    getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type !== 'drop') return
-      for (const path of event.payload.paths) {
-        const ext = path.split('.').pop()?.toLowerCase() ?? ''
-        if (AUDIO_EXT.includes(ext)) sidecar.setAudio({ path })
-        else if (ext === 'stancz') sidecar.importStancz(path)
-        // .lumitrack = fichier (format courant) ; .bundle = ancien dossier
-        // (lecture seule, voir core/project.py::load_bundle) — les deux
-        // passent par la même commande, le backend distingue fichier/dossier.
-        else if (ext === 'lumitrack' || ext === 'bundle') sidecar.loadBundle(path)
-      }
-    }).then((fn) => { unlisten = fn }).catch(() => { /* hors Tauri (dev navigateur) */ })
-    return () => { if (unlisten) unlisten() }
-  }, [])
 
   // Global shortcuts. Skipped while typing in an input/select/color-picker
   // so Space/Delete keep their normal text-editing meaning there.
