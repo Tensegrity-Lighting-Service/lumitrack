@@ -1220,10 +1220,11 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       return { x: local.x / CM_TO_M, y: local.z / CM_TO_M }
     }
 
-    const endDrag = () => {
+    const endDrag = (e: PointerEvent) => {
       const drag = dragRef.current
       dragRef.current = null
       dragActiveRef.current = false
+      if (dom.hasPointerCapture(e.pointerId)) dom.releasePointerCapture(e.pointerId)
       if (controlsRef.current) controlsRef.current.enabled = true
       if (!drag || drag.kind !== 'rotate' || Math.abs(drag.lastTheta) < 1e-4) return
       // Écriture finale de la rotation : cible + ARC autour du centre +
@@ -1336,6 +1337,15 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       lastTheta: 0, lastSent: 0,
     }
     dragActiveRef.current = true
+    // Capture le pointeur SUR LE CANVAS (là où pointermove/pointerup sont
+    // écoutés) : sans ça, un geste large (rotation surtout, qui balaie un
+    // arc au-delà du bord de la boîte) peut faire relâcher le clic hors du
+    // canvas — pointerup n'y arrive alors jamais, endDrag() ne tourne pas,
+    // et le drag reste "collé" indéfiniment (2026-07-31 : la boîte semblait
+    // se réinitialiser/se désélectionner sans arrêt). Même remède déjà
+    // appliqué ailleurs dans ce fichier pour la même raison (poignées de
+    // zone, redimensionneurs de panneaux).
+    gl.domElement.setPointerCapture(e.nativeEvent.pointerId)
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
