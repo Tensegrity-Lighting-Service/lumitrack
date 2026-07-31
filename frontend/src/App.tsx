@@ -287,8 +287,14 @@ function App() {
     }
     const onDrop = (e: DragEvent) => {
       if (!e.dataTransfer) return
-      const target = (e.target as HTMLElement)
-        .closest('[data-drop-point], [data-drop-group-header], [data-drop-ungrouped]') as HTMLElement | null
+      // elementFromPoint plutôt que e.target : pour un drop natif routé par
+      // l'OS (dragDropEnabled: false laisse la WebView gérer elle-même la
+      // session de drag), e.target s'est avéré ne pas toujours pointer
+      // l'élément réellement sous le curseur au relâchement (2026-07-31 —
+      // le dépôt sur un dossier restait sans effet alors que le dépôt sur
+      // la scène 3D, qui ne dépend jamais de e.target, lui, fonctionnait).
+      const atPoint = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
+      const target = atPoint?.closest('[data-drop-point], [data-drop-group-header], [data-drop-ungrouped]') as HTMLElement | null
       if (!target) return
       e.preventDefault()
       const groupHeaderId = target.dataset.dropGroupHeader
