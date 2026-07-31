@@ -27,14 +27,13 @@
 // the placement once, rather than every child re-deriving it.
 import { Suspense, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
-import { OrthographicCamera, MapControls, Grid, useGLTF, Line } from '@react-three/drei'
+import { OrthographicCamera, MapControls, Grid, useGLTF, Line, PivotControls } from '@react-three/drei'
 import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
 import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, PathPoint, Point, Project, Pose } from '../types'
 import { boundsOf, rotationArc } from './transformBox'
-import type { Bounds } from './transformBox'
 
 const CM_TO_M = 0.01
 const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
@@ -60,16 +59,7 @@ const ACTOR_LABEL_PX = 18
 // Waypoints/poignées du tracé spatial : mêmes règles d'échelle écran.
 const WAYPOINT_PX = 9
 const BOX_PAD_PX = 14
-const EDGE_HIT_PX = 12
 const PATH_HANDLE_PX = 6
-// Rayon minimal (cm scène) entre le curseur et le pivot pour que l'angle de
-// rotation de la boîte de transformation soit considéré fiable. atan2 est
-// numériquement instable près de son origine : sans ce plancher, un geste
-// de rotation normal qui passe près du centre (facile à faire par
-// inadvertance à la souris) fait sauter l'angle calculé de façon erratique
-// — "ça part en cacahuète" (signalé 2026-07-31). Sous ce rayon, l'échantillon
-// est ignoré et le dernier angle stable est conservé plutôt que recalculé.
-const MIN_ROTATE_RADIUS_CM = 30
 // Live-state dimming in block-edit mode (§12.6): activated actors stay
 // readable, the rest is context; the ghosts/trajectories are the subject.
 const EDIT_ACTIVATED_OPACITY = 0.45
@@ -1144,20 +1134,35 @@ function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZo
   )
 }
 
-/** Boîte de transformation de la sélection multiple — MÊME modèle que
- * l'édition de la zone de jeu (ZoneOutline/ZoneHandles) : contour +
- * remplissage translucide (draggable = déplacer toute la sélection),
- * 8 poignées ScreenSized (4 coins = 2 axes, 4 milieux d'arêtes = 1 axe)
- * avec l'ANCRE OPPOSÉE FIGÉE pendant le resize, sphère de rotation
- * au-dessus. La rotation écrit au lâcher un arc de Bézier par acteur
- * autour du centre de la boîte (chaque acteur suit son cercle, pas une
- * droite) + rotation du lacet. */
-function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, stageGroupRef, controlsRef, snapToGrid, gridSizeCm, dragActiveRef }: {
+/** Boîte de transformation de la sélection multiple — remplace le gizmo
+ * fabriqué à la main (instable près du pivot en rotation, course avec le
+ * lasso jamais totalement fiable) par `PivotControls` de drei (2026-08-01,
+ * demande explicite de Florian après plusieurs tentatives ratées :
+ * "on décortique ça ensemble" — préférer une librairie éprouvée à du code
+ * maison pour ce genre d'interaction). `autoTransform={false}` : on
+ * n'attache aucun objet réel au gizmo (la "sélection" est virtuelle, ce
+ * sont des positions d'activation, pas des meshes) — `onDrag` reçoit la
+ * matrice delta et on l'applique nous-mêmes à chaque acteur, exactement le
+ * même principe que le geste précédent (calcul de cible + écriture via
+ * `sidecar.setActivation`), juste piloté par un gizmo éprouvé plutôt que
+ * des poignées maison. `activeAxes={[true, false, true]}` limite aux
+ * translations X/Z (le sol) + UNE seule bague de rotation (autour de Y,
+ * la verticale) — cf. le code source de PivotControls : la bague de
+ * rotation autour d'un axe n'apparaît que si les deux AUTRES axes sont
+ * actifs, donc désactiver Y masque justement les bagues X et Z tout en
+ * gardant celle-ci.
+ *
+ * Changement de comportement assumé : le redimensionnement (poignées
+ * d'angle/d'arête) ancrait l'angle OPPOSÉ avant ; les sphères de mise à
+ * l'échelle de PivotControls redimensionnent depuis le CENTRE du pivot
+ * (le centre du groupe sélectionné) — plus prévisible pour "resserrer/
+ * écarter une formation", à valider à l'usage.
+ */
+function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, controlsRef, snapToGrid, gridSizeCm, dragActiveRef }: {
   project: Project
   positions: Record<string, Pose>
   selectedCueId: string
   selectedPointIds: string[]
-  stageGroupRef: React.RefObject<THREE.Group | null>
   controlsRef: React.RefObject<MapControlsImpl | null>
   snapToGrid: boolean
   gridSizeCm: number
@@ -1165,7 +1170,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
    * composant a son propre dragRef, invisible sans ce pont. */
   dragActiveRef: React.RefObject<boolean>
 }) {
-  const { camera, raycaster, gl } = useThree()
+  const { camera } = useThree()
 
   type Member = { pointId: string; baseX: number; baseY: number; baseYaw: number | null }
   const membersNow = (): Member[] => {
@@ -1192,166 +1197,95 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
   const dragRef = useRef<{
     kind: DragKind
     members: Member[]
-    b: Bounds
-    startCm: { x: number; y: number }
-    handle?: ResizeHandleDef
-    startAngle?: number
+    centerX: number
+    centerY: number
     lastTheta: number
     lastSent: number
   } | null>(null)
 
-  useEffect(() => {
-    const dom = gl.domElement
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
-    const hit = new THREE.Vector3()
-
-    const toNdc = (e: PointerEvent) => {
-      const rect = dom.getBoundingClientRect()
-      return new THREE.Vector2(
-        ((e.clientX - rect.left) / rect.width) * 2 - 1,
-        -((e.clientY - rect.top) / rect.height) * 2 + 1,
-      )
-    }
-
-    const hitCm = (e: PointerEvent): { x: number; y: number } | null => {
-      raycaster.setFromCamera(toNdc(e), camera)
-      if (!raycaster.ray.intersectPlane(plane, hit) || !stageGroupRef.current) return null
-      const local = stageGroupRef.current.worldToLocal(hit.clone())
-      return { x: local.x / CM_TO_M, y: local.z / CM_TO_M }
-    }
-
-    const endDrag = (e: PointerEvent) => {
-      const drag = dragRef.current
-      dragRef.current = null
-      dragActiveRef.current = false
-      if (dom.hasPointerCapture(e.pointerId)) dom.releasePointerCapture(e.pointerId)
-      if (controlsRef.current) controlsRef.current.enabled = true
-      if (!drag || drag.kind !== 'rotate' || Math.abs(drag.lastTheta) < 1e-4) return
-      // Écriture finale de la rotation : cible + ARC autour du centre +
-      // lacet tourné du même angle.
-      const c = { x: (drag.b.minX + drag.b.maxX) / 2, y: (drag.b.minY + drag.b.maxY) / 2 }
-      const thetaDeg = (drag.lastTheta * 180) / Math.PI
-      for (const m of drag.members) {
-        const arc = rotationArc(m.baseX, m.baseY, c.x, c.y, drag.lastTheta)
-        sidecar.setActivation(selectedCueId, m.pointId, {
-          targetXCm: arc.targetXCm,
-          targetYCm: arc.targetYCm,
-          pathPoints: arc.pathPoints,
-          startHandle: arc.startHandle,
-          targetHandle: arc.targetHandle,
-          ...(m.baseYaw !== null ? { targetYawDeg: m.baseYaw + thetaDeg } : {}),
-        })
-      }
-    }
-
-    const onMove = (e: PointerEvent) => {
-      const drag = dragRef.current
-      if (!drag) return
-      const now = performance.now()
-      if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
-      drag.lastSent = now
-      const p = hitCm(e)
-      if (!p) return
-      const { b } = drag
-      const c = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }
-
-      if (drag.kind === 'move') {
-        let dx = p.x - drag.startCm.x
-        let dy = p.y - drag.startCm.y
-        if (snapToGrid && gridSizeCm > 0) {
-          dx = Math.round(dx / gridSizeCm) * gridSizeCm
-          dy = Math.round(dy / gridSizeCm) * gridSizeCm
-        }
-        for (const m of drag.members) {
-          sidecar.setActivation(selectedCueId, m.pointId, {
-            targetXCm: m.baseX + dx, targetYCm: m.baseY + dy,
-          })
-        }
-      } else if (drag.kind === 'resize' && drag.handle) {
-        // Ancre = coin/arête OPPOSÉ(E), figé(e) pendant tout le geste —
-        // même sémantique que le resize de la zone de jeu.
-        const h = drag.handle
-        const anchorX = b.minX + (1 - h.fx) * (b.maxX - b.minX)
-        const anchorY = b.minY + (1 - h.fz) * (b.maxY - b.minY)
-        const startHX = b.minX + h.fx * (b.maxX - b.minX)
-        const startHY = b.minY + h.fz * (b.maxY - b.minY)
-        const sx = (h.axis === 'x' || h.axis === 'both') && Math.abs(startHX - anchorX) > 1e-6
-          ? (p.x - anchorX) / (startHX - anchorX) : 1
-        const sy = (h.axis === 'z' || h.axis === 'both') && Math.abs(startHY - anchorY) > 1e-6
-          ? (p.y - anchorY) / (startHY - anchorY) : 1
-        for (const m of drag.members) {
-          sidecar.setActivation(selectedCueId, m.pointId, {
-            targetXCm: anchorX + (m.baseX - anchorX) * sx,
-            targetYCm: anchorY + (m.baseY - anchorY) * sy,
-          })
-        }
-      } else if (drag.kind === 'rotate') {
-        // Trop près du pivot : atan2 y est instable, on gèle plutôt que de
-        // recalculer un angle erratique (voir MIN_ROTATE_RADIUS_CM).
-        if (Math.hypot(p.x - c.x, p.y - c.y) < MIN_ROTATE_RADIUS_CM) return
-        const angle = Math.atan2(p.y - c.y, p.x - c.x)
-        if (drag.startAngle === undefined) { drag.startAngle = angle; return }
-        const theta = angle - drag.startAngle
-        drag.lastTheta = theta
-        // Pendant le geste : cibles seules (léger) ; l'arc part au lâcher.
-        for (const m of drag.members) {
-          const arc = rotationArc(m.baseX, m.baseY, c.x, c.y, theta)
-          sidecar.setActivation(selectedCueId, m.pointId, {
-            targetXCm: arc.targetXCm, targetYCm: arc.targetYCm,
-          })
-        }
-      }
-    }
-
-    dom.addEventListener('pointermove', onMove)
-    dom.addEventListener('pointerup', endDrag)
-    dom.addEventListener('pointerleave', endDrag)
-    return () => {
-      dom.removeEventListener('pointermove', onMove)
-      dom.removeEventListener('pointerup', endDrag)
-      dom.removeEventListener('pointerleave', endDrag)
-    }
-  }, [gl, camera, raycaster, selectedCueId, snapToGrid, gridSizeCm])
-
-  // Un seul acteur : la boîte s'affiche quand même (rotation à la souris,
-  // §13.1.10 Mission 3 — sinon aucun outil de rotation n'existe hors
-  // multi-sélection). Redimensionner n'a pas de sens pour un point seul :
-  // les poignées/arêtes de resize sont masquées dans ce cas (voir plus bas).
   if (!bounds || live.length < 1) return null
   const singleMember = live.length === 1
   const { minX, minY, maxX, maxY } = bounds
-  const wM = (maxX - minX) * CM_TO_M
-  const hM = (maxY - minY) * CM_TO_M
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+  const matrix = new THREE.Matrix4().makeTranslation(...stageToLocal(centerX, centerY, 0))
 
-  const begin = (e: ThreeEvent<PointerEvent>, kind: DragKind, handle?: ResizeHandleDef) => {
-    e.stopPropagation()
+  const kindFor = (component: string): DragKind =>
+    component === 'Rotator' ? 'rotate' : component === 'Sphere' ? 'resize' : 'move'
+
+  const handleDragStart: NonNullable<React.ComponentProps<typeof PivotControls>['onDragStart']> = (props) => {
     const members = membersNow()
-    const b = boundsOf(members)
-    if (!b || members.length < 1) return
-    const rect = gl.domElement.getBoundingClientRect()
-    raycaster.setFromCamera(new THREE.Vector2(
-      ((e.nativeEvent.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.nativeEvent.clientY - rect.top) / rect.height) * 2 + 1,
-    ), camera)
-    const hp = new THREE.Vector3()
-    raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hp)
-    const local = stageGroupRef.current ? stageGroupRef.current.worldToLocal(hp.clone()) : hp
-    dragRef.current = {
-      kind, members, b, handle,
-      startCm: { x: local.x / CM_TO_M, y: local.z / CM_TO_M },
-      lastTheta: 0, lastSent: 0,
-    }
+    if (members.length === 0) return
+    dragRef.current = { kind: kindFor(props.component), members, centerX, centerY, lastTheta: 0, lastSent: 0 }
     dragActiveRef.current = true
-    // Capture le pointeur SUR LE CANVAS (là où pointermove/pointerup sont
-    // écoutés) : sans ça, un geste large (rotation surtout, qui balaie un
-    // arc au-delà du bord de la boîte) peut faire relâcher le clic hors du
-    // canvas — pointerup n'y arrive alors jamais, endDrag() ne tourne pas,
-    // et le drag reste "collé" indéfiniment (2026-07-31 : la boîte semblait
-    // se réinitialiser/se désélectionner sans arrêt). Même remède déjà
-    // appliqué ailleurs dans ce fichier pour la même raison (poignées de
-    // zone, redimensionneurs de panneaux).
-    gl.domElement.setPointerCapture(e.nativeEvent.pointerId)
     if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const handleDrag: NonNullable<React.ComponentProps<typeof PivotControls>['onDrag']> = (_l, deltaL) => {
+    const drag = dragRef.current
+    if (!drag) return
+    const now = performance.now()
+    if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
+    drag.lastSent = now
+
+    let effectiveDelta = deltaL
+    if (drag.kind === 'move' && snapToGrid && gridSizeCm > 0) {
+      // Aimante le déplacement DU GROUPE (pas les rotations/mises à
+      // l'échelle) à la grille — reconstruit une translation pure aimantée
+      // plutôt que de laisser chaque membre s'aimanter indépendamment.
+      const centerLocal = new THREE.Vector3(...stageToLocal(drag.centerX, drag.centerY, 0))
+      const centerNew = centerLocal.clone().applyMatrix4(deltaL)
+      const dxCm = Math.round(((centerNew.x - centerLocal.x) / CM_TO_M) / gridSizeCm) * gridSizeCm
+      const dzCm = Math.round(((centerNew.z - centerLocal.z) / CM_TO_M) / gridSizeCm) * gridSizeCm
+      effectiveDelta = new THREE.Matrix4().makeTranslation(dxCm * CM_TO_M, 0, dzCm * CM_TO_M)
+    }
+
+    // Angle balayé depuis le début du geste, dérivé du MÊME transform que
+    // la position ci-dessous (jamais décomposé "à l'aveugle" en Euler
+    // depuis la matrice) : un point de référence à 1 m du pivot, avant/
+    // après application du delta, donne l'angle exactement dans la
+    // convention stage (atan2(y,x)) déjà utilisée par rotationArc, parce
+    // que stageToLocal ne fait qu'une mise à l'échelle sans retourner
+    // aucun axe (X->X, Y->Z) — la cohérence entre la position affichée
+    // pendant le geste et le lacet final est garantie par construction,
+    // pas par une déduction séparée qui pourrait diverger en signe.
+    const centerLocal = new THREE.Vector3(...stageToLocal(drag.centerX, drag.centerY, 0))
+    const centerNew = centerLocal.clone().applyMatrix4(effectiveDelta)
+    const refLocal = new THREE.Vector3(...stageToLocal(drag.centerX + 100, drag.centerY, 0))
+    const refNew = refLocal.clone().applyMatrix4(effectiveDelta)
+    const a0 = Math.atan2(refLocal.z - centerLocal.z, refLocal.x - centerLocal.x)
+    const a1 = Math.atan2(refNew.z - centerNew.z, refNew.x - centerNew.x)
+    drag.lastTheta = a1 - a0
+
+    for (const m of drag.members) {
+      const qLocal = new THREE.Vector3(...stageToLocal(m.baseX, m.baseY, 0))
+      const qNew = qLocal.clone().applyMatrix4(effectiveDelta)
+      sidecar.setActivation(selectedCueId, m.pointId, {
+        targetXCm: qNew.x / CM_TO_M, targetYCm: qNew.z / CM_TO_M,
+      })
+    }
+  }
+
+  const handleDragEnd = () => {
+    const drag = dragRef.current
+    dragRef.current = null
+    dragActiveRef.current = false
+    if (controlsRef.current) controlsRef.current.enabled = true
+    if (!drag || drag.kind !== 'rotate' || Math.abs(drag.lastTheta) < 1e-4) return
+    // Écriture finale de la rotation : cible + ARC autour du centre +
+    // lacet tourné du même angle (identique à avant le passage à drei).
+    const thetaDeg = (drag.lastTheta * 180) / Math.PI
+    for (const m of drag.members) {
+      const arc = rotationArc(m.baseX, m.baseY, drag.centerX, drag.centerY, drag.lastTheta)
+      sidecar.setActivation(selectedCueId, m.pointId, {
+        targetXCm: arc.targetXCm,
+        targetYCm: arc.targetYCm,
+        pathPoints: arc.pathPoints,
+        startHandle: arc.startHandle,
+        targetHandle: arc.targetHandle,
+        ...(m.baseYaw !== null ? { targetYawDeg: m.baseYaw + thetaDeg } : {}),
+      })
+    }
   }
 
   const outline = [
@@ -1364,144 +1298,26 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
 
   return (
     <group>
+      {/* Contour de l'étendue de la sélection — PivotControls ne dessine
+          que le gizmo au pivot, pas un cadre autour de l'étendue. */}
       <Line points={outline} color="#ffffff" lineWidth={2} transparent opacity={0.9}
         depthTest={false} renderOrder={1040} />
-      {/* Remplissage : lisible ET saisissable — attraper l'intérieur de la
-          boîte déplace toute la sélection (comme la zone de jeu). */}
-      <mesh
-        position={[(minX * CM_TO_M + maxX * CM_TO_M) / 2, 0.015, (minY * CM_TO_M + maxY * CM_TO_M) / 2]}
-        rotation={[-Math.PI / 2, 0, 0]}
-        renderOrder={1039}
-        onPointerDown={(e) => begin(e, 'move')}
-        onPointerOver={() => { document.body.style.cursor = 'move' }}
-        onPointerOut={() => { document.body.style.cursor = 'auto' }}
-      >
-        <planeGeometry args={[wM, hM]} />
-        <meshBasicMaterial color="#4f6df5" transparent opacity={0.10} depthWrite={false} depthTest={false} />
-      </mesh>
-      {/* Arêtes saisissables sur TOUTE leur longueur : barres invisibles
-          d'épaisseur écran constante, mêmes gestes que les poignées de
-          milieu d'arête. Masquées pour un acteur seul : redimensionner un
-          point unique n'a pas de sens. */}
-      {!singleMember && ([
-        { h: RESIZE_HANDLES[4], x: (minX + maxX) / 2, y: minY, horiz: true },
-        { h: RESIZE_HANDLES[5], x: (minX + maxX) / 2, y: maxY, horiz: true },
-        { h: RESIZE_HANDLES[6], x: minX, y: (minY + maxY) / 2, horiz: false },
-        { h: RESIZE_HANDLES[7], x: maxX, y: (minY + maxY) / 2, horiz: false },
-      ] as const).map(({ h, x, y, horiz }) => (
-        <EdgeHit
-          key={`edge-${h.key}`}
-          center={[x, y]}
-          lengthCm={horiz ? maxX - minX : maxY - minY}
-          horizontal={horiz}
-          cursor={h.cursor}
-          onPointerDown={(e) => begin(e, 'resize', h)}
-        />
-      ))}
-      {!singleMember && RESIZE_HANDLES.map((h) => {
-        const x = minX + h.fx * (maxX - minX)
-        const y = minY + h.fz * (maxY - minY)
-        const [lx, , lz] = stageToLocal(x, y, 0)
-        return (
-          <ScreenSizedHandle
-            key={h.key}
-            position={[lx, 0.03, lz]}
-            sizePx={HANDLE_PX}
-            args={h.axis === 'both' ? [1, 1, 1] : h.axis === 'x' ? [0.35, 1, 1] : [1, 1, 0.35]}
-            color="#ffffff"
-            cursor={h.cursor}
-            renderOrder={1041}
-            onPointerDown={(e) => begin(e, 'resize', h)}
-          />
-        )
-      })}
-      <SelectionRotateHandle
-        topCenter={[(minX + maxX) / 2, minY]}
-        onPointerDown={(e) => begin(e, 'rotate')}
+      <PivotControls
+        matrix={matrix}
+        autoTransform={false}
+        activeAxes={[true, false, true]}
+        disableScaling={singleMember}
+        disableSliders={false}
+        fixed
+        scale={90}
+        lineWidth={2.5}
+        axisColors={['#4F6DF5', '#4F6DF5', '#4F6DF5']}
+        hoveredColor="#f5c84f"
+        depthTest={false}
+        onDragStart={handleDragStart}
+        onDrag={handleDrag}
+        onDragEnd={handleDragEnd}
       />
-    </group>
-  )
-}
-
-/** Barre de saisie invisible le long d'une arête de la boîte : longueur
- * monde (suit la boîte), épaisseur écran constante. */
-function EdgeHit({ center, lengthCm, horizontal, cursor, onPointerDown }: {
-  center: readonly [number, number]
-  lengthCm: number
-  horizontal: boolean
-  cursor: string
-  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
-}) {
-  const ref = useRef<THREE.Mesh>(null)
-  const lengthM = Math.max(0.05, lengthCm * CM_TO_M)
-  useFrame(({ camera }) => {
-    if (!ref.current) return
-    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
-    const thick = EDGE_HIT_PX / zoom
-    ref.current.scale.set(horizontal ? lengthM : thick, 1, horizontal ? thick : lengthM)
-  })
-  const [lx, , lz] = stageToLocal(center[0], center[1], 0)
-  return (
-    <mesh
-      ref={ref}
-      position={[lx, 0.025, lz]}
-      rotation={[-Math.PI / 2, 0, 0]}
-      renderOrder={1038}
-      onPointerDown={onPointerDown}
-      onPointerOver={() => { document.body.style.cursor = cursor }}
-      onPointerOut={() => { document.body.style.cursor = 'auto' }}
-    >
-      <planeGeometry args={[1, 1]} />
-      <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
-    </mesh>
-  )
-}
-
-/** Poignée de rotation de la boîte de sélection : sphère dorée reliée au
- * bord haut par une tige, taille/offset écran constants, hitbox élargie,
- * renderOrder au-dessus du remplissage (elle était invisible en dessous). */
-function SelectionRotateHandle({ topCenter, onPointerDown }: {
-  topCenter: readonly [number, number]
-  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
-}) {
-  const grpRef = useRef<THREE.Group>(null)
-  const stemRef = useRef<THREE.Mesh>(null)
-  useFrame(({ camera }) => {
-    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
-    const offset = ROTATE_HANDLE_OFFSET_PX / zoom
-    const s = ROTATE_HANDLE_PX / zoom
-    if (grpRef.current) {
-      grpRef.current.position.set(0, 0.04, -offset)
-      grpRef.current.scale.set(s, s, s)
-    }
-    if (stemRef.current) {
-      // Tige : du bord haut jusqu'à la sphère (plan fin étiré en Z).
-      stemRef.current.position.set(0, 0.035, -offset / 2)
-      stemRef.current.scale.set(1.2 / zoom, 1, offset)
-    }
-  })
-  const [lx, , lz] = stageToLocal(topCenter[0], topCenter[1], 0)
-  return (
-    <group position={[lx, 0, lz]}>
-      <mesh ref={stemRef} rotation={[-Math.PI / 2, 0, 0]} renderOrder={1042}>
-        <planeGeometry args={[1, 1]} />
-        <meshBasicMaterial color="#f5c84f" transparent opacity={0.8} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
-      </mesh>
-      <group
-        ref={grpRef}
-        onPointerDown={onPointerDown}
-        onPointerOver={() => { document.body.style.cursor = 'grab' }}
-        onPointerOut={() => { document.body.style.cursor = 'auto' }}
-      >
-        <mesh renderOrder={1043}>
-          <sphereGeometry args={[0.55, 16, 12]} />
-          <meshBasicMaterial color="#f5c84f" depthTest={false} />
-        </mesh>
-        <mesh renderOrder={1042}>
-          <sphereGeometry args={[1.5, 10, 8]} />
-          <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} />
-        </mesh>
-      </group>
     </group>
   )
 }
@@ -2296,7 +2112,6 @@ function SceneContent({
             positions={positions}
             selectedCueId={selectedCueId}
             selectedPointIds={selectedPointIds}
-            stageGroupRef={stageGroupRef}
             controlsRef={controlsRef}
             snapToGrid={snapToGrid}
             gridSizeCm={project.gridSizeCm}
