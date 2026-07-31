@@ -298,13 +298,26 @@ _AXIS_FIELDS = {
     "yaw": "target_yaw_deg",
 }
 
+# Un acteur porté tourne avant de partir, il ne pivote pas progressivement
+# pendant tout le trajet ("comme dans la vraie vie, un acteur se tourne
+# avant de prendre de courir" — demande de Florian, 2026-07-31). Le lacet a
+# donc sa PROPRE fenêtre de fondu, courte, au tout début de celle de
+# l'activation — pas un cut (toujours eased/courbé via axis_progress), mais
+# bien plus bref que le déplacement x/y qui peut durer plusieurs secondes.
+# Plafonnée par fade_ms : une activation plus courte que ça ne fait jamais
+# tourner le lacet plus longtemps que le mouvement lui-même.
+YAW_TURN_MS = 400.0
+
 
 def _axis_keyframes(project: Project, point_id: str, axis: str):
     """-> [(start_ms, fade_end_ms, value, activation, cue_id, axis), ...]
     sorted by start_ms, one entry per Cue whose Activation for this point
     sets this axis. The activation rides along so `_resolve_axis` can apply
     its per-axis curve (graph editor) or named easing; the cue id (index 4)
-    lets `resolve_block_context` name which cue a start value tracks from."""
+    lets `resolve_block_context` name which cue a start value tracks from.
+
+    The yaw axis's own fade window is capped to YAW_TURN_MS (see above) —
+    every other axis keeps the activation's full fade_ms."""
     field_name = _AXIS_FIELDS[axis]
     kfs = []
     for cue in project.cues:
@@ -314,7 +327,8 @@ def _axis_keyframes(project: Project, point_id: str, axis: str):
         value = getattr(act, field_name)
         if value is None:
             continue
-        kfs.append((cue.start_ms, cue.start_ms + act.fade_ms, value, act, cue.id, axis))
+        fade_ms = min(act.fade_ms, YAW_TURN_MS) if axis == "yaw" else act.fade_ms
+        kfs.append((cue.start_ms, cue.start_ms + fade_ms, value, act, cue.id, axis))
     kfs.sort(key=lambda k: k[0])
     return kfs
 

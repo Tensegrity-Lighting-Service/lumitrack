@@ -170,9 +170,79 @@ def test_z_and_yaw_are_independent_animatable_tracks():
         Cue(id="c2", name="c2", start_ms=1000, duration_ms=1000,
             activations={"a": Activation(target_yaw_deg=450, fade_ms=1000)}),
     ]
-    mid = resolve_positions(project, 1500)["a"]
+    # Milieu de la fenêtre de lacet de c2 (YAW_TURN_MS=400, pas fade_ms=1000
+    # — voir test_yaw_turns_quickly_at_start_of_move ci-dessous), pas milieu
+    # du fade x/y/z : la même fraction de progression (50 %) est atteinte
+    # bien plus tôt sur le lacet que sur la position.
+    mid = resolve_positions(project, 1200)["a"]
     assert (mid.x_cm, mid.y_cm, mid.z_cm) == pytest.approx((0.0, 0.0, 100.0))
     assert mid.yaw_deg == pytest.approx(270.0)  # multi-turn value, not wrapped
+
+
+# ------------------------------------------------- lacet en debut de trajet
+#
+# "Un acteur se tourne avant de prendre de courir, il ne tourne pas jusqu'à
+# son arrivée" (Florian, 2026-07-31) : le lacet tourne au tout début du
+# mouvement (fenêtre courte, YAW_TURN_MS), pas étalé sur toute la durée du
+# déplacement x/y — mais toujours eased, jamais un cut instantané.
+
+def test_yaw_turns_quickly_at_start_of_move_not_spread_over_it():
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_yaw_deg=0, fade_ms=0)}),
+        # Déplacement long (4s) avec un virage de 90°.
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=4000,
+            activations={"a": Activation(target_x_cm=1000, target_y_cm=0,
+                                          target_yaw_deg=90, fade_ms=4000)}),
+    ]
+    from lumitrack.core.timeline import YAW_TURN_MS
+    # Milieu de la fenêtre de lacet (200 ms sur les 400 ms de YAW_TURN_MS) :
+    # le virage est déjà à moitié fait alors que le déplacement x/y vient à
+    # peine de commencer (200/4000 = 5 %).
+    mid_turn = resolve_positions(project, 1000 + YAW_TURN_MS / 2)["a"]
+    assert mid_turn.yaw_deg == pytest.approx(45.0)
+    assert mid_turn.x_cm == pytest.approx(50.0)  # 5 % de 1000, pas 45 %
+
+    # Après la fenêtre de lacet mais bien avant l'arrivée : le lacet tient
+    # déjà sa cible, le déplacement continue seul.
+    mid_move = resolve_positions(project, 1000 + 2000)["a"]
+    assert mid_move.yaw_deg == pytest.approx(90.0)
+    assert mid_move.x_cm == pytest.approx(500.0)
+
+
+def test_yaw_turn_never_outlasts_a_shorter_move():
+    """Un déplacement plus court que YAW_TURN_MS ne fait jamais tourner le
+    lacet plus longtemps que le mouvement lui-même — plafonné par fade_ms."""
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_yaw_deg=0, fade_ms=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=100,
+            activations={"a": Activation(target_x_cm=100.0, target_y_cm=0,
+                                          target_yaw_deg=90, fade_ms=100)}),
+    ]
+    at_end = resolve_positions(project, 1100)["a"]
+    assert at_end.yaw_deg == pytest.approx(90.0)
+    assert at_end.x_cm == pytest.approx(100.0)
+
+
+def test_yaw_turn_is_eased_not_an_instant_cut():
+    """Toujours un fondu, jamais un saut brut — au premier quart de la
+    fenêtre de lacet, l'angle a bougé mais n'a pas encore atteint la cible."""
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_yaw_deg=0, fade_ms=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=4000,
+            activations={"a": Activation(target_x_cm=1000, target_y_cm=0,
+                                          target_yaw_deg=90, fade_ms=4000)}),
+    ]
+    just_after_start = resolve_positions(project, 1050)["a"]
+    assert 0.0 < just_after_start.yaw_deg < 90.0
 
 
 @pytest.mark.parametrize("name", ["linear", "smooth", "bounce", "spring",

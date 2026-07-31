@@ -87,8 +87,17 @@ fn backstage_slot(project: &Project, point_id: &str) -> Option<(f64, f64)> {
     ))
 }
 
+/// Port de core/timeline.py::YAW_TURN_MS : un acteur porté tourne avant de
+/// partir, il ne pivote pas progressivement pendant tout le trajet
+/// (demande de Florian, 2026-07-31). Fenêtre de fondu propre au lacet,
+/// courte, plafonnée par fade_ms — jamais un cut (toujours eased via
+/// act_axis_progress), juste bien plus bref que le déplacement x/y.
+pub const YAW_TURN_MS: f64 = 400.0;
+
 /// Port de `_axis_keyframes` : un keyframe par cue dont l'activation de ce
-/// point touche cet axe, trié par start_ms (tri stable).
+/// point touche cet axe, trié par start_ms (tri stable). Le lacet a sa
+/// propre fenêtre de fondu plafonnée (YAW_TURN_MS) ; les autres axes
+/// gardent le fade_ms complet de l'activation.
 fn axis_keyframes<'a>(project: &'a Project, point_id: &str, axis: Axis) -> Vec<Keyframe<'a>> {
     let mut kfs: Vec<Keyframe<'a>> = project
         .cues
@@ -96,9 +105,10 @@ fn axis_keyframes<'a>(project: &'a Project, point_id: &str, axis: Axis) -> Vec<K
         .filter_map(|cue| {
             let act = cue.activations.get(point_id)?;
             let value = axis.value(act)?;
+            let fade_ms = if axis == Axis::Yaw { act.fade_ms.min(YAW_TURN_MS) } else { act.fade_ms };
             Some(Keyframe {
                 start_ms: cue.start_ms,
-                fade_end_ms: cue.start_ms + act.fade_ms,
+                fade_end_ms: cue.start_ms + fade_ms,
                 value,
                 easing: act.easing.clone(),
                 curve: act.curves.as_ref()
@@ -517,5 +527,71 @@ mod tests {
     fn unknown_cue_errors() {
         let p = project(vec![point("p1")], vec![]);
         assert!(resolve_block_context(&p, "nope", 4).is_err());
+    }
+
+    /// Oracle : test_core.py::test_yaw_turns_quickly_at_start_of_move_not_spread_over_it
+    /// — le lacet tourne dans sa propre fenêtre courte (YAW_TURN_MS), pas
+    /// étalé sur tout le déplacement x/y.
+    #[test]
+    fn yaw_turns_quickly_at_start_of_move_not_spread_over_it() {
+        let snap = Activation {
+            target_x_cm: Some(0.0), target_y_cm: Some(0.0), target_yaw_deg: Some(0.0),
+            fade_ms: 0.0, ..Default::default()
+        };
+        let mv = Activation {
+            target_x_cm: Some(1000.0), target_y_cm: Some(0.0), target_yaw_deg: Some(90.0),
+            fade_ms: 4000.0, ..Default::default()
+        };
+        let p = project(vec![point("a")], vec![
+            cue("c0", 0.0, vec![("a", snap)]),
+            cue("c1", 1000.0, vec![("a", mv)]),
+        ]);
+        let mid_turn = resolve_positions(&p, 1000.0 + YAW_TURN_MS / 2.0);
+        assert!((mid_turn["a"].yaw_deg - 45.0).abs() < 1e-9);
+        assert!((mid_turn["a"].x_cm - 50.0).abs() < 1e-9); // 5% de 1000, pas 45%
+
+        let mid_move = resolve_positions(&p, 1000.0 + 2000.0);
+        assert!((mid_move["a"].yaw_deg - 90.0).abs() < 1e-9);
+        assert!((mid_move["a"].x_cm - 500.0).abs() < 1e-9);
+    }
+
+    /// Oracle : test_core.py::test_yaw_turn_never_outlasts_a_shorter_move
+    #[test]
+    fn yaw_turn_never_outlasts_a_shorter_move() {
+        let snap = Activation {
+            target_x_cm: Some(0.0), target_y_cm: Some(0.0), target_yaw_deg: Some(0.0),
+            fade_ms: 0.0, ..Default::default()
+        };
+        let mv = Activation {
+            target_x_cm: Some(100.0), target_y_cm: Some(0.0), target_yaw_deg: Some(90.0),
+            fade_ms: 100.0, ..Default::default()
+        };
+        let p = project(vec![point("a")], vec![
+            cue("c0", 0.0, vec![("a", snap)]),
+            cue("c1", 1000.0, vec![("a", mv)]),
+        ]);
+        let at_end = resolve_positions(&p, 1100.0);
+        assert!((at_end["a"].yaw_deg - 90.0).abs() < 1e-9);
+        assert!((at_end["a"].x_cm - 100.0).abs() < 1e-9);
+    }
+
+    /// Oracle : test_core.py::test_yaw_turn_is_eased_not_an_instant_cut
+    #[test]
+    fn yaw_turn_is_eased_not_an_instant_cut() {
+        let snap = Activation {
+            target_x_cm: Some(0.0), target_y_cm: Some(0.0), target_yaw_deg: Some(0.0),
+            fade_ms: 0.0, ..Default::default()
+        };
+        let mv = Activation {
+            target_x_cm: Some(1000.0), target_y_cm: Some(0.0), target_yaw_deg: Some(90.0),
+            fade_ms: 4000.0, ..Default::default()
+        };
+        let p = project(vec![point("a")], vec![
+            cue("c0", 0.0, vec![("a", snap)]),
+            cue("c1", 1000.0, vec![("a", mv)]),
+        ]);
+        let just_after_start = resolve_positions(&p, 1050.0);
+        let yaw = just_after_start["a"].yaw_deg;
+        assert!(yaw > 0.0 && yaw < 90.0);
     }
 }
