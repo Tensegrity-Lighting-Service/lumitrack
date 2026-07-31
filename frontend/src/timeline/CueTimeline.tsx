@@ -128,6 +128,15 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   const [drag, setDrag] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const lastSeekRef = useRef(0)
+  // Le temps d'un geste de zoom, les blocs/playhead doivent suivre pxPerMs
+  // AU PIXEL PRÈS, comme la règle/le waveform (aucune transition) — sinon
+  // leurs transitions CSS respectives (`.cue-block` lissage d'écho backend,
+  // `.tl-playhead` lissage entre ticks 30 Hz, toutes deux pensées pour un
+  // AUTRE contexte) chassent une cible qui bouge à chaque frame de
+  // l'animation de zoom et donnent un mouvement amplifié/qui déborde par
+  // rapport au reste (signalé 2026-07-31 : "les blocs et la playhead sont
+  // exagérés par rapport au reste").
+  const [zooming, setZooming] = useState(false)
 
   const effPxPerMs = pxPerMs ?? 0.05
 
@@ -186,6 +195,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     }
     const state = { target, anchorT, offsetX, raf: 0 }
     zoomAnimRef.current = state
+    setZooming(true)
     const step = () => {
       const current = pxPerMsRef.current
       const remaining = state.target / current
@@ -230,6 +240,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
         state.raf = requestAnimationFrame(step)
       } else {
         zoomAnimRef.current = null
+        setZooming(false)
       }
     }
     state.raf = requestAnimationFrame(step)
@@ -605,6 +616,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                       width: Math.max(4, dur * effPxPerMs),
                       top: laneIndex * LANE_H + 2,
                       height: LANE_H - 6,
+                      transition: zooming ? 'none' : undefined,
                     } as React.CSSProperties}
                     onPointerDown={(e) => beginBlockDrag(e, cue, 'move')}
                     onDoubleClick={() => renameCue(cue)}
@@ -644,7 +656,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
               />
             )}
 
-            <div className="tl-playhead" style={{ left: playheadPx }} />
+            <div className="tl-playhead" style={{ left: playheadPx, transition: zooming ? 'none' : undefined }} />
           </div>
         </div>
       </div>
