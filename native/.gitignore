@@ -1,1 +1,5 @@
 /target
+# Convention Rust standard pour un crate librairie (pas d'application avec
+# [[bin]] ici) : pas de build reproductible à figer, donc pas de Cargo.lock
+# versionné (https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html).
+Cargo.lock
