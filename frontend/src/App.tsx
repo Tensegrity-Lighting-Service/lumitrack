@@ -11,7 +11,6 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
-import { RosterManagerPanel } from './ui/RosterManagerPanel'
 
 const LUMITRACK_FILTER = [{ name: 'Projet Lumitrack', extensions: ['lumitrack'] }]
 
@@ -182,10 +181,12 @@ function App() {
   }, [])
 
   const [rosterWidth, setRosterWidth] = useState(220)
-  const [showRosterManager, setShowRosterManager] = useState(false)
   // Sous-groupes du roster repliés (purement local à cette session — pas
   // besoin de le persister dans le projet, juste un confort d'affichage).
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  // Dossier en cours de renommage (double-clic sur son nom), style
+  // navigateur de fichiers (mission "roster explorateur", 2026-07-31).
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null)
   const [inspectorWidth, setInspectorWidth] = useState(300)
   const [timelineHeight, setTimelineHeight] = useState(220)
   const [cameraLocked, setCameraLocked] = useState(false)
@@ -304,6 +305,16 @@ function App() {
           e.preventDefault()
           sidecar.deleteCue(selectedCueId)
           setSelectedCueId(null)
+        } else if (selectedPointIds.length > 0) {
+          // Suppression d'acteur(s) sélectionnés dans le roster — geste
+          // "Suppr" façon navigateur de fichiers (mission "roster
+          // explorateur", remplace l'ancien popup de gestion en lot).
+          e.preventDefault()
+          const count = selectedPointIds.length
+          if (window.confirm(`Supprimer ${count} acteur${count > 1 ? 's' : ''} ? Leurs activations dans tous les blocs partent aussi.`)) {
+            for (const id of selectedPointIds) sidecar.deletePoint(id)
+            setSelectedPointIds([])
+          }
         }
       } else if (e.key === 'Escape') {
         setSelectedCueId(null)
@@ -312,7 +323,7 @@ function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [playing, selectedCueId, project, saveOrSaveAs])
+  }, [playing, selectedCueId, selectedPointIds, project, saveOrSaveAs])
 
   if (!project) {
     return (
@@ -408,12 +419,34 @@ function App() {
         <div className="roster-head">
           <h2>Roster</h2>
           <span className="roster-spacer" />
-          <button onClick={() => setShowRosterManager(true)} title="Ajouter, supprimer, organiser en sous-groupes">
-            Gérer…
+          <button
+            title="Nouveau sous-dossier"
+            onClick={() => {
+              const id = crypto.randomUUID()
+              sidecar.setRosterGroups([...project.rosterGroups, { id, name: 'Nouveau groupe' }])
+              setRenamingGroupId(id)
+            }}
+          >
+            + Dossier
+          </button>
+          <button
+            title="Ajouter un acteur (sans groupe)"
+            onClick={() => {
+              const base = project.points.length
+              sidecar.addPoint(`Acteur ${base + 1}`, base + 1, null)
+            }}
+          >
+            + Acteur
           </button>
         </div>
         <ul>
           {(() => {
+            // Explorateur de fichiers (mission "roster explorateur",
+            // 2026-07-31, remplace le popup de gestion en lot) : dossiers =
+            // sous-groupes organisationnels, drag-and-drop pour ranger ET
+            // réordonner. Un acteur porte au plus un dossier
+            // (`rosterGroupId`), l'ordre à l'intérieur d'un dossier suit
+            // l'ordre relatif dans `project.points` (reorderPoints).
             const byId = new Map(project.points.map((p, i) => [p.id, i] as const))
             const selectRange = (point: Point) => (e: React.MouseEvent) => {
               const index = byId.get(point.id) ?? -1
@@ -434,14 +467,64 @@ function App() {
                   ? [] : [point.id])
               }
             }
+
+            // Lit les ids transportés par un glisser d'acteur(s), qu'ils
+            // viennent d'une ligne seule ou d'un en-tête de dossier —
+            // Scene.tsx lit le même couple de types MIME pour le dépôt
+            // dans la scène 3D, réutilisé ici pour le classement local.
+            const extractPointIds = (dt: DataTransfer): string[] => {
+              const multi = dt.getData('application/x-lumitrack-points')
+              if (multi) {
+                try { return JSON.parse(multi) } catch { return [] }
+              }
+              const single = dt.getData('application/x-lumitrack-point')
+              return single ? [single] : []
+            }
+            const acceptPointDrag = (e: React.DragEvent) => {
+              const t = e.dataTransfer.types
+              if (t.includes('application/x-lumitrack-point') || t.includes('application/x-lumitrack-points')) {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+              }
+            }
+            // Déplace des acteurs vers `targetGroupId` (null = sans
+            // groupe), insérés juste avant `beforeId` dans l'ordre global
+            // (null = à la fin) — un seul geste fait à la fois le
+            // classement ET le rangement, comme glisser un fichier dans un
+            // dossier à un endroit précis.
+            const moveDroppedIds = (draggedIds: string[], targetGroupId: string | null, beforeId: string | null) => {
+              const rest = project.points.map((p) => p.id).filter((id) => !draggedIds.includes(id))
+              let at = beforeId ? rest.indexOf(beforeId) : -1
+              if (at < 0) at = rest.length
+              sidecar.reorderPoints([...rest.slice(0, at), ...draggedIds, ...rest.slice(at)])
+              for (const id of draggedIds) {
+                const p = project.points.find((pp) => pp.id === id)
+                if (p && p.rosterGroupId !== targetGroupId) sidecar.updatePoint(id, { rosterGroupId: targetGroupId })
+              }
+            }
+
             const pointRow = (point: Point) => (
               <li
                 key={point.id}
                 className={selectedPointIds.includes(point.id) ? 'selected' : ''}
                 draggable
                 onDragStart={(e) => {
-                  e.dataTransfer.setData('application/x-lumitrack-point', point.id)
-                  e.dataTransfer.effectAllowed = 'copy'
+                  // Glisser un acteur qui fait partie de la sélection
+                  // courante embarque toute la sélection (comme dans un
+                  // explorateur de fichiers).
+                  const ids = selectedPointIds.includes(point.id) && selectedPointIds.length > 1
+                    ? selectedPointIds : [point.id]
+                  if (ids.length > 1) e.dataTransfer.setData('application/x-lumitrack-points', JSON.stringify(ids))
+                  else e.dataTransfer.setData('application/x-lumitrack-point', point.id)
+                  e.dataTransfer.effectAllowed = 'copyMove'
+                }}
+                onDragOver={acceptPointDrag}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  const ids = extractPointIds(e.dataTransfer).filter((id) => id !== point.id)
+                  if (ids.length === 0) return
+                  moveDroppedIds(ids, point.rosterGroupId, point.id)
                 }}
                 onClick={selectRange(point)}
               >
@@ -457,7 +540,7 @@ function App() {
             )
 
             // Groupes (dans leur ordre défini) d'abord, acteurs sans groupe
-            // ensuite — purement pour ordonner la vue (§ voir RosterManagerPanel).
+            // ensuite — purement pour ordonner la vue.
             const grouped = project.rosterGroups.map((g) => ({
               group: g,
               members: project.points.filter((p) => p.rosterGroupId === g.id),
@@ -475,11 +558,36 @@ function App() {
                         className="roster-group-head"
                         draggable
                         onDragStart={(e) => {
-                          // Glisser tout le groupe : les mêmes acteurs que la
-                          // scène active en un seul dépôt (batch, §demande
-                          // Florian "faciliter le glisser-déposé").
+                          // Glisser le dossier : batch vers la scène (mêmes
+                          // acteurs, un seul dépôt) ET réordonnancement des
+                          // dossiers entre eux (deux types MIME distincts,
+                          // Scene.tsx ignore le second).
                           e.dataTransfer.setData('application/x-lumitrack-points', JSON.stringify(members.map((m) => m.id)))
-                          e.dataTransfer.effectAllowed = 'copy'
+                          e.dataTransfer.setData('application/x-lumitrack-group', group.id)
+                          e.dataTransfer.effectAllowed = 'copyMove'
+                        }}
+                        onDragOver={(e) => {
+                          const t = e.dataTransfer.types
+                          if (t.includes('application/x-lumitrack-group') || t.includes('application/x-lumitrack-point') || t.includes('application/x-lumitrack-points')) {
+                            e.preventDefault()
+                            e.dataTransfer.dropEffect = 'move'
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          const srcGroupId = e.dataTransfer.getData('application/x-lumitrack-group')
+                          if (srcGroupId && srcGroupId !== group.id) {
+                            // Réordonner les dossiers : place srcGroup juste avant celui-ci.
+                            const order = project.rosterGroups.map((g) => g.id).filter((id) => id !== srcGroupId)
+                            const at = order.indexOf(group.id)
+                            order.splice(at, 0, srcGroupId)
+                            sidecar.setRosterGroups(order.map((id) => project.rosterGroups.find((g) => g.id === id)!))
+                            return
+                          }
+                          const ids = extractPointIds(e.dataTransfer)
+                          if (ids.length === 0) return
+                          moveDroppedIds(ids, group.id, null)
                         }}
                         onClick={() => {
                           // Sélectionne tout le groupe d'un clic (§demande
@@ -499,8 +607,44 @@ function App() {
                             })
                           }}
                         >▾</span>
-                        <span className="roster-group-name">{group.name}</span>
+                        {renamingGroupId === group.id ? (
+                          <input
+                            className="roster-group-rename"
+                            autoFocus
+                            defaultValue={group.name}
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={(e) => {
+                              const name = e.target.value.trim()
+                              if (name) sidecar.setRosterGroups(project.rosterGroups.map((g) => g.id === group.id ? { ...g, name } : g))
+                              setRenamingGroupId(null)
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                              if (e.key === 'Escape') setRenamingGroupId(null)
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="roster-group-name"
+                            onDoubleClick={(e) => { e.stopPropagation(); setRenamingGroupId(group.id) }}
+                            title="Double-clic pour renommer"
+                          >
+                            {group.name}
+                          </span>
+                        )}
                         <span className="roster-group-count">{members.length}</span>
+                        <button
+                          className="roster-group-delete"
+                          title="Supprimer ce sous-groupe (les acteurs deviennent sans groupe)"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (window.confirm('Supprimer ce sous-groupe ? Les acteurs qu’il contient redeviennent « sans groupe ».')) {
+                              sidecar.setRosterGroups(project.rosterGroups.filter((g) => g.id !== group.id))
+                            }
+                          }}
+                        >
+                          ✕
+                        </button>
                       </div>
                       {!collapsed && (
                         <ul className="roster-group-members">
@@ -510,6 +654,20 @@ function App() {
                     </li>
                   )
                 })}
+                {project.rosterGroups.length > 0 && (
+                  <li
+                    className="roster-ungrouped-zone"
+                    onDragOver={acceptPointDrag}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const ids = extractPointIds(e.dataTransfer)
+                      if (ids.length === 0) return
+                      moveDroppedIds(ids, null, null)
+                    }}
+                  >
+                    Sans groupe
+                  </li>
+                )}
                 {ungrouped.map((p) => pointRow(p))}
               </>
             )
@@ -618,9 +776,6 @@ function App() {
       {showPsnPanel && <PsnPanel project={project} onClose={() => setShowPsnPanel(false)} />}
       {showBundleHistory && bundlePath && (
         <BundleHistoryPanel path={bundlePath} onClose={() => setShowBundleHistory(false)} />
-      )}
-      {showRosterManager && (
-        <RosterManagerPanel project={project} onClose={() => setShowRosterManager(false)} />
       )}
 
       <footer className="timeline-dock">
