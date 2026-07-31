@@ -274,12 +274,16 @@ function App() {
         if (p && p.rosterGroupId !== targetGroupId) sidecar.updatePoint(id, { rosterGroupId: targetGroupId })
       }
     }
+    // Pas de filtre sur dataTransfer.types ici : ce conteneur ne reçoit de
+    // toute façon jamais que nos propres glissers (acteur(s)/dossier), et
+    // filtrer par type pendant dragover s'est avéré peu fiable dans cette
+    // WebView (rond barré "dépôt refusé" en permanence, 2026-07-31 —
+    // preventDefault() n'était visiblement jamais atteint). accepter
+    // inconditionnellement ici ; onDrop reste, lui, strict sur le contenu
+    // réel du dataTransfer avant d'agir.
     const onDragOver = (e: DragEvent) => {
-      const t = e.dataTransfer?.types
-      if (t && (t.includes('application/x-lumitrack-point') || t.includes('application/x-lumitrack-points') || t.includes('application/x-lumitrack-group'))) {
-        e.preventDefault()
-        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-      }
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
     }
     const onDrop = (e: DragEvent) => {
       if (!e.dataTransfer) return

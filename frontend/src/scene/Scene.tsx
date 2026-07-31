@@ -2049,12 +2049,15 @@ function SceneContent({
     const dom = gl.domElement
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
     const hit = new THREE.Vector3()
+    // Pas de filtre sur dataTransfer.types ici : ce canvas ne reçoit de
+    // toute façon jamais que nos propres glissers d'acteur(s), et filtrer
+    // par type pendant dragover s'est avéré peu fiable dans cette WebView
+    // (rond barré "dépôt refusé" en permanence côté roster, 2026-07-31 —
+    // même pattern ici, corrigé pareil). onDrop reste strict sur le
+    // contenu réel du dataTransfer avant d'agir.
     const onDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes('application/x-lumitrack-point')
-        || e.dataTransfer?.types.includes('application/x-lumitrack-points')) {
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'copy'
-      }
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
     }
     const onDrop = (e: DragEvent) => {
       // Dépôt d'un sous-groupe entier (roster-group-head) = même geste
