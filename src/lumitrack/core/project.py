@@ -57,6 +57,13 @@ class Point:
     # l'acteur EXISTE tant qu'aucune activation ne l'a saisi — visible en
     # scène et émis en PSN. None -> première zone du projet.
     home_zone_id: Optional[str] = None
+    # Sous-groupe du ROSTER (mission "hiérarchie du roster", 2026-07-31) :
+    # purement organisationnel — ordonner la vue, faciliter la sélection et
+    # le glisser-déposer d'un ensemble d'acteurs. Sans rapport avec les
+    # groupes animables du §12.2 (reportés en v1.1, LTP inter-groupes,
+    # appartenance multiple) : un acteur appartient à AU PLUS UN sous-groupe,
+    # comme un dossier de fichiers. None = pas de sous-groupe.
+    roster_group_id: Optional[str] = None
 
     def resolved_tracker_id(self, fallback_index: int) -> int:
         if self.psn_tracker_id is not None:
@@ -73,6 +80,7 @@ class Point:
             "color": self.color, "psnTrackerId": self.psn_tracker_id,
             "defaultHeightCm": self.default_height_cm,
             "homeZoneId": self.home_zone_id,
+            "rosterGroupId": self.roster_group_id,
         }
 
     @classmethod
@@ -82,6 +90,7 @@ class Point:
             color=d.get("color", "#4F6DF5"), psn_tracker_id=d.get("psnTrackerId"),
             default_height_cm=float(d.get("defaultHeightCm", DEFAULT_HEIGHT_CM)),
             home_zone_id=d.get("homeZoneId"),
+            roster_group_id=d.get("rosterGroupId"),
         )
 
 
@@ -189,6 +198,10 @@ class Project:
     # sans activation vit dans sa zone (grille auto, voir
     # timeline.backstage_slot) et le PSN l'émet.
     backstage_zones: list = field(default_factory=list)  # [{id,name,xCm,yCm,widthCm,heightCm}]
+    # Sous-groupes du roster (voir Point.roster_group_id) : [{id, name}].
+    # Purement organisationnel, l'ordre du roster reste porté par `points`
+    # lui-même (l'ordre de la liste = l'ordre affiché).
+    roster_groups: list = field(default_factory=list)
     floor_image_path: Optional[str] = None
     terrain_gltf_path: Optional[str] = None
     audio_path: Optional[str] = None
@@ -258,6 +271,33 @@ class Project:
             if p.id == pid:
                 return p
         return None
+
+    def delete_point(self, point_id: str):
+        """Retire un acteur — jamais fait avant cette mission (le roster ne
+        savait qu'ajouter). Ses activations dans TOUS les cues partent
+        aussi, sinon des activations fantômes traînent indéfiniment."""
+        self.points = [p for p in self.points if p.id != point_id]
+        for cue in self.cues:
+            cue.activations.pop(point_id, None)
+
+    def reorder_points(self, point_ids: list):
+        """Réordonne `points` selon `point_ids` (glisser-déposer/réassignation
+        de sous-groupe dans le roster). Les ids inconnus sont ignorés ; les
+        points absents de la liste gardent leur ordre relatif, à la fin."""
+        by_id = {p.id: p for p in self.points}
+        ordered = [by_id[pid] for pid in point_ids if pid in by_id]
+        seen = {p.id for p in ordered}
+        remaining = [p for p in self.points if p.id not in seen]
+        self.points = ordered + remaining
+
+    def prune_roster_groups(self):
+        """Après un set_roster_groups qui supprime un groupe : les acteurs
+        qui y étaient rattachés redeviennent simplement "sans groupe"
+        (jamais orphelins d'un id de groupe qui n'existe plus)."""
+        valid_ids = {g["id"] for g in self.roster_groups}
+        for pt in self.points:
+            if pt.roster_group_id not in valid_ids:
+                pt.roster_group_id = None
 
     def cue_by_id(self, cid: str) -> Optional[Cue]:
         for c in self.cues:
@@ -352,6 +392,7 @@ class Project:
             "stageMapRotationDeg": self.stage_map_rotation_deg,
             "terrainRotationDeg": self.terrain_rotation_deg,
             "backstageZones": self.backstage_zones,
+            "rosterGroups": self.roster_groups,
             "points": [p.to_dict() for p in self.points],
             "cues": [
                 {
@@ -402,6 +443,7 @@ class Project:
             terrain_rotation_deg=float(d.get("terrainRotationDeg", 0.0)),
         )
         proj.backstage_zones = list(d.get("backstageZones") or [])
+        proj.roster_groups = list(d.get("rosterGroups") or [])
         proj.points = [Point.from_dict(p) for p in d.get("points", [])]
         for c in d.get("cues", []):
             activations = {

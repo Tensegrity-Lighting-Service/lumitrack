@@ -2034,14 +2034,26 @@ function SceneContent({
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
     const hit = new THREE.Vector3()
     const onDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes('application/x-lumitrack-point')) {
+      if (e.dataTransfer?.types.includes('application/x-lumitrack-point')
+        || e.dataTransfer?.types.includes('application/x-lumitrack-points')) {
         e.preventDefault()
         e.dataTransfer.dropEffect = 'copy'
       }
     }
     const onDrop = (e: DragEvent) => {
-      const pointId = e.dataTransfer?.getData('application/x-lumitrack-point')
-      if (!pointId) return
+      // Dépôt d'un sous-groupe entier (roster-group-head) = même geste
+      // qu'un acteur seul, répété pour chaque membre — tous au même point
+      // de dépôt ; aucun étalement automatique (la boîte de transformation
+      // multi-acteurs sert ensuite à les réarranger à la main).
+      const multi = e.dataTransfer?.getData('application/x-lumitrack-points')
+      let pointIds: string[] = []
+      if (multi) {
+        try { pointIds = JSON.parse(multi) } catch { pointIds = [] }
+      } else {
+        const single = e.dataTransfer?.getData('application/x-lumitrack-point')
+        if (single) pointIds = [single]
+      }
+      if (pointIds.length === 0) return
       e.preventDefault()
       const rect = dom.getBoundingClientRect()
       raycaster.setFromCamera(new THREE.Vector2(
@@ -2057,7 +2069,7 @@ function SceneContent({
         xCm >= z.xCm && xCm <= z.xCm + z.widthCm && yCm >= z.yCm && yCm <= z.yCm + z.heightCm)
       if (zone && e.altKey) {
         // Alt+drop sur une zone : changer l'attache (position de repos).
-        sidecar.updatePoint(pointId, { homeZoneId: zone.id })
+        for (const pointId of pointIds) sidecar.updatePoint(pointId, { homeZoneId: zone.id })
         return
       }
       let cueId = selectedCueId
@@ -2065,8 +2077,9 @@ function SceneContent({
         cueId = crypto.randomUUID()
         sidecar.addCue('Entrée', tMsRef.current, 2000, '#4FF5E0', 0, cueId)
       }
-      sidecar.setActivation(cueId, pointId, { targetXCm: xCm, targetYCm: yCm })
-      onSelectPoint(pointId)
+      for (const pointId of pointIds) sidecar.setActivation(cueId, pointId, { targetXCm: xCm, targetYCm: yCm })
+      if (pointIds.length === 1) onSelectPoint(pointIds[0])
+      else onSelectPoints(pointIds)
     }
     dom.addEventListener('dragover', onDragOver)
     dom.addEventListener('drop', onDrop)
@@ -2074,7 +2087,7 @@ function SceneContent({
       dom.removeEventListener('dragover', onDragOver)
       dom.removeEventListener('drop', onDrop)
     }
-  }, [gl, camera, raycaster, selectedCueId, onSelectPoint])
+  }, [gl, camera, raycaster, selectedCueId, onSelectPoint, onSelectPoints])
 
   // Suppr retire le waypoint sélectionné AVANT que le raccourci global ne
   // supprime le bloc (phase capture + stopPropagation) ; Échap désélectionne

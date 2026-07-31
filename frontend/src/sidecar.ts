@@ -6,7 +6,7 @@
 // re-renders from them — every edit is sent as a command and only takes
 // effect once the sidecar echoes back a fresh `project` snapshot.
 import { useSyncExternalStore } from 'react'
-import type { BackstageZone, BlockContextMessage, BundleArchiveMessage, IfacesMessage, Project, PsnPreviewMessage, ServerMessage, TickMessage } from './types'
+import type { BackstageZone, BlockContextMessage, BundleArchiveMessage, IfacesMessage, Project, PsnPreviewMessage, RosterGroup, ServerMessage, TickMessage } from './types'
 
 const SIDECAR_PORT = 17845
 const RECONNECT_DELAY_MS = 1000
@@ -133,14 +133,29 @@ class SidecarClient {
   updatePoint(pointId: string, patch: {
     name?: string; number?: number | null; color?: string
     psnTrackerId?: number | null; defaultHeightCm?: number
-    homeZoneId?: string | null
+    homeZoneId?: string | null; rosterGroupId?: string | null
   }) {
     this.send({ type: 'update_point', pointId, ...patch })
   }
 
   // ---- editing ----
-  addPoint(name: string, number?: number) {
-    this.send({ type: 'add_point', name, number })
+  addPoint(name: string, number?: number, rosterGroupId?: string | null) {
+    this.send({ type: 'add_point', name, number, rosterGroupId })
+  }
+  /** Jamais possible avant la mission "hiérarchie du roster" (2026-07-31) :
+   * le roster ne savait qu'ajouter. */
+  deletePoint(pointId: string) {
+    this.send({ type: 'delete_point', pointId })
+  }
+  /** Nouvel ordre complet de project.points (glisser-déposer/réassignation
+   * de sous-groupe dans le roster). */
+  reorderPoints(pointIds: string[]) {
+    this.send({ type: 'reorder_points', pointIds })
+  }
+  /** État complet des sous-groupes du roster (création/renommage/
+   * suppression) — même principe que setBackstageZones. */
+  setRosterGroups(groups: RosterGroup[]) {
+    this.send({ type: 'set_roster_groups', groups })
   }
   updateStageMap(patch: { originXM?: number; originZM?: number; rotationDeg?: number; widthCm?: number; heightCm?: number; gridSizeCm?: number; terrainRotationDeg?: number }) {
     this.send({ type: 'update_stage_map', ...patch })

@@ -12,6 +12,16 @@ export interface Point {
   defaultHeightCm: number
   /** Zone backstage d'attache — null = première zone du projet. */
   homeZoneId: string | null
+  /** Sous-groupe du roster (purement organisationnel, §12.2 non concerné) —
+   * null = sans groupe. Au plus un groupe par acteur. */
+  rosterGroupId: string | null
+}
+
+/** Sous-groupe du roster — juste un nom, l'ordre/l'appartenance vivent sur
+ * Point.rosterGroupId et l'ordre de Project.points. */
+export interface RosterGroup {
+  id: string
+  name: string
 }
 
 /** Zone backstage : rectangle nommé en coordonnées scène (souvent hors de
@@ -108,6 +118,7 @@ export interface Project {
   stageMapRotationDeg: number
   terrainRotationDeg: number
   backstageZones: BackstageZone[]
+  rosterGroups: RosterGroup[]
   points: Point[]
   cues: Cue[]
 }

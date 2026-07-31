@@ -101,6 +101,46 @@ def test_save_bundle_list_archive_and_load_bundle_wire_protocol(tmp_path):
     assert session.project.name == "Demo"
 
 
+def test_delete_point_broadcasts_and_removes_the_actor():
+    session = Session()
+    assert session.project.point_by_id("p1") is not None
+    reply = _run(_handle_message(session, {"type": "delete_point", "pointId": "p1"}))
+    assert reply is None  # broadcast projet
+    assert session.project.point_by_id("p1") is None
+
+
+def test_reorder_points_broadcasts_and_reorders():
+    session = Session()
+    ids = [p.id for p in session.project.points]
+    reversed_ids = list(reversed(ids))
+    reply = _run(_handle_message(session, {"type": "reorder_points", "pointIds": reversed_ids}))
+    assert reply is None
+    assert [p.id for p in session.project.points] == reversed_ids
+
+
+def test_set_roster_groups_broadcasts_and_prunes_detached_points():
+    session = Session()
+    _run(_handle_message(session, {"type": "update_point", "pointId": "p1", "rosterGroupId": "g1"}))
+    reply = _run(_handle_message(session, {
+        "type": "set_roster_groups", "groups": [{"id": "g1", "name": "Groupe 1"}],
+    }))
+    assert reply is None
+    assert session.project.roster_groups == [{"id": "g1", "name": "Groupe 1"}]
+    assert session.project.point_by_id("p1").roster_group_id == "g1"
+
+    # Supprimer le groupe détache l'acteur plutôt que de laisser un id mort.
+    _run(_handle_message(session, {"type": "set_roster_groups", "groups": []}))
+    assert session.project.point_by_id("p1").roster_group_id is None
+
+
+def test_add_point_accepts_a_roster_group_id():
+    session = Session()
+    _run(_handle_message(session, {
+        "type": "add_point", "id": "new1", "name": "Nouveau", "rosterGroupId": "g1",
+    }))
+    assert session.project.point_by_id("new1").roster_group_id == "g1"
+
+
 def test_set_audio_updates_path_duration_and_transport():
     """Mission timeline+son : `set_audio` porte le chemin et/ou la durée
     décodée par le frontend ; la durée du transport doit suivre

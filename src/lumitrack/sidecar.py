@@ -54,7 +54,7 @@ UNDO_MAX_DEPTH = 200
 MUTATING_COMMANDS = {
     "set_audio", "update_point", "update_stage_map", "set_backstage_zones",
     "add_point", "add_cue", "update_cue", "delete_cue", "set_activation",
-    "apply_group_transform",
+    "apply_group_transform", "delete_point", "reorder_points", "set_roster_groups",
 }
 # Remplacement intégral du projet : l'historique d'un AUTRE projet n'a plus
 # de sens une fois chargé un nouveau, donc on le vide plutôt que de le
@@ -411,8 +411,27 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             point.psn_tracker_id = msg["psnTrackerId"]
         if "homeZoneId" in msg:
             point.home_zone_id = msg["homeZoneId"]
+        if "rosterGroupId" in msg:
+            point.roster_group_id = msg["rosterGroupId"]
         if "defaultHeightCm" in msg and msg["defaultHeightCm"] is not None:
             point.default_height_cm = float(msg["defaultHeightCm"])
+        return None
+
+    if msg_type == "delete_point":
+        session.project.delete_point(msg.get("pointId", ""))
+        session.timeline.rebuild()
+        return None
+
+    if msg_type == "reorder_points":
+        session.project.reorder_points(msg.get("pointIds", []))
+        return None
+
+    if msg_type == "set_roster_groups":
+        # Liste complète des sous-groupes en un seul message (création/
+        # renommage/suppression) — même principe que set_backstage_zones :
+        # simple, sans dérive possible entre deux appels partiels.
+        session.project.roster_groups = list(msg.get("groups") or [])
+        session.project.prune_roster_groups()
         return None
 
     if msg_type == "psn_start":
@@ -473,6 +492,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         session.project.points.append(Point(
             id=pid, name=msg.get("name", "Point"), number=msg.get("number"),
             color=msg.get("color", "#4F6DF5"),
+            roster_group_id=msg.get("rosterGroupId"),
         ))
         # Attache backstage immédiate : le nouvel acteur apparaît dans sa
         # zone au lieu d'être invisible (mission backstage).

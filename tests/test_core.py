@@ -431,6 +431,76 @@ def test_apply_group_transform_gives_each_point_its_own_arc():
     assert far_radius > near_radius
 
 
+# ------------------------------------------------ hiérarchie du roster ----
+# Mission "hiérarchie du roster" (2026-07-31) : sous-groupes purement
+# organisationnels — jamais construits avant cette session, contrairement
+# aux groupes animables complets du §12.2 (reportés en v1.1). Un acteur
+# n'appartient qu'à AU PLUS un sous-groupe.
+
+def test_delete_point_also_removes_its_activations_everywhere():
+    """Jamais possible avant cette mission : le roster ne savait qu'ajouter.
+    Supprimer un acteur ne doit pas laisser d'activations fantômes dans les
+    cues où il était déjà activé."""
+    project = _demo_project()
+    assert "a" in project.cues[0].activations
+
+    project.delete_point("a")
+
+    assert [p.id for p in project.points] == ["b"]
+    assert "a" not in project.cues[0].activations
+    assert "a" not in project.cues[1].activations
+
+
+def test_delete_point_is_a_no_op_for_an_unknown_id():
+    project = _demo_project()
+    before = [p.id for p in project.points]
+    project.delete_point("does-not-exist")
+    assert [p.id for p in project.points] == before
+
+
+def test_reorder_points_matches_the_given_order():
+    project = Project()
+    project.points = [Point(id="a", name="A"), Point(id="b", name="B"), Point(id="c", name="C")]
+    project.reorder_points(["c", "a", "b"])
+    assert [p.id for p in project.points] == ["c", "a", "b"]
+
+
+def test_reorder_points_keeps_omitted_points_at_the_end_in_relative_order():
+    """Un glisser-déposer qui ne réordonne qu'UN sous-groupe ne doit pas
+    faire disparaître les acteurs des autres groupes — ils restent, dans
+    leur ordre relatif d'origine, après ceux explicitement replacés."""
+    project = Project()
+    project.points = [Point(id="a", name="A"), Point(id="b", name="B"), Point(id="c", name="C")]
+    project.reorder_points(["c"])
+    assert [p.id for p in project.points] == ["c", "a", "b"]
+
+
+def test_reorder_points_ignores_unknown_ids():
+    project = Project()
+    project.points = [Point(id="a", name="A"), Point(id="b", name="B")]
+    project.reorder_points(["ghost", "b", "a"])
+    assert [p.id for p in project.points] == ["b", "a"]
+
+
+def test_prune_roster_groups_detaches_points_from_a_deleted_group():
+    project = Project()
+    project.points = [Point(id="a", name="A", roster_group_id="g1"),
+                       Point(id="b", name="B", roster_group_id="g2")]
+    project.roster_groups = [{"id": "g1", "name": "Groupe 1"}]  # g2 supprimé
+    project.prune_roster_groups()
+    assert project.point_by_id("a").roster_group_id == "g1"  # groupe valide, intact
+    assert project.point_by_id("b").roster_group_id is None  # groupe disparu, détaché
+
+
+def test_point_and_roster_groups_roundtrip_through_dict():
+    project = Project()
+    project.points = [Point(id="a", name="A", roster_group_id="g1")]
+    project.roster_groups = [{"id": "g1", "name": "Groupe 1"}]
+    back = Project.from_dict(project.to_dict())
+    assert back.roster_groups == [{"id": "g1", "name": "Groupe 1"}]
+    assert back.point_by_id("a").roster_group_id == "g1"
+
+
 def _bundled_project(tmp_path, audio_bytes=b"fake-audio-bytes"):
     audio = tmp_path / "audio.m4a"
     audio.write_bytes(audio_bytes)

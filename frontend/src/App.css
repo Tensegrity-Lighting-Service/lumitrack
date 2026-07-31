@@ -117,6 +117,26 @@
 .roster .point-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .roster .offstage { color: #f5734f; }
 
+/* Sous-groupes du roster (purement organisationnels, mission 2026-07-31) */
+.roster li.roster-group {
+  display: block; padding: 0; cursor: default; background: none;
+}
+.roster li.roster-group:hover { background: none; }
+.roster-group-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px; border-radius: 4px; cursor: pointer;
+  font-size: 11px; font-weight: 600; color: #9aa3b5;
+  text-transform: uppercase; letter-spacing: 0.02em;
+}
+.roster-group-head:hover { background: #22262f; }
+.roster-group-caret {
+  display: inline-block; transition: transform 120ms ease; flex-shrink: 0;
+}
+.roster-group-caret.collapsed { transform: rotate(-90deg); }
+.roster-group-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roster-group-count { color: #6e7686; font-weight: 400; }
+.roster-group-members { padding-left: 10px !important; }
+
 .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .status-dot.idle { background: #b06fe0; }
 .status-dot.moving { background: #4ff5e0; }
@@ -434,24 +454,19 @@
 .inspector-clear-path:hover { background: #2a2a35; }
 
 
-/* ---- Roster : en-tête avec ajout multiple ---- */
+/* ---- Roster : en-tête ---- */
 .roster-head {
   display: flex; align-items: center; gap: 6px;
   padding-right: 8px;
 }
 .roster-head h2 { margin-right: 0; }
 .roster-spacer { flex: 1; }
-.roster-add-count {
-  width: 34px; font-size: 11px; padding: 2px 4px;
-  background: #1f1f27; color: #b9b9c6; border: 1px solid #30303c;
-  border-radius: 4px;
-}
-.roster-add-btn {
+.roster-head button {
   font-size: 11px; padding: 2px 8px; border-radius: 4px;
   background: #1f1f27; color: #b9b9c6; border: 1px solid #30303c;
   cursor: pointer; white-space: nowrap;
 }
-.roster-add-btn:hover { background: #2a2a35; }
+.roster-head button:hover { background: #2a2a35; }
 
 /* ---- Transport dans la barre de la timeline ---- */
 .tl-play { font-size: 13px; min-width: 30px; }
@@ -607,6 +622,18 @@
 .psn-table .swatch { margin-right: 6px; }
 .psn-mono { font-family: ui-monospace, monospace; }
 .psn-up { color: #4ff58c; }
+
+/* ---- Gérer le roster (panneau) ---- */
+.roster-manager-panel section { margin-bottom: 16px; }
+.roster-manager-row {
+  display: flex; align-items: center; gap: 8px; margin: 6px 0 10px;
+}
+.roster-manager-row input[type="number"] { width: 48px; }
+.roster-manager-table tr { cursor: pointer; }
+.roster-manager-table tr.selected { background: #2a3352; }
+.roster-manager-table input, .roster-manager-table select {
+  width: 100%; box-sizing: border-box;
+}
 
 /* ---- Zones backstage (panneau) ---- */
 .backstage-row { display: flex; gap: 6px; margin-bottom: 5px; }

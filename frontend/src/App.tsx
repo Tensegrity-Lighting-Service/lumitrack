@@ -11,6 +11,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
+import { RosterManagerPanel } from './ui/RosterManagerPanel'
 
 const LUMITRACK_FILTER = [{ name: 'Projet Lumitrack', extensions: ['lumitrack'] }]
 
@@ -181,7 +182,10 @@ function App() {
   }, [])
 
   const [rosterWidth, setRosterWidth] = useState(220)
-  const [addCount, setAddCount] = useState(1)
+  const [showRosterManager, setShowRosterManager] = useState(false)
+  // Sous-groupes du roster repliés (purement local à cette session — pas
+  // besoin de le persister dans le projet, juste un confort d'affichage).
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [inspectorWidth, setInspectorWidth] = useState(300)
   const [timelineHeight, setTimelineHeight] = useState(220)
   const [cameraLocked, setCameraLocked] = useState(false)
@@ -404,66 +408,112 @@ function App() {
         <div className="roster-head">
           <h2>Roster</h2>
           <span className="roster-spacer" />
-          <input
-            className="roster-add-count"
-            type="number" min={1} max={99} value={addCount}
-            title="Nombre d'acteurs à ajouter d'un coup"
-            onChange={(e) => setAddCount(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
-          />
-          <button
-            className="roster-add-btn"
-            title={`Ajouter ${addCount} acteur${addCount > 1 ? 's' : ''}`}
-            onClick={() => {
-              const base = project.points.length
-              for (let i = 0; i < addCount; i++) {
-                sidecar.addPoint(`Acteur ${base + i + 1}`, base + i + 1)
-              }
-            }}
-          >
-            + Acteur{addCount > 1 ? 's' : ''}
+          <button onClick={() => setShowRosterManager(true)} title="Ajouter, supprimer, organiser en sous-groupes">
+            Gérer…
           </button>
         </div>
         <ul>
-          {project.points.map((point, index) => (
-            <li
-              key={point.id}
-              className={selectedPointIds.includes(point.id) ? 'selected' : ''}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData('application/x-lumitrack-point', point.id)
-                e.dataTransfer.effectAllowed = 'copy'
-              }}
-              onClick={(e) => {
-                // Ctrl/Cmd : bascule ; Shift : plage depuis le principal ;
-                // clic nu : sélection simple (re-clic = désélection).
-                if (e.ctrlKey || e.metaKey) {
-                  setSelectedPointIds((prev) => prev.includes(point.id)
-                    ? prev.filter((id) => id !== point.id)
-                    : [...prev, point.id])
-                } else if (e.shiftKey && selectedPointId) {
-                  const anchorIdx = project.points.findIndex((p) => p.id === selectedPointId)
-                  if (anchorIdx >= 0) {
-                    const [lo, hi] = anchorIdx < index ? [anchorIdx, index] : [index, anchorIdx]
-                    const range = project.points.slice(lo, hi + 1).map((p) => p.id)
-                    // Le point cliqué devient le principal (dernier).
-                    setSelectedPointIds([...range.filter((id) => id !== point.id), point.id])
-                  }
-                } else {
-                  setSelectedPointIds(selectedPointIds.length === 1 && selectedPointId === point.id
-                    ? [] : [point.id])
+          {(() => {
+            const byId = new Map(project.points.map((p, i) => [p.id, i] as const))
+            const selectRange = (point: Point) => (e: React.MouseEvent) => {
+              const index = byId.get(point.id) ?? -1
+              if (e.ctrlKey || e.metaKey) {
+                setSelectedPointIds((prev) => prev.includes(point.id)
+                  ? prev.filter((id) => id !== point.id)
+                  : [...prev, point.id])
+              } else if (e.shiftKey && selectedPointId) {
+                const anchorIdx = byId.get(selectedPointId) ?? -1
+                if (anchorIdx >= 0 && index >= 0) {
+                  const [lo, hi] = anchorIdx < index ? [anchorIdx, index] : [index, anchorIdx]
+                  const range = project.points.slice(lo, hi + 1).map((p) => p.id)
+                  // Le point cliqué devient le principal (dernier).
+                  setSelectedPointIds([...range.filter((id) => id !== point.id), point.id])
                 }
-              }}
-            >
-              <span
-                className={`status-dot ${movingPointIds.has(point.id) ? 'moving' : 'idle'}`}
-                title={movingPointIds.has(point.id) ? 'En mouvement' : 'Immobile'}
-              />
-              <span className="swatch" style={{ background: point.color }} />
-              {point.number !== null && <span className="point-number">{point.number}</span>}
-              <span className="point-name">{point.name}</span>
-              {!positions[point.id] && <span className="offstage" title="Hors scène">•</span>}
-            </li>
-          ))}
+              } else {
+                setSelectedPointIds(selectedPointIds.length === 1 && selectedPointId === point.id
+                  ? [] : [point.id])
+              }
+            }
+            const pointRow = (point: Point) => (
+              <li
+                key={point.id}
+                className={selectedPointIds.includes(point.id) ? 'selected' : ''}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/x-lumitrack-point', point.id)
+                  e.dataTransfer.effectAllowed = 'copy'
+                }}
+                onClick={selectRange(point)}
+              >
+                <span
+                  className={`status-dot ${movingPointIds.has(point.id) ? 'moving' : 'idle'}`}
+                  title={movingPointIds.has(point.id) ? 'En mouvement' : 'Immobile'}
+                />
+                <span className="swatch" style={{ background: point.color }} />
+                {point.number !== null && <span className="point-number">{point.number}</span>}
+                <span className="point-name">{point.name}</span>
+                {!positions[point.id] && <span className="offstage" title="Hors scène">•</span>}
+              </li>
+            )
+
+            // Groupes (dans leur ordre défini) d'abord, acteurs sans groupe
+            // ensuite — purement pour ordonner la vue (§ voir RosterManagerPanel).
+            const grouped = project.rosterGroups.map((g) => ({
+              group: g,
+              members: project.points.filter((p) => p.rosterGroupId === g.id),
+            }))
+            const ungrouped = project.points.filter((p) =>
+              !project.rosterGroups.some((g) => g.id === p.rosterGroupId))
+
+            return (
+              <>
+                {grouped.map(({ group, members }) => {
+                  const collapsed = collapsedGroups.has(group.id)
+                  return (
+                    <li key={group.id} className="roster-group">
+                      <div
+                        className="roster-group-head"
+                        draggable
+                        onDragStart={(e) => {
+                          // Glisser tout le groupe : les mêmes acteurs que la
+                          // scène active en un seul dépôt (batch, §demande
+                          // Florian "faciliter le glisser-déposé").
+                          e.dataTransfer.setData('application/x-lumitrack-points', JSON.stringify(members.map((m) => m.id)))
+                          e.dataTransfer.effectAllowed = 'copy'
+                        }}
+                        onClick={() => {
+                          // Sélectionne tout le groupe d'un clic (§demande
+                          // Florian "faciliter la sélection d'un groupe").
+                          setSelectedPointIds(members.map((m) => m.id))
+                        }}
+                      >
+                        <span
+                          className={`roster-group-caret ${collapsed ? 'collapsed' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setCollapsedGroups((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(group.id)) next.delete(group.id)
+                              else next.add(group.id)
+                              return next
+                            })
+                          }}
+                        >▾</span>
+                        <span className="roster-group-name">{group.name}</span>
+                        <span className="roster-group-count">{members.length}</span>
+                      </div>
+                      {!collapsed && (
+                        <ul className="roster-group-members">
+                          {members.map((p) => pointRow(p))}
+                        </ul>
+                      )}
+                    </li>
+                  )
+                })}
+                {ungrouped.map((p) => pointRow(p))}
+              </>
+            )
+          })()}
         </ul>
       </aside>
 
@@ -568,6 +618,9 @@ function App() {
       {showPsnPanel && <PsnPanel project={project} onClose={() => setShowPsnPanel(false)} />}
       {showBundleHistory && bundlePath && (
         <BundleHistoryPanel path={bundlePath} onClose={() => setShowBundleHistory(false)} />
+      )}
+      {showRosterManager && (
+        <RosterManagerPanel project={project} onClose={() => setShowRosterManager(false)} />
       )}
 
       <footer className="timeline-dock">
