@@ -3,13 +3,27 @@ import './App.css'
 import { Scene } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import {
-  sidecar, useBlockContext, useConnected, useProject, usePsnRunning,
+  sidecar, useBlockContext, useBundlePath, useConnected, useProject, usePsnRunning,
   useRedoAvailable, useTick, useUndoAvailable,
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
 import { PsnPanel } from './ui/PsnPanel'
+import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
+
+const LUMITRACK_FILTER = [{ name: 'Projet Lumitrack', extensions: ['lumitrack'] }]
+
+/** Dialogue "Enregistrer sous…" : toujours affiché, crée/écrase un fichier
+ * .lumitrack au chemin choisi (dossier créé si besoin côté backend). */
+async function pickSaveAsPath(projectName: string): Promise<string | null> {
+  const path = await saveDialog({
+    title: 'Enregistrer sous…',
+    defaultPath: `${projectName || 'Projet'}.lumitrack`,
+    filters: LUMITRACK_FILTER,
+  })
+  return typeof path === 'string' ? path : null
+}
 import type { Activation, BackstageZone, Cue, Point, Project } from './types'
 
 const ROSTER_MIN = 160
@@ -178,6 +192,16 @@ function App() {
   const [zoomAction, setZoomAction] = useState({ token: 0, factor: 1 })
   const [showGridSettings, setShowGridSettings] = useState(false)
   const [showPsnPanel, setShowPsnPanel] = useState(false)
+  const [showBundleHistory, setShowBundleHistory] = useState(false)
+  const bundlePath = useBundlePath()
+
+  // "Enregistrer" : réutilise le chemin connu sans dialogue ; sans chemin
+  // connu (jamais sauvegardé/ouvert), se comporte comme "Enregistrer sous".
+  const saveOrSaveAs = useCallback(async (projectName: string) => {
+    if (bundlePath) { sidecar.saveBundle(bundlePath); return }
+    const path = await pickSaveAsPath(projectName)
+    if (path) sidecar.saveBundle(path)
+  }, [bundlePath])
 
   const zoomIn = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1.2 }))
   const zoomOut = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1 / 1.2 }))
@@ -240,6 +264,9 @@ function App() {
         const ext = path.split('.').pop()?.toLowerCase() ?? ''
         if (AUDIO_EXT.includes(ext)) sidecar.setAudio({ path })
         else if (ext === 'stancz') sidecar.importStancz(path)
+        // .lumitrack = fichier (format courant) ; .bundle = ancien dossier
+        // (lecture seule, voir core/project.py::load_bundle) — les deux
+        // passent par la même commande, le backend distingue fichier/dossier.
         else if (ext === 'lumitrack' || ext === 'bundle') sidecar.loadBundle(path)
       }
     }).then((fn) => { unlisten = fn }).catch(() => { /* hors Tauri (dev navigateur) */ })
@@ -265,6 +292,9 @@ function App() {
         e.preventDefault()
         if (e.shiftKey) sidecar.redo()
         else sidecar.undo()
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        saveOrSaveAs(project?.name ?? 'Projet')
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedCueId) {
           e.preventDefault()
@@ -278,7 +308,7 @@ function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [playing, selectedCueId])
+  }, [playing, selectedCueId, project, saveOrSaveAs])
 
   if (!project) {
     return (
@@ -315,20 +345,19 @@ function App() {
           sidecar.setAudio({ path: null })
         } },
         { separator: true } as const,
-        { label: 'Enregistrer (bundle)…', onClick: async () => {
-          const path = await saveDialog({
-            title: 'Enregistrer le projet',
-            defaultPath: `${project.name || 'Projet'}.lumitrack`,
-          })
+        { label: 'Enregistrer (Ctrl+S)', onClick: () => saveOrSaveAs(project.name) },
+        { label: 'Enregistrer sous…', onClick: async () => {
+          const path = await pickSaveAsPath(project.name)
           if (path) sidecar.saveBundle(path)
         } },
-        { label: 'Ouvrir (bundle)…', onClick: async () => {
+        { label: 'Ouvrir…', onClick: async () => {
           const path = await openDialog({
-            title: 'Ouvrir un projet (.lumitrack)',
-            directory: true,
+            title: 'Ouvrir un projet',
+            filters: LUMITRACK_FILTER,
           })
           if (typeof path === 'string') sidecar.loadBundle(path)
         } },
+        { label: 'Historique des versions…', disabled: !bundlePath, onClick: () => setShowBundleHistory(true) },
       ],
     },
     {
@@ -537,6 +566,9 @@ function App() {
       <HorizontalResizer area="hhandle" onDeltaY={(dy) => setTimelineHeight((h) => clamp(h - dy, TIMELINE_MIN, TIMELINE_MAX))} />
 
       {showPsnPanel && <PsnPanel project={project} onClose={() => setShowPsnPanel(false)} />}
+      {showBundleHistory && bundlePath && (
+        <BundleHistoryPanel path={bundlePath} onClose={() => setShowBundleHistory(false)} />
+      )}
 
       <footer className="timeline-dock">
         <CueTimeline

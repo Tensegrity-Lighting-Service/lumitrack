@@ -25,11 +25,17 @@ import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 PROJECT_FORMAT = "Lumitrack"
 PROJECT_VERSION = 2
 
+# Marqueur de l'ancien format de bundle (dossier = paquet, manifest.json +
+# media/ + versions/) — conservé uniquement pour la lecture rétrocompatible,
+# voir `_load_legacy_directory_bundle`. Le nouveau format (fichier .lumitrack
+# + media/ + archive/, 2026-07-31) n'a pas de manifest séparé : le fichier
+# JSON lui-même porte déjà format/version via Project.to_dict().
 BUNDLE_FORMAT = "lumitrack-bundle"
 BUNDLE_VERSION = 1
 
@@ -513,18 +519,43 @@ def import_stancz(path: str, media_dir: Optional[str] = None) -> Project:
 
 # ------------------------------------------------------------ .bundle -----
 #
-# See CONCEPTION.md §12.14/§13.1.8: a bundle is a directory (or, once zipped
-# for sharing, a single file on the same principle as .stancz) holding a
-# lightweight versioned project state plus content-addressed media, so audio
-# and glTF terrain are never duplicated across saves.
+# Format revu le 2026-07-31 (arbitrage Florian) : le fichier PORTE
+# l'extension, pas le dossier — plus proche d'un logiciel classique
+# (Premiere, Reaper) qu'un paquet à la macOS. Un projet est un dossier
+# ordinaire (n'importe quel nom) contenant :
 #
-#   MonShow.bundle/
-#   |-- manifest.json
-#   |-- media/<sha256>.<ext>
-#   `-- versions/0001.json, 0002.json, latest -> NNNN.json (a copy, not a
-#       symlink: Windows doesn't need admin rights to write a plain file)
+#   MonShow/
+#   |-- MonShow.lumitrack        état courant (JSON — Project.to_dict(),
+#   |                            format/version déjà auto-descriptifs,
+#   |                            pas besoin d'un manifest.json séparé)
+#   |-- media/<sha256>.<ext>     dépendances (audio/3D/image) dédupliquées
+#   |                            par hash de contenu — inchangé
+#   `-- archive/NAME_YYYY-MM-DD_HH-MM-SS.lumitrack
+#                                copie de l'état PRÉCÉDENT à chaque
+#                                sauvegarde explicite, purgée au-delà de
+#                                ARCHIVE_MAX_VERSIONS (les plus anciennes
+#                                d'abord)
+#
+# Le fichier n'est jamais écrasé sans que l'ancien contenu soit d'abord
+# archivé : aucune sauvegarde n'est jamais perdue.
+#
+# Ancien format (avant cette date, encore lisible pour ne rien perdre des
+# projets déjà sauvegardés) : le DOSSIER lui-même était le paquet
+# (manifest.json + media/ + versions/NNNN.json + versions/latest.json).
+# Lecture seule — voir `_load_legacy_directory_bundle` : un projet ouvert
+# ainsi n'a pas de chemin .lumitrack connu, "Enregistrer" redevient
+# "Enregistrer sous" pour repartir sur le nouveau format sans mélanger les
+# deux dans le même dossier.
+
+BUNDLE_FILE_EXT = ".lumitrack"
+ARCHIVE_MAX_VERSIONS = 50
 
 _MEDIA_FIELDS = ("floor_image_path", "terrain_gltf_path", "audio_path")
+_MEDIA_JSON_KEYS = {
+    "floor_image_path": "floorImagePath",
+    "terrain_gltf_path": "terrainGltfPath",
+    "audio_path": "audioPath",
+}
 
 
 def _sha256_of(path: str) -> str:
@@ -535,38 +566,52 @@ def _sha256_of(path: str) -> str:
     return h.hexdigest()
 
 
-def _bundle_versions_dir(bundle_dir: str) -> str:
-    return os.path.join(bundle_dir, "versions")
+def _media_dir(bundle_dir: str) -> str:
+    return os.path.join(bundle_dir, "media")
 
 
-def _next_version_number(bundle_dir: str) -> int:
-    versions_dir = _bundle_versions_dir(bundle_dir)
-    if not os.path.isdir(versions_dir):
-        return 1
-    nums = []
-    for name in os.listdir(versions_dir):
-        stem, ext = os.path.splitext(name)
-        if ext == ".json" and stem.isdigit():
-            nums.append(int(stem))
-    return (max(nums) + 1) if nums else 1
+def _archive_dir(bundle_dir: str) -> str:
+    return os.path.join(bundle_dir, "archive")
 
 
-def save_bundle(project: Project, bundle_dir: str) -> str:
-    """Write `project` as a new version inside `bundle_dir`, creating the
-    bundle layout if needed. Returns the version file path written."""
-    media_dir = os.path.join(bundle_dir, "media")
+def _prune_archive(archive_dir: str):
+    """Garde les ARCHIVE_MAX_VERSIONS entrées les plus récentes, supprime le
+    reste. Tri par NOM (l'horodatage y est encodé, zéro-préfixé et donc
+    trie correctement en texte) plutôt que par mtime du système de
+    fichiers : plusieurs sauvegardes rapprochées peuvent partager la même
+    résolution de mtime selon le disque, jamais la même chaîne de nom."""
+    names = sorted(n for n in os.listdir(archive_dir) if n.endswith(BUNDLE_FILE_EXT))
+    excess = len(names) - ARCHIVE_MAX_VERSIONS
+    for name in names[:max(0, excess)]:
+        os.remove(os.path.join(archive_dir, name))
+
+
+def list_archive(file_path: str) -> list:
+    """-> [{"name", "mtime" (iso8601)}, ...] le plus récent d'abord, pour le
+    panneau "Historique des versions" du frontend."""
+    archive_dir = _archive_dir(os.path.dirname(file_path) or ".")
+    if not os.path.isdir(archive_dir):
+        return []
+    entries = []
+    for name in os.listdir(archive_dir):
+        if not name.endswith(BUNDLE_FILE_EXT):
+            continue
+        full = os.path.join(archive_dir, name)
+        mtime = datetime.fromtimestamp(os.path.getmtime(full), tz=timezone.utc)
+        entries.append({"name": name, "mtime": mtime.isoformat()})
+    # Tri par NOM (même raison que _prune_archive) ; mtime n'est reporté que
+    # pour l'affichage humain dans le panneau historique.
+    entries.sort(key=lambda e: e["name"], reverse=True)
+    return entries
+
+
+def _write_media_and_snapshot(project: Project, bundle_dir: str) -> dict:
+    media_dir = _media_dir(bundle_dir)
     os.makedirs(media_dir, exist_ok=True)
-    versions_dir = _bundle_versions_dir(bundle_dir)
-    os.makedirs(versions_dir, exist_ok=True)
-
     snapshot = project.to_dict()
     for field_name in _MEDIA_FIELDS:
         source_path = getattr(project, field_name)
-        json_key = {
-            "floor_image_path": "floorImagePath",
-            "terrain_gltf_path": "terrainGltfPath",
-            "audio_path": "audioPath",
-        }[field_name]
+        json_key = _MEDIA_JSON_KEYS[field_name]
         if not source_path:
             snapshot[json_key] = None
             continue
@@ -580,31 +625,51 @@ def save_bundle(project: Project, bundle_dir: str) -> str:
         if not os.path.exists(dest_path):
             shutil.copyfile(source_path, dest_path)
         snapshot[json_key] = f"media/{dest_name}"
+    return snapshot
 
-    version_num = _next_version_number(bundle_dir)
-    version_name = f"{version_num:04d}.json"
-    version_path = os.path.join(versions_dir, version_name)
-    with open(version_path, "w", encoding="utf-8") as fh:
+
+def save_bundle(project: Project, file_path: str) -> str:
+    """Write `project` to `file_path` (a .lumitrack file). If a file already
+    exists there, it is archived first (timestamped copy in archive/,
+    pruned to ARCHIVE_MAX_VERSIONS) — never overwritten without a copy.
+    Media is deduped by content hash into media/, alongside file_path's own
+    directory. Returns `file_path`."""
+    bundle_dir = os.path.dirname(file_path) or "."
+    os.makedirs(bundle_dir, exist_ok=True)
+
+    if os.path.isfile(file_path):
+        archive_dir = _archive_dir(bundle_dir)
+        os.makedirs(archive_dir, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+        # Microsecondes + suffixe anti-collision : deux sauvegardes rapides
+        # (ou une horloge à faible résolution) ne doivent jamais écraser
+        # silencieusement une entrée d'archive précédente.
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S-%f")
+        archived_name = f"{stem}_{timestamp}{BUNDLE_FILE_EXT}"
+        n = 1
+        while os.path.exists(os.path.join(archive_dir, archived_name)):
+            n += 1
+            archived_name = f"{stem}_{timestamp}-{n}{BUNDLE_FILE_EXT}"
+        shutil.copyfile(file_path, os.path.join(archive_dir, archived_name))
+        _prune_archive(archive_dir)
+
+    snapshot = _write_media_and_snapshot(project, bundle_dir)
+    with open(file_path, "w", encoding="utf-8") as fh:
         json.dump(snapshot, fh, indent=2, ensure_ascii=False)
-
-    latest_path = os.path.join(versions_dir, "latest.json")
-    shutil.copyfile(version_path, latest_path)
-
-    manifest_path = os.path.join(bundle_dir, "manifest.json")
-    with open(manifest_path, "w", encoding="utf-8") as fh:
-        json.dump({
-            "format": BUNDLE_FORMAT,
-            "version": BUNDLE_VERSION,
-            "projectName": project.name,
-            "latestVersion": version_num,
-        }, fh, indent=2, ensure_ascii=False)
-
-    return version_path
+    return file_path
 
 
-def load_bundle(bundle_dir: str, version: Optional[int] = None) -> Project:
-    """Load a project from a bundle directory. Defaults to the latest
-    version; pass `version` to load an older snapshot explicitly."""
+def _rehydrate_media_paths(snapshot: dict, bundle_dir: str):
+    for json_key in _MEDIA_JSON_KEYS.values():
+        rel = snapshot.get(json_key)
+        if rel:
+            snapshot[json_key] = os.path.join(bundle_dir, rel.replace("/", os.sep))
+
+
+def _load_legacy_directory_bundle(bundle_dir: str) -> Project:
+    """Ancien format (avant le 2026-07-31) : le dossier lui-même est le
+    paquet. Lecture seule, toujours la dernière version connue de ce
+    format — voir le commentaire d'en-tête de cette section."""
     manifest_path = os.path.join(bundle_dir, "manifest.json")
     if not os.path.isfile(manifest_path):
         raise ValueError(f"Not a Lumitrack bundle: {bundle_dir!r} has no manifest.json")
@@ -612,16 +677,26 @@ def load_bundle(bundle_dir: str, version: Optional[int] = None) -> Project:
         manifest = json.load(fh)
     if manifest.get("format") != BUNDLE_FORMAT:
         raise ValueError(f"Not a Lumitrack bundle: {bundle_dir!r}")
-
-    versions_dir = _bundle_versions_dir(bundle_dir)
-    version_name = f"{version:04d}.json" if version else "latest.json"
-    version_path = os.path.join(versions_dir, version_name)
+    version_path = os.path.join(bundle_dir, "versions", "latest.json")
     with open(version_path, encoding="utf-8") as fh:
         snapshot = json.load(fh)
+    _rehydrate_media_paths(snapshot, bundle_dir)
+    return Project.from_dict(snapshot)
 
-    for json_key in ("floorImagePath", "terrainGltfPath", "audioPath"):
-        rel = snapshot.get(json_key)
-        if rel:
-            snapshot[json_key] = os.path.join(bundle_dir, rel.replace("/", os.sep))
 
+def load_bundle(file_path: str, archived_name: Optional[str] = None) -> Project:
+    """Load a project from a .lumitrack file. Pass `archived_name` (a name
+    returned by `list_archive`) to load a specific archived version instead
+    of the current one. Falls back to reading the legacy directory-bundle
+    format when `file_path` points at such a directory (read-only —
+    saving always writes the current file+archive format)."""
+    if os.path.isdir(file_path):
+        return _load_legacy_directory_bundle(file_path)
+
+    bundle_dir = os.path.dirname(file_path) or "."
+    real_path = (os.path.join(_archive_dir(bundle_dir), archived_name)
+                 if archived_name is not None else file_path)
+    with open(real_path, encoding="utf-8") as fh:
+        snapshot = json.load(fh)
+    _rehydrate_media_paths(snapshot, bundle_dir)
     return Project.from_dict(snapshot)

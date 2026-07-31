@@ -4,7 +4,10 @@ timecode parsing.
 
 Run with:  pytest
 """
+import json
 import math
+import os
+import shutil
 import struct
 
 import pytest
@@ -15,7 +18,8 @@ from lumitrack.core.psn import (
 )
 from lumitrack.core.timeline import Timeline, OutputTransform, apply_easing, resolve_positions
 from lumitrack.core.project import (
-    Project, Point, Cue, Activation, save_bundle, load_bundle,
+    Project, Point, Cue, Activation, save_bundle, load_bundle, list_archive,
+    BUNDLE_FILE_EXT, ARCHIVE_MAX_VERSIONS,
 )
 from lumitrack.core import timecode as tc
 
@@ -426,28 +430,124 @@ def test_apply_group_transform_gives_each_point_its_own_arc():
     assert far_radius > near_radius
 
 
-def test_bundle_roundtrip_dedupes_media_by_hash(tmp_path):
+def _bundled_project(tmp_path, audio_bytes=b"fake-audio-bytes"):
     audio = tmp_path / "audio.m4a"
-    audio.write_bytes(b"fake-audio-bytes")
-
+    audio.write_bytes(audio_bytes)
     project = _demo_project()
     project.name = "Bundled"
     project.audio_path = str(audio)
-    bundle_dir = str(tmp_path / "Show.bundle")
+    return project
 
-    save_bundle(project, bundle_dir)
+
+def test_bundle_roundtrip_dedupes_media_by_hash(tmp_path):
+    project = _bundled_project(tmp_path)
+    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+
+    save_bundle(project, file_path)
     # Re-save without changing the audio: must not create a second media file.
-    save_bundle(project, bundle_dir)
+    save_bundle(project, file_path)
 
-    media_dir = tmp_path / "Show.bundle" / "media"
+    media_dir = tmp_path / "Show" / "media"
     audio_copies = list(media_dir.glob("*.m4a"))
     assert len(audio_copies) == 1
 
-    back = load_bundle(bundle_dir)
+    back = load_bundle(file_path)
     assert back.name == "Bundled"
     assert back.audio_path and back.audio_path.endswith(".m4a")
     with open(back.audio_path, "rb") as fh:
         assert fh.read() == b"fake-audio-bytes"
+
+
+def test_resaving_archives_the_previous_file_not_overwrites_blindly(tmp_path):
+    project = _bundled_project(tmp_path)
+    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+
+    save_bundle(project, file_path)
+    project.name = "Bundled v2"
+    save_bundle(project, file_path)
+
+    archive_dir = tmp_path / "Show" / "archive"
+    archived = list(archive_dir.glob(f"*{BUNDLE_FILE_EXT}"))
+    assert len(archived) == 1
+    with open(archived[0], encoding="utf-8") as fh:
+        assert json.load(fh)["name"] == "Bundled"  # l'ancienne version, pas la nouvelle
+
+    # Le fichier courant, lui, porte bien la nouvelle version.
+    assert load_bundle(file_path).name == "Bundled v2"
+
+
+def test_first_save_never_creates_an_archive_entry(tmp_path):
+    project = _bundled_project(tmp_path)
+    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+    save_bundle(project, file_path)
+    assert not (tmp_path / "Show" / "archive").exists()
+
+
+def test_list_archive_reports_newest_first(tmp_path):
+    import time
+
+    project = _bundled_project(tmp_path)
+    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+    save_bundle(project, file_path)
+    time.sleep(1.01)  # l'horodatage du nom a une résolution de la seconde
+    project.name = "v2"
+    save_bundle(project, file_path)
+
+    entries = list_archive(file_path)
+    assert len(entries) == 1
+    assert entries[0]["name"].startswith("Show_")
+    assert entries[0]["name"].endswith(BUNDLE_FILE_EXT)
+
+
+def test_load_bundle_can_restore_a_specific_archived_version(tmp_path):
+    project = _bundled_project(tmp_path)
+    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+    save_bundle(project, file_path)  # "Bundled" archivé au prochain save
+    project.name = "Bundled v2"
+    save_bundle(project, file_path)
+
+    entries = list_archive(file_path)
+    restored = load_bundle(file_path, archived_name=entries[0]["name"])
+    assert restored.name == "Bundled"
+    # Les médias de la version archivée restent résolubles (même dossier media/).
+    assert restored.audio_path and os.path.isfile(restored.audio_path)
+
+
+def test_archive_is_pruned_beyond_max_versions(tmp_path):
+    project = _bundled_project(tmp_path)
+    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+    save_bundle(project, file_path)
+    for i in range(ARCHIVE_MAX_VERSIONS + 5):
+        project.name = f"v{i}"
+        save_bundle(project, file_path)
+    archive_dir = tmp_path / "Show" / "archive"
+    assert len(list(archive_dir.glob(f"*{BUNDLE_FILE_EXT}"))) == ARCHIVE_MAX_VERSIONS
+
+
+def test_legacy_directory_bundle_still_reads(tmp_path):
+    """Ancien format (avant le 2026-07-31) : le dossier lui-même est le
+    paquet (manifest.json + media/ + versions/latest.json) — doit rester
+    lisible pour ne pas perdre les projets déjà sauvegardés ainsi."""
+    project = _bundled_project(tmp_path)
+    bundle_dir = tmp_path / "OldShow.bundle"
+    media_dir = bundle_dir / "media"
+    versions_dir = bundle_dir / "versions"
+    media_dir.mkdir(parents=True)
+    versions_dir.mkdir(parents=True)
+
+    digest = "deadbeef"
+    shutil.copyfile(project.audio_path, media_dir / f"{digest}.m4a")
+    snapshot = project.to_dict()
+    snapshot["audioPath"] = f"media/{digest}.m4a"
+    with open(versions_dir / "latest.json", "w", encoding="utf-8") as fh:
+        json.dump(snapshot, fh)
+    with open(bundle_dir / "manifest.json", "w", encoding="utf-8") as fh:
+        json.dump({"format": "lumitrack-bundle", "version": 1,
+                   "projectName": project.name, "latestVersion": 1}, fh)
+
+    back = load_bundle(str(bundle_dir))
+    assert back.name == "Bundled"
+    assert back.audio_path and os.path.isfile(back.audio_path)
 
 
 # ------------------------------------------------- courbes (graph editor) --

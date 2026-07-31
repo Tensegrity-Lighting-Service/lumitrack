@@ -55,6 +55,40 @@ def test_unknown_transport_action_is_reported_as_error():
     assert reply is not None and reply["type"] == "error"
 
 
+def test_save_bundle_list_archive_and_load_bundle_wire_protocol(tmp_path):
+    """Format de bundle 2026-07-31 (fichier .lumitrack, pas dossier) : la
+    commande save_bundle prend le chemin du FICHIER, list_bundle_archive
+    répond au seul demandeur (lecture seule), et load_bundle accepte
+    archivedName pour restaurer une version précédente."""
+    session = Session()
+    file_path = str(tmp_path / "Show" / "Show.lumitrack")
+
+    reply = _run(_handle_message(session, {"type": "save_bundle", "path": file_path}))
+    assert reply == {"type": "saved", "path": file_path}
+
+    session.project.name = "Renamed"
+    reply = _run(_handle_message(session, {"type": "save_bundle", "path": file_path}))
+    assert reply == {"type": "saved", "path": file_path}
+
+    reply = _run(_handle_message(session, {"type": "list_bundle_archive", "path": file_path}))
+    assert reply["type"] == "bundle_archive"
+    assert reply["path"] == file_path
+    assert len(reply["entries"]) == 1
+    archived_name = reply["entries"][0]["name"]
+
+    # Recharger le fichier courant : reflète le dernier nom sauvegardé.
+    reply = _run(_handle_message(session, {"type": "load_bundle", "path": file_path}))
+    assert reply is None  # broadcast projet
+    assert session.project.name == "Renamed"
+
+    # Recharger une version archivée : reflète l'ancien nom.
+    reply = _run(_handle_message(session, {
+        "type": "load_bundle", "path": file_path, "archivedName": archived_name,
+    }))
+    assert reply is None
+    assert session.project.name == "Demo"
+
+
 def test_set_audio_updates_path_duration_and_transport():
     """Mission timeline+son : `set_audio` porte le chemin et/ou la durée
     décodée par le frontend ; la durée du transport doit suivre

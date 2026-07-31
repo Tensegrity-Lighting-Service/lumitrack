@@ -173,6 +173,22 @@ export interface SavedMessage {
   path: string
 }
 
+/** Une entrée de archive/ (format bundle 2026-07-31) : une copie horodatée
+ * de l'état du projet AVANT une sauvegarde explicite qui l'a remplacée. */
+export interface BundleArchiveEntry {
+  name: string
+  /** ISO 8601, pour affichage humain uniquement — le tri se fait par nom
+   * côté backend (l'horodatage y est encodé et trie correctement en texte,
+   * insensible à la résolution de mtime du système de fichiers). */
+  mtime: string
+}
+
+export interface BundleArchiveMessage {
+  type: 'bundle_archive'
+  path: string
+  entries: BundleArchiveEntry[]
+}
+
 export interface AckMessage {
   type: 'ack'
 }
@@ -208,4 +224,4 @@ export interface PsnPreviewMessage {
 export type ServerMessage =
   | ProjectMessage | TickMessage | BlockContextMessage
   | ErrorMessage | SavedMessage | AckMessage
-  | IfacesMessage | PsnPreviewMessage
+  | IfacesMessage | PsnPreviewMessage | BundleArchiveMessage

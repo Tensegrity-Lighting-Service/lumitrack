@@ -6,7 +6,7 @@
 // re-renders from them — every edit is sent as a command and only takes
 // effect once the sidecar echoes back a fresh `project` snapshot.
 import { useSyncExternalStore } from 'react'
-import type { BackstageZone, BlockContextMessage, IfacesMessage, Project, PsnPreviewMessage, ServerMessage, TickMessage } from './types'
+import type { BackstageZone, BlockContextMessage, BundleArchiveMessage, IfacesMessage, Project, PsnPreviewMessage, ServerMessage, TickMessage } from './types'
 
 const SIDECAR_PORT = 17845
 const RECONNECT_DELAY_MS = 1000
@@ -22,6 +22,14 @@ class SidecarClient {
   lastError: string | null = null
   ifaces: IfacesMessage | null = null
   psnPreview: PsnPreviewMessage | null = null
+  bundleArchive: BundleArchiveMessage | null = null
+  /** Chemin du fichier .lumitrack courant (format 2026-07-31), une fois
+   * ouvert ou sauvegardé une première fois — pilote "Enregistrer" (pas de
+   * dialogue) vs "Enregistrer sous…" (dialogue toujours). Optimiste : posé
+   * dès l'envoi de la commande, pas seulement à la confirmation (save_bundle
+   * répond "saved", mais load_bundle ne fait que rediffuser le projet, sans
+   * signal distinct confirmant le chemin d'origine). */
+  bundlePath: string | null = null
 
   private ws: WebSocket | null = null
   private listeners = new Set<() => void>()
@@ -60,6 +68,8 @@ class SidecarClient {
         this.ifaces = msg
       } else if (msg.type === 'psn_preview') {
         this.psnPreview = msg
+      } else if (msg.type === 'bundle_archive') {
+        this.bundleArchive = msg
       } else if (msg.type === 'error') {
         this.lastError = msg.message
         console.error('[sidecar]', msg.message)
@@ -179,10 +189,34 @@ class SidecarClient {
   }
 
   // ---- project lifecycle ----
-  newProject(name = 'Untitled') { this.send({ type: 'new_project', name }) }
-  importStancz(path: string) { this.send({ type: 'import_stancz', path }) }
-  saveBundle(path: string) { this.send({ type: 'save_bundle', path }) }
-  loadBundle(path: string, version?: number) { this.send({ type: 'load_bundle', path, version }) }
+  newProject(name = 'Untitled') {
+    this.bundlePath = null
+    this.send({ type: 'new_project', name })
+  }
+  importStancz(path: string) {
+    this.bundlePath = null
+    this.send({ type: 'import_stancz', path })
+  }
+  saveBundle(path: string) {
+    this.bundlePath = path
+    this.emit()
+    this.send({ type: 'save_bundle', path })
+  }
+  loadBundle(path: string, archivedName?: string) {
+    // Restaurer une version archivée ne change PAS le fichier courant :
+    // le prochain "Enregistrer" écrase toujours le .lumitrack principal
+    // (en archivant d'abord ce qu'il contenait), pas l'entrée d'archive lue.
+    // Un chemin qui n'est PAS un .lumitrack (dossier d'ancien format
+    // ouvert en lecture seule) n'est pas non plus retenu comme "courant" :
+    // le prochain Enregistrer redevient un Enregistrer sous, pour ne
+    // jamais mélanger nouveau et ancien format dans le même dossier.
+    if (archivedName === undefined && path.toLowerCase().endsWith('.lumitrack')) {
+      this.bundlePath = path
+      this.emit()
+    }
+    this.send({ type: 'load_bundle', path, archivedName })
+  }
+  listBundleArchive(path: string) { this.send({ type: 'list_bundle_archive', path }) }
 }
 
 export const sidecar = new SidecarClient()
@@ -217,6 +251,14 @@ export function usePsnRunning(): boolean {
 
 export function useUndoAvailable(): boolean {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.undoAvailable)
+}
+
+export function useBundlePath(): string | null {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.bundlePath)
+}
+
+export function useBundleArchive(): BundleArchiveMessage | null {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.bundleArchive)
 }
 
 export function useRedoAvailable(): boolean {

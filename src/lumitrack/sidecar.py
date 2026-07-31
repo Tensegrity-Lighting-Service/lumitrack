@@ -22,7 +22,7 @@ from typing import Optional
 import websockets
 
 from .core.project import (
-    Project, Point, Cue, Activation, import_stancz, save_bundle, load_bundle,
+    Project, Point, Cue, Activation, import_stancz, save_bundle, load_bundle, list_archive,
 )
 from .core.timeline import Timeline, OutputTransform, resolve_block_context
 from .core.engine import Transport, PsnBroadcaster
@@ -592,11 +592,22 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         return None
 
     if msg_type == "save_bundle":
+        # msg["path"] est le chemin complet du FICHIER .lumitrack (format
+        # 2026-07-31 : le fichier porte l'extension, pas le dossier —
+        # l'ancien contenu à ce chemin, s'il existe, est archivé avant
+        # d'être écrasé, voir core/project.py::save_bundle).
         save_bundle(session.project, msg["path"])
         return {"type": "saved", "path": msg["path"]}
 
+    if msg_type == "list_bundle_archive":
+        # Lecture seule pour le panneau "Historique des versions" : répond
+        # au seul demandeur, jamais de broadcast (même principe que
+        # resolve_block_context).
+        return {"type": "bundle_archive", "path": msg["path"],
+                "entries": list_archive(msg["path"])}
+
     if msg_type == "load_bundle":
-        session.set_project(load_bundle(msg["path"], msg.get("version")))
+        session.set_project(load_bundle(msg["path"], msg.get("archivedName")))
         return None
 
     return {"type": "error", "message": f"Unknown message type {msg_type!r}"}
