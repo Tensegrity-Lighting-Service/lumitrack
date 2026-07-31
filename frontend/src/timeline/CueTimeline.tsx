@@ -398,6 +398,10 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   }, [snapCandidates, cues, effPxPerMs])
 
   const beginBlockDrag = useCallback((e: React.PointerEvent<HTMLDivElement>, cue: Cue, mode: DragState['mode']) => {
+    // Seul le clic gauche sélectionne/déplace un bloc — le clic milieu
+    // (panoramique tactile) au-dessus d'un bloc ne doit ni le sélectionner
+    // ni le faire bouger (signalé 2026-07-31).
+    if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
     onSelectCue(cue.id)
