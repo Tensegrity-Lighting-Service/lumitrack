@@ -1308,7 +1308,10 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
   const set = (patch: Partial<{
     targetXCm: number | null; targetYCm: number | null; targetZCm: number | null
     targetYawDeg: number | null; fadeMs: number; easing: string
+    orientationMode: 'manual' | 'path' | 'focus'
+    focusXCm: number | null; focusYCm: number | null
   }>) => sidecar.setActivation(cueId, pointId, patch)
+  const mode = activation.orientationMode ?? 'manual'
 
   return (
     <div className={`activation-card${selected ? ' selected' : ''}`} onClick={onSelect}>
@@ -1331,10 +1334,32 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
           <NumericInput value={activation.targetZCm === null ? null : activation.targetZCm / 100} step={0.1} nullable
             onCommit={(v) => set({ targetZCm: v === null ? null : v * 100 })} />
         </label>
-        <label>Lacet (°)
-          <NumericInput value={activation.targetYawDeg} step={5} nullable
-            onCommit={(v) => set({ targetYawDeg: v })} />
+        <label>Rotation
+          <select value={mode} onChange={(e) => set({ orientationMode: e.target.value as 'manual' | 'path' | 'focus' })}
+            title="Suivre courbe de trajectoire : le lacet suit la tangente du déplacement. Focus : le lacet pointe vers un point fixe du terrain.">
+            <option value="manual">Manuel</option>
+            <option value="path">Suivre la trajectoire</option>
+            <option value="focus">Focus</option>
+          </select>
         </label>
+        {mode === 'manual' && (
+          <label>Lacet (°)
+            <NumericInput value={activation.targetYawDeg} step={5} nullable
+              onCommit={(v) => set({ targetYawDeg: v })} />
+          </label>
+        )}
+        {mode === 'focus' && (
+          <>
+            <label>Focus X (m)
+              <NumericInput value={activation.focusXCm == null ? null : activation.focusXCm / 100} step={0.1} nullable
+                onCommit={(v) => set({ focusXCm: v === null ? null : v * 100 })} />
+            </label>
+            <label>Focus Y (m)
+              <NumericInput value={activation.focusYCm == null ? null : activation.focusYCm / 100} step={0.1} nullable
+                onCommit={(v) => set({ focusYCm: v === null ? null : v * 100 })} />
+            </label>
+          </>
+        )}
         <label>Fade (s)
           <NumericInput value={activation.fadeMs / 1000} step={0.1}
             onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v * 1000 }) }} />

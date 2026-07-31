@@ -69,7 +69,10 @@ export interface Activation {
   targetYawDeg: number | null
   fadeMs: number
   easing: string
-  orientationMode: 'manual' | 'path'
+  orientationMode: 'manual' | 'path' | 'focus'
+  /** Cible du mode "focus" (terrain, cm) ; null tant qu'aucun point choisi. */
+  focusXCm?: number | null
+  focusYCm?: number | null
   /** Courbes par axe (graph editor) ; axe absent = easing nommé. */
   curves?: Partial<Record<'x' | 'y' | 'z' | 'yaw', CurveNode[]>> | null
   /** Tracé spatial : tout absent/null = ligne droite. */

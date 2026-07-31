@@ -104,7 +104,15 @@ fn axis_keyframes<'a>(project: &'a Project, point_id: &str, axis: Axis) -> Vec<K
         .iter()
         .filter_map(|cue| {
             let act = cue.activations.get(point_id)?;
-            let value = axis.value(act)?;
+            let value = match axis.value(act) {
+                Some(v) => v,
+                // Mission "refonte AE/Reaper" : une activation en mode
+                // "path"/"focus" n'a pas de target_yaw_deg explicite mais
+                // touche quand même l'axe lacet (la valeur numérique est
+                // dérivée ailleurs, jamais lue ici).
+                None if axis == Axis::Yaw && act.orientation_mode != "manual" => 0.0,
+                None => return None,
+            };
             let fade_ms = if axis == Axis::Yaw { act.fade_ms.min(YAW_TURN_MS) } else { act.fade_ms };
             Some(Keyframe {
                 start_ms: cue.start_ms,
@@ -177,6 +185,56 @@ fn resolve_axis_with_origin(kfs: &[Keyframe], t_ms: f64, first_origin: Option<f6
     Some(origin + (kf.value - origin) * eased)
 }
 
+/// Port de `PATH_YAW_SAMPLE_MS` : demi-fenêtre (ms) utilisée pour échantillonner
+/// x/y avant/après l'instant courant afin d'estimer la tangente du
+/// déplacement en mode "path".
+pub const PATH_YAW_SAMPLE_MS: f64 = 50.0;
+
+/// Port de `_resolve_yaw` : le lacet gouvernant peut être explicite
+/// ("manual", résolution par axe normale), dérivé de la tangente du
+/// déplacement x/y ("path", gelé une fois le mouvement arrêté pour éviter un
+/// atan2(0,0) dégénéré) ou pointé vers un point fixe du terrain ("focus").
+fn resolve_yaw(project: &Project, point_id: &str, t_ms: f64, x: f64, y: f64) -> f64 {
+    let kfs_yaw = axis_keyframes(project, point_id, Axis::Yaw);
+    let Some(idx) = governing_index(&kfs_yaw, t_ms) else { return 0.0 };
+    let kf = &kfs_yaw[idx];
+    let act = kf.act;
+    match act.orientation_mode.as_str() {
+        "focus" => {
+            let fx = act.focus_x_cm.unwrap_or(x);
+            let fy = act.focus_y_cm.unwrap_or(y);
+            if (fx - x).abs() < 1e-6 && (fy - y).abs() < 1e-6 {
+                return kf.value;
+            }
+            (fy - y).atan2(fx - x).to_degrees()
+        }
+        "path" => {
+            let kfs_x = axis_keyframes(project, point_id, Axis::X);
+            let kfs_y = axis_keyframes(project, point_id, Axis::Y);
+            let sample_t = if kf.fade_end_ms > kf.start_ms {
+                t_ms.min(kf.fade_end_ms - PATH_YAW_SAMPLE_MS)
+            } else {
+                t_ms
+            }
+            .max(kf.start_ms);
+            let t0 = (sample_t - PATH_YAW_SAMPLE_MS).max(0.0);
+            let t1 = sample_t + PATH_YAW_SAMPLE_MS;
+            let (Some(x0), Some(y0), Some(x1), Some(y1)) =
+                (resolve_axis(&kfs_x, t0), resolve_axis(&kfs_y, t0),
+                 resolve_axis(&kfs_x, t1), resolve_axis(&kfs_y, t1))
+            else {
+                return kf.value;
+            };
+            let (dx, dy) = (x1 - x0, y1 - y0);
+            if dx.abs() < 1e-6 && dy.abs() < 1e-6 {
+                return kf.value;
+            }
+            dy.atan2(dx).to_degrees()
+        }
+        _ => resolve_axis(&kfs_yaw, t_ms).unwrap_or(0.0),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pose {
     pub x_cm: f64,
@@ -239,12 +297,11 @@ pub fn resolve_positions(project: &Project, t_ms: f64) -> BTreeMap<String, Pose>
             }
         }
         let z = resolve_axis(&axis_keyframes(project, &point.id, Axis::Z), t_ms);
-        let yaw = resolve_axis(&axis_keyframes(project, &point.id, Axis::Yaw), t_ms);
         result.insert(point.id.clone(), Pose {
             x_cm: x,
             y_cm: y,
             z_cm: z.unwrap_or(point.default_height_cm),
-            yaw_deg: yaw.unwrap_or(0.0),
+            yaw_deg: resolve_yaw(project, &point.id, t_ms, x, y),
         });
     }
     result
@@ -328,6 +385,26 @@ pub fn resolve_block_context(
                     axis_target.insert(axis, Some(value));
                 }
             }
+        }
+
+        if act.orientation_mode != "manual" {
+            // "path"/"focus" : le lacet est dérivé de la position, jamais
+            // stocké — la boucle par axe ci-dessus l'a traité comme "non
+            // touché" (target_yaw_deg est bien None). On calcule ici le
+            // lacet réellement affiché au départ/à la cible de ce bloc, à
+            // partir des positions x/y déjà résolues ci-dessus.
+            let sx = axis_start.get(&Axis::X).copied().flatten();
+            let sy = axis_start.get(&Axis::Y).copied().flatten();
+            if let (Some(sx), Some(sy)) = (sx, sy) {
+                axis_start.insert(Axis::Yaw, Some(resolve_yaw(project, &point.id, cue.start_ms, sx, sy)));
+            }
+            let tx = axis_target.get(&Axis::X).copied().flatten();
+            let ty = axis_target.get(&Axis::Y).copied().flatten();
+            if let (Some(tx), Some(ty)) = (tx, ty) {
+                axis_target.insert(Axis::Yaw,
+                    Some(resolve_yaw(project, &point.id, cue.start_ms + act.fade_ms, tx, ty)));
+            }
+            sources.insert(Axis::Yaw.key(), None);
         }
 
         let pose_or_none = |values: &BTreeMap<Axis, Option<f64>>| -> Option<[f64; 4]> {

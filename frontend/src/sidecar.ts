@@ -181,6 +181,8 @@ class SidecarClient {
     targetXCm?: number | null; targetYCm?: number | null
     targetZCm?: number | null; targetYawDeg?: number | null
     fadeMs?: number; easing?: string
+    orientationMode?: 'manual' | 'path' | 'focus'
+    focusXCm?: number | null; focusYCm?: number | null
     curves?: Partial<Record<'x' | 'y' | 'z' | 'yaw', unknown[]>> | null
     pathPoints?: unknown[] | null
     startHandle?: { dxCm: number; dyCm: number } | null

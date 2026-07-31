@@ -76,13 +76,21 @@ def rand_project(n_points, n_cues):
             if random.random() < 0.6:
                 def maybe(lo, hi, prob=0.8):
                     return round(random.uniform(lo, hi), 1) if random.random() < prob else None
+                # Mission "refonte AE/Reaper" (2026-08-01) : ~30 % des
+                # activations sont en mode dérivé (path/focus) — leur
+                # target_yaw_deg reste souvent None, exactement le cas que
+                # la fixture doit couvrir pour le port Rust.
+                mode = random.choices(["manual", "path", "focus"], weights=[0.7, 0.15, 0.15])[0]
                 cue.activations[pt.id] = Activation(
                     target_x_cm=maybe(-500, 5500),
                     target_y_cm=maybe(-500, 3500),
                     target_z_cm=maybe(0, 300, 0.3),
-                    target_yaw_deg=maybe(-360, 720, 0.4),
+                    target_yaw_deg=maybe(-360, 720, 0.4) if mode == "manual" else None,
                     fade_ms=round(random.uniform(0, 5000), 1),
                     easing=random.choice(easings),
+                    orientation_mode=mode,
+                    focus_x_cm=maybe(-500, 5500, 0.7) if mode == "focus" else None,
+                    focus_y_cm=maybe(-500, 3500, 0.7) if mode == "focus" else None,
                     # ~40 % des activations portent des courbes sur un
                     # sous-ensemble d'axes (le reste teste le repli easing).
                     curves=({axis: rand_curve()

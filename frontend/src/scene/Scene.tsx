@@ -1172,7 +1172,15 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
 }) {
   const { camera } = useThree()
 
-  type Member = { pointId: string; baseX: number; baseY: number; baseYaw: number | null }
+  type Member = {
+    pointId: string; baseX: number; baseY: number; baseYaw: number | null
+    /** "path"/"focus" : le lacet est dérivé de la position par le backend —
+     * une rotation de groupe ne doit jamais lui écrire un targetYawDeg
+     * (demande de Florian, 2026-08-01 : "une transformation rotation d'un
+     * groupe ne doit pas changer" le pivot d'un acteur gouverné par la
+     * règle path/focus). */
+    yawIsManual: boolean
+  }
   const membersNow = (): Member[] => {
     const cue = project.cues.find((c) => c.id === selectedCueId)
     const out: Member[] = []
@@ -1182,7 +1190,10 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       const baseX = act?.targetXCm ?? pose?.[0]
       const baseY = act?.targetYCm ?? pose?.[1]
       if (baseX === undefined || baseX === null || baseY === undefined || baseY === null) continue
-      out.push({ pointId: id, baseX, baseY, baseYaw: act?.targetYawDeg ?? pose?.[3] ?? null })
+      out.push({
+        pointId: id, baseX, baseY, baseYaw: act?.targetYawDeg ?? pose?.[3] ?? null,
+        yawIsManual: (act?.orientationMode ?? 'manual') === 'manual',
+      })
     }
     return out
   }
@@ -1276,7 +1287,8 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       const qNew = qLocal.clone().applyMatrix4(effectiveDelta)
       sidecar.setActivation(selectedCueId, m.pointId, {
         targetXCm: qNew.x / CM_TO_M, targetYCm: qNew.z / CM_TO_M,
-        ...(drag.kind === 'rotate' && m.baseYaw !== null ? { targetYawDeg: m.baseYaw + thetaDegLive } : {}),
+        ...(drag.kind === 'rotate' && m.baseYaw !== null && m.yawIsManual
+          ? { targetYawDeg: m.baseYaw + thetaDegLive } : {}),
       })
     }
   }
@@ -1298,7 +1310,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
         pathPoints: arc.pathPoints,
         startHandle: arc.startHandle,
         targetHandle: arc.targetHandle,
-        ...(m.baseYaw !== null ? { targetYawDeg: m.baseYaw + thetaDeg } : {}),
+        ...(m.baseYaw !== null && m.yawIsManual ? { targetYawDeg: m.baseYaw + thetaDeg } : {}),
       })
     }
   }

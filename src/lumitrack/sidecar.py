@@ -558,6 +558,12 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             act.fade_ms = float(msg["fadeMs"])
         if "easing" in msg:
             act.easing = msg["easing"]
+        if "orientationMode" in msg:
+            act.orientation_mode = msg["orientationMode"] or "manual"
+        if "focusXCm" in msg:
+            act.focus_x_cm = msg["focusXCm"]
+        if "focusYCm" in msg:
+            act.focus_y_cm = msg["focusYCm"]
         # Tracé spatial (motion path) : listes/dicts écrits tels quels,
         # null efface (retour à la ligne droite).
         if "pathPoints" in msg:

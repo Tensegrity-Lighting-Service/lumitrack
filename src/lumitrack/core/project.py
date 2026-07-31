@@ -105,11 +105,19 @@ class Activation:
     target_yaw_deg: Optional[float] = None
     fade_ms: float = 1000.0
     easing: str = "linear"
-    # "manual" (fixed heading) or "path" (tangent of the spatial trajectory).
-    # Only "manual" is exercised by the v1 UI (Vue Dessus only, §13.1.3);
-    # "path" is accepted here so the engine doesn't need another migration
-    # once trajectory-tangent orientation ships.
+    # Mission "refonte AE/Reaper" (2026-08-01) : le lacet gouverné par cette
+    # activation peut suivre trois régimes — "manual" (valeur animée comme
+    # n'importe quel axe, comportement historique), "path" (tangente de la
+    # trajectoire spatiale résolue de CE point à cet instant — un acteur se
+    # tourne dans le sens où il marche), "focus" (vise en continu le point
+    # fixe focus_x_cm/focus_y_cm). Résolu dans timeline.py::resolve_positions
+    # (miroir Rust : native/src/timeline.rs) — jamais dans le frontend
+    # (§13.1.7). "path"/"focus" n'ont pas besoin de target_yaw_deg : l'axe
+    # est "touché" par le MODE, pas par la présence d'une valeur explicite
+    # (voir _axis_keyframes).
     orientation_mode: str = "manual"
+    focus_x_cm: Optional[float] = None
+    focus_y_cm: Optional[float] = None
     # Graph editor (mission 2026-07-29, spec = KeysView de Friction) :
     # courbes d'easing personnalisées PAR AXE. {"x"|"y"|"z"|"yaw": [node]}.
     # node = {"t": 0..1, "v": progrès, "inT"/"inV"/"outT"/"outV": poignées
@@ -142,6 +150,7 @@ class Activation:
             "targetZCm": self.target_z_cm, "targetYawDeg": self.target_yaw_deg,
             "fadeMs": self.fade_ms, "easing": self.easing,
             "orientationMode": self.orientation_mode,
+            "focusXCm": self.focus_x_cm, "focusYCm": self.focus_y_cm,
             "curves": self.curves,
             "pathPoints": self.path_points,
             "startHandle": self.start_handle,
@@ -155,6 +164,7 @@ class Activation:
             target_z_cm=d.get("targetZCm"), target_yaw_deg=d.get("targetYawDeg"),
             fade_ms=float(d.get("fadeMs", 1000.0)), easing=d.get("easing", "linear"),
             orientation_mode=d.get("orientationMode", "manual"),
+            focus_x_cm=d.get("focusXCm"), focus_y_cm=d.get("focusYCm"),
             curves=d.get("curves"),
             path_points=d.get("pathPoints"),
             start_handle=d.get("startHandle"),

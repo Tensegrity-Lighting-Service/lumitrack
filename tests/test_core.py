@@ -250,6 +250,98 @@ def test_yaw_turn_is_eased_not_an_instant_cut():
     assert 0.0 < just_after_start.yaw_deg < 90.0
 
 
+# ------------------------------------------ modes de rotation (2026-08-01) --
+#
+# "je veux pouvoir choisir entre 3 mode ... suivre courbe de trajectoire,
+# orientation fixe ou focus" (Florian) : orientation_mode="manual" garde le
+# comportement historique (target_yaw_deg explicite) ; "path" dérive le
+# lacet de la tangente du déplacement x/y ; "focus" pointe vers un point
+# fixe du terrain. Les deux modes dérivés n'écrivent jamais target_yaw_deg.
+
+def test_orientation_mode_manual_is_unaffected():
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_yaw_deg=0, fade_ms=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=100, target_y_cm=0,
+                                          target_yaw_deg=30, fade_ms=1000)}),
+    ]
+    pose = resolve_positions(project, 2000)["a"]
+    assert pose.yaw_deg == pytest.approx(30.0)
+
+
+def test_orientation_mode_path_follows_movement_tangent():
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          orientation_mode="path")}),
+        # Déplacement en ligne droite le long de +Y : la tangente pointe à 90°.
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=2000,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=1000, fade_ms=2000,
+                                          orientation_mode="path")}),
+    ]
+    mid = resolve_positions(project, 2000)["a"]
+    assert mid.yaw_deg == pytest.approx(90.0, abs=1.0)
+
+
+def test_orientation_mode_path_freezes_direction_once_stopped():
+    """Une fois le déplacement terminé (hold), le lacet garde la dernière
+    direction plutôt que de dégénérer (l'acteur est immobile, donc la
+    tangente instantanée serait indéfinie)."""
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          orientation_mode="path")}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=1000,
+                                          orientation_mode="path")}),
+    ]
+    long_after_arrival = resolve_positions(project, 10_000)["a"]
+    assert long_after_arrival.yaw_deg == pytest.approx(0.0, abs=1.0)
+
+
+def test_orientation_mode_focus_points_at_fixed_target():
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          orientation_mode="focus",
+                                          focus_x_cm=0, focus_y_cm=1000)}),
+    ]
+    pose = resolve_positions(project, 500)["a"]
+    assert pose.yaw_deg == pytest.approx(90.0, abs=1e-6)
+
+
+def test_orientation_mode_focus_tracks_actor_as_it_moves():
+    """Le focus reste fixe dans l'espace : à mesure que l'acteur avance, le
+    lacet nécessaire pour continuer à regarder ce point change."""
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          orientation_mode="focus",
+                                          focus_x_cm=1000, focus_y_cm=0)}),
+        # L'acteur avance vers +Y : le focus (droit devant au départ) se
+        # retrouve de plus en plus sur le côté.
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=1000, fade_ms=1000,
+                                          orientation_mode="focus",
+                                          focus_x_cm=1000, focus_y_cm=0)}),
+    ]
+    start = resolve_positions(project, 1000)["a"]
+    end = resolve_positions(project, 2000)["a"]
+    assert start.yaw_deg == pytest.approx(0.0, abs=1e-6)
+    assert end.yaw_deg == pytest.approx(-45.0, abs=1.0)
+
+
 @pytest.mark.parametrize("name", ["linear", "smooth", "bounce", "spring",
                                   "exponential", "ease-in", "ease-out",
                                   "linéaire", "doux", "rebond", "unknown-name"])

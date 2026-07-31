@@ -53,10 +53,23 @@ pub struct Activation {
     pub start_handle: Option<crate::path::Handle>,
     #[serde(default)]
     pub target_handle: Option<crate::path::Handle>,
+    /// Mission "refonte AE/Reaper" (2026-08-01) : le lacet gouverné par
+    /// cette activation peut suivre trois régimes — "manual" (target_yaw_deg
+    /// explicite, historique), "path" (tangente du déplacement x/y) ou
+    /// "focus" (pointe vers focus_x_cm/focus_y_cm, ou vers l'acteur lui-même
+    /// si absent). target_yaw_deg reste None pour "path"/"focus" — jamais lu,
+    /// la valeur numérique est dérivée.
+    #[serde(default = "default_orientation_mode")]
+    pub orientation_mode: String,
+    #[serde(default)]
+    pub focus_x_cm: Option<f64>,
+    #[serde(default)]
+    pub focus_y_cm: Option<f64>,
 }
 
 fn default_fade_ms() -> f64 { 1000.0 }
 fn default_easing() -> String { "linear".to_string() }
+fn default_orientation_mode() -> String { "manual".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

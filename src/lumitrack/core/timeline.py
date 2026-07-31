@@ -317,7 +317,14 @@ def _axis_keyframes(project: Project, point_id: str, axis: str):
     lets `resolve_block_context` name which cue a start value tracks from.
 
     The yaw axis's own fade window is capped to YAW_TURN_MS (see above) —
-    every other axis keeps the activation's full fade_ms."""
+    every other axis keeps the activation's full fade_ms.
+
+    A yaw governed by "path"/"focus" mode (2026-08-01) is derived, not
+    stored — such an activation still "touches" the yaw axis for LTP
+    governance purposes even with target_yaw_deg left at None, since the
+    MODE is what activates the window, not a numeric value (see
+    resolve_positions, which branches on the governing activation's
+    orientation_mode instead of trusting `value` for yaw)."""
     field_name = _AXIS_FIELDS[axis]
     kfs = []
     for cue in project.cues:
@@ -326,7 +333,10 @@ def _axis_keyframes(project: Project, point_id: str, axis: str):
             continue
         value = getattr(act, field_name)
         if value is None:
-            continue
+            if axis == "yaw" and act.orientation_mode != "manual":
+                value = 0.0  # jamais lu : la valeur numérique est dérivée.
+            else:
+                continue
         fade_ms = min(act.fade_ms, YAW_TURN_MS) if axis == "yaw" else act.fade_ms
         kfs.append((cue.start_ms, cue.start_ms + fade_ms, value, act, cue.id, axis))
     kfs.sort(key=lambda k: k[0])
@@ -389,6 +399,62 @@ def _governing_index(kfs, t_ms: float) -> int:
     return idx
 
 
+# Fenêtre d'échantillonnage (ms) pour dériver la tangente de trajectoire en
+# mode "path" — assez courte pour rester réactive à un virage, assez large
+# pour ne pas être dominée par le bruit numérique d'un pas de temps fin.
+PATH_YAW_SAMPLE_MS = 50.0
+
+
+def _resolve_yaw(project: Project, point_id: str, t_ms: float, x: float, y: float) -> float:
+    """Lacet à l'instant t, selon le régime de l'activation qui gouverne cet
+    axe (Activation.orientation_mode, mission "refonte AE/Reaper"
+    2026-08-01) : "manual" anime une valeur comme n'importe quel axe (v1
+    historique) ; "path" suit la tangente de la trajectoire x/y résolue
+    (approximée en ligne droite même si un tracé courbe existe entre départ
+    et cible — simplification v1, la tangente réelle du tracé de Bézier
+    serait le raffinement naturel si le besoin s'en fait sentir) ; "focus"
+    vise en continu le point fixe focus_x_cm/focus_y_cm. Ni "path" ni
+    "focus" ne lisent target_yaw_deg (dérivé, jamais stocké — voir
+    _axis_keyframes)."""
+    kfs_yaw = _axis_keyframes(project, point_id, "yaw")
+    idx = _governing_index(kfs_yaw, t_ms)
+    if idx < 0:
+        return 0.0
+    start, fade_end, value, act, _cue_id, _axis = kfs_yaw[idx]
+    mode = act.orientation_mode
+
+    if mode == "focus":
+        fx = act.focus_x_cm if act.focus_x_cm is not None else x
+        fy = act.focus_y_cm if act.focus_y_cm is not None else y
+        if abs(fx - x) < 1e-6 and abs(fy - y) < 1e-6:
+            return value if value is not None else 0.0
+        return math.degrees(math.atan2(fy - y, fx - x))
+
+    if mode == "path":
+        kfs_x = _axis_keyframes(project, point_id, "x")
+        kfs_y = _axis_keyframes(project, point_id, "y")
+        # Pendant le maintien (après la fin du virage), on gèle la
+        # dernière direction de marche plutôt que de rééchantillonner un
+        # delta nul (l'acteur est immobile, sa position ne bouge plus).
+        sample_t = min(t_ms, fade_end - PATH_YAW_SAMPLE_MS) if fade_end > start else t_ms
+        sample_t = max(sample_t, start)
+        t0 = max(0.0, sample_t - PATH_YAW_SAMPLE_MS)
+        t1 = sample_t + PATH_YAW_SAMPLE_MS
+        x0, y0 = _resolve_axis(kfs_x, t0), _resolve_axis(kfs_y, t0)
+        x1, y1 = _resolve_axis(kfs_x, t1), _resolve_axis(kfs_y, t1)
+        if x0 is None or y0 is None or x1 is None or y1 is None:
+            return value if value is not None else 0.0
+        dx, dy = x1 - x0, y1 - y0
+        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+            return value if value is not None else 0.0
+        return math.degrees(math.atan2(dy, dx))
+
+    # "manual" (ou une valeur future inconnue : repli sur le comportement
+    # historique plutôt que planter).
+    resolved = _resolve_axis(kfs_yaw, t_ms)
+    return resolved if resolved is not None else 0.0
+
+
 def resolve_positions(project: Project, t_ms: float) -> dict:
     """-> {point_id: Pose}. A point absent from the result has no known x/y
     at this instant and must never be sent to PSN or drawn on the scene."""
@@ -431,11 +497,10 @@ def resolve_positions(project: Project, t_ms: float) -> dict:
                 eased = axis_progress(act, "x", progress)
                 x, y = path_position(origin, act, target, eased)
         z = _resolve_axis(_axis_keyframes(project, point.id, "z"), t_ms)
-        yaw = _resolve_axis(_axis_keyframes(project, point.id, "yaw"), t_ms)
         result[point.id] = Pose(
             x_cm=x, y_cm=y,
             z_cm=z if z is not None else point.default_height_cm,
-            yaw_deg=yaw if yaw is not None else 0.0,
+            yaw_deg=_resolve_yaw(project, point.id, t_ms, x, y),
         )
     return result
 
@@ -508,6 +573,19 @@ def resolve_block_context(project: Project, cue_id: str,
                 axis_start[axis] = resolved if resolved is not None else kfs[index - 1][2]
                 sources[axis] = kfs[index - 1][4]
             axis_target[axis] = value
+
+        if act.orientation_mode != "manual":
+            # "path"/"focus" : le lacet est dérivé de la position, jamais
+            # stocké — la boucle générique ci-dessus l'a traité comme "non
+            # touché" (target_yaw_deg est bien None). On calcule ici le
+            # lacet réellement affiché au départ/à la cible de CE bloc, à
+            # partir des positions x/y déjà résolues juste au-dessus.
+            if axis_start.get("x") is not None and axis_start.get("y") is not None:
+                axis_start["yaw"] = _resolve_yaw(project, point.id, cue.start_ms, axis_start["x"], axis_start["y"])
+            if axis_target.get("x") is not None and axis_target.get("y") is not None:
+                axis_target["yaw"] = _resolve_yaw(
+                    project, point.id, cue.start_ms + act.fade_ms, axis_target["x"], axis_target["y"])
+            sources["yaw"] = None
 
         def pose_or_none(values):
             if values["x"] is None or values["y"] is None:
