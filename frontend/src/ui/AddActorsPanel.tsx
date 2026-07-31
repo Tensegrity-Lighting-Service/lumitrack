@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react'
 import { sidecar } from '../sidecar'
 import type { Project } from '../types'
+import { NumericInput } from './NumericInput'
 
 const ACTOR_PALETTE = ['#4F6DF5', '#F5734F', '#B06FE0', '#4FF58C', '#4FF5E0', '#F5C84F']
 
@@ -75,10 +76,9 @@ export function AddActorsPanel({ project, onClose }: {
             />
           </label>
           <label>Nombre à ajouter
-            <input
-              type="number" min={1} max={99} value={count}
-              onChange={(e) => setCount(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
-              onKeyDown={(e) => { if (e.key === 'Enter') add() }}
+            <NumericInput
+              value={count} step={1}
+              onCommit={(v) => setCount(Math.max(1, Math.min(99, Math.round(v ?? 1))))}
             />
           </label>
         </div>
