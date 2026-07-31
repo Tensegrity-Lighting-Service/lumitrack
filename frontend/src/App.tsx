@@ -25,10 +25,17 @@ const LUMITRACK_FILTER = [{ name: 'Projet Lumitrack', extensions: ['lumitrack'] 
  * triables (Trello, Notion, etc.). `active.rect.current` n'a de valeur
  * `translated` qu'une fois le geste commencé ; `initial` sert de repli. */
 function isInsertingAfter(event: DragOverEvent | DragEndEvent): boolean {
-  const activeRect = event.active.rect.current.translated ?? event.active.rect.current.initial
   const overRect = event.over?.rect
-  if (!activeRect || !overRect) return false
-  return activeRect.top + activeRect.height / 2 > overRect.top + overRect.height / 2
+  if (!overRect) return false
+  // Position Y RÉELLE du curseur (activatorEvent = celui qui a démarré le
+  // geste, delta = déplacement cumulé depuis) — pas le rectangle "translaté"
+  // de l'élément actif, qui traîne derrière le curseur d'un décalage fixe
+  // égal à l'endroit où l'acteur a été saisi. Comparer CE rectangle-là
+  // décale le point de bascule avant/après du milieu réel de la cible, d'où
+  // le "il faut dépasser et revenir en arrière" signalé par Florian.
+  const activator = event.activatorEvent as (PointerEvent | MouseEvent) | undefined
+  const clientY = (activator?.clientY ?? 0) + event.delta.y
+  return clientY > overRect.top + overRect.height / 2
 }
 
 /** Dialogue "Enregistrer sous…" : toujours affiché, crée/écrase un fichier
