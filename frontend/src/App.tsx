@@ -283,9 +283,22 @@ function App() {
     // preventDefault() n'était visiblement jamais atteint). accepter
     // inconditionnellement ici ; onDrop reste, lui, strict sur le contenu
     // réel du dataTransfer avant d'agir.
+    // DIAGNOSTIC TEMPORAIRE : un seul log par geste (pas à chaque frame de
+    // dragover, ça noierait la console) pour confirmer si dragover ATTEINT
+    // seulement ce conteneur.
+    let loggedThisDrag = false
     const onDragOver = (e: DragEvent) => {
       e.preventDefault()
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+      if (!loggedThisDrag) {
+        loggedThisDrag = true
+        // eslint-disable-next-line no-console
+        console.log('[roster-dnd] onDragOver atteint le conteneur (premier événement de ce geste)')
+      }
+    }
+    const onDragEnter = (e: DragEvent) => {
+      // eslint-disable-next-line no-console
+      console.log('[roster-dnd] onDragEnter conteneur', { target: (e.target as HTMLElement)?.className })
     }
     const onDrop = (e: DragEvent) => {
       // DIAGNOSTIC TEMPORAIRE (2026-07-31) — à retirer une fois le vrai
@@ -352,10 +365,33 @@ function App() {
       }
     }
     el.addEventListener('dragover', onDragOver)
+    el.addEventListener('dragenter', onDragEnter)
     el.addEventListener('drop', onDrop)
+    // DIAGNOSTIC TEMPORAIRE : capture au niveau window pour voir si drop/
+    // dragend atterrissent ailleurs que sur ce conteneur (coordonnées
+    // décalées, événement qui remonte plus haut, etc.) — dragend fire
+    // TOUJOURS en fin de geste, drop=false dedans si le navigateur a
+    // considéré qu'aucune cible n'acceptait le dépôt.
+    const onWindowDrop = (e: DragEvent) => {
+      // eslint-disable-next-line no-console
+      console.log('[roster-dnd] drop vu au niveau window (capture)', {
+        target: (e.target as HTMLElement)?.className, defaultPrevented: e.defaultPrevented,
+      })
+    }
+    const onWindowDragEnd = (e: DragEvent) => {
+      // eslint-disable-next-line no-console
+      console.log('[roster-dnd] dragend (fin de geste, succès ou annulation)', {
+        dropEffect: e.dataTransfer?.dropEffect,
+      })
+    }
+    window.addEventListener('drop', onWindowDrop, true)
+    window.addEventListener('dragend', onWindowDragEnd, true)
     return () => {
       el.removeEventListener('dragover', onDragOver)
+      el.removeEventListener('dragenter', onDragEnter)
       el.removeEventListener('drop', onDrop)
+      window.removeEventListener('drop', onWindowDrop, true)
+      window.removeEventListener('dragend', onWindowDragEnd, true)
     }
   }, [])
 
