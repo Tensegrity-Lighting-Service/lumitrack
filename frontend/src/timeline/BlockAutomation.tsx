@@ -1,14 +1,21 @@
-// Ligne d'automation SUR le bloc (mission « type Logic Pro », 2026-07-29) :
-// le transfert 0 -> 100 % du bloc, dessiné sur la zone de fade du bloc
-// lui-même, éditable à même le bloc quand il est sélectionné — nœuds
-// déplaçables, poignées de Bézier (symétriques par défaut, Alt casse),
-// double-clic pour insérer, Alt+clic pour retirer.
+// Ligne d'automation SUR le bloc (mission « type Logic Pro », 2026-07-29 ;
+// restreinte au lacet le 2026-08-01) : le transfert 0 -> 100 % du bloc,
+// dessiné sur la zone de fade du bloc lui-même, éditable à même le bloc
+// quand il est sélectionné — nœuds déplaçables, poignées de Bézier
+// (symétriques par défaut, Alt casse), double-clic pour insérer, Alt+clic
+// pour retirer.
 //
-// Sémantique : cette ligne est le PROFIL DU BLOC ENTIER — au lâcher, la
-// courbe est écrite sur TOUS les axes touchés de TOUTES les activations du
-// bloc. Le graph editor (piste « Courbes ») reste l'outil fin par axe et
-// par acteur ; la ligne affichée ici est la courbe X de l'activation
-// représentative (acteur sélectionné s'il est activé, sinon le premier).
+// Restreinte au SEUL lacet (Florian, 2026-08-01) : x/y/z sont déjà visibles
+// dans la scène (redondant, "je n'ai pas besoin d'un graph par paramètre"),
+// le lacet reste moins lisible en vue du dessus donc garde sa ligne dédiée.
+// Sémantique inchangée pour cet axe : cette ligne est le PROFIL DU BLOC
+// ENTIER — au lâcher, la courbe est écrite sur le lacet de TOUTES les
+// activations manuelles (mode "path"/"focus" : le lacet est dérivé, une
+// courbe dessus serait un no-op silencieux, donc exclues) qui le touchent.
+// Le graph editor (piste « Courbes ») reste l'outil fin par axe et par
+// acteur ; la ligne affichée ici est celle de l'activation représentative
+// (acteur sélectionné s'il touche le lacet en manuel, sinon la première
+// qui le touche).
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Cue } from '../types'
 import { sidecar } from '../sidecar'
@@ -19,13 +26,8 @@ const PAD_V = 3.5
 const NODE_R = 3.2
 const HANDLE_R = 2.4
 
-function touchedAxes(act: Cue['activations'][string]): string[] {
-  const out: string[] = []
-  if (act.targetXCm !== null) out.push('x')
-  if (act.targetYCm !== null) out.push('y')
-  if (act.targetZCm !== null) out.push('z')
-  if (act.targetYawDeg !== null) out.push('yaw')
-  return out.length ? out : ['x']
+function touchesYaw(act: Cue['activations'][string]): boolean {
+  return act.targetYawDeg !== null && (act.orientationMode ?? 'manual') === 'manual'
 }
 
 export function BlockAutomation({ cue, selected, selectedPointId, widthPx, heightPx }: {
@@ -35,8 +37,8 @@ export function BlockAutomation({ cue, selected, selectedPointId, widthPx, heigh
   widthPx: number
   heightPx: number
 }) {
-  const pointIds = Object.keys(cue.activations)
-  const repId = selectedPointId && cue.activations[selectedPointId] ? selectedPointId : pointIds[0]
+  const pointIds = Object.keys(cue.activations).filter((pid) => touchesYaw(cue.activations[pid]))
+  const repId = selectedPointId && pointIds.includes(selectedPointId) ? selectedPointId : pointIds[0]
   const rep = repId ? cue.activations[repId] : null
 
   const [draft, setDraft] = useState<CurveNode[] | null>(null)
@@ -52,7 +54,7 @@ export function BlockAutomation({ cue, selected, selectedPointId, widthPx, heigh
 
   const nodes = useMemo(() => {
     if (draft) return draft
-    const stored = rep?.curves?.x
+    const stored = rep?.curves?.yaw
     if (stored && stored.length >= 2) return sortNodes(stored as CurveNode[])
     return bakeEasing(rep?.easing ?? 'linear')
   }, [draft, rep])
@@ -86,9 +88,7 @@ export function BlockAutomation({ cue, selected, selectedPointId, widthPx, heigh
 
   const commit = (next: CurveNode[]) => {
     for (const pid of pointIds) {
-      const curves: Record<string, CurveNode[]> = {}
-      for (const axis of touchedAxes(cue.activations[pid])) curves[axis] = next
-      sidecar.setActivation(cue.id, pid, { curves })
+      sidecar.setActivation(cue.id, pid, { curves: { yaw: next } })
     }
   }
 
