@@ -1894,6 +1894,22 @@ function SceneContent({
 
     const lassoMove = (e: PointerEvent) => {
       if (chordPan(e)) return
+      if (boxDragActiveRef.current) {
+        // lassoStart s'exécute AVANT le routage pointerdown de r3f (ordre
+        // d'enregistrement des listeners natifs sur le même canvas, cf.
+        // son commentaire) : au moment où lassoStart lit boxDragActiveRef,
+        // begin() de la boîte n'a pas encore eu la main pour le passer à
+        // true, donc un lasso peut s'armer par erreur au tout début d'une
+        // manipulation de la boîte. Sans ce garde-fou, le relâchement
+        // traitait ce lasso fantôme comme une vraie sélection au lasso —
+        // souvent vide vu le rectangle resté collé au point de départ —
+        // et vidait la sélection (2026-07-31 : "la boîte disparaît en
+        // lâchant"). Un vrai drag génère toujours au moins un pointermove
+        // avant le relâchement, donc ce garde-fou arrive toujours à temps.
+        lassoRef.current = null
+        onLassoRect(null)
+        return
+      }
       const l = lassoRef.current
       if (!l) return
       const rect = dom.getBoundingClientRect()

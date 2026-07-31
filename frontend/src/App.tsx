@@ -26,6 +26,10 @@ async function pickSaveAsPath(projectName: string): Promise<string | null> {
 }
 import type { Activation, BackstageZone, Cue, Point, Project } from './types'
 
+// Sentinelle pour transporter "sans groupe" dans un attribut data-* HTML
+// (qui ne peut porter que des chaînes) — voir data-drop-group / rosterListRef.
+const UNGROUPED_MARKER = '__ungrouped__'
+
 const ROSTER_MIN = 160
 const ROSTER_MAX = 420
 const INSPECTOR_MIN = 220
@@ -226,6 +230,99 @@ function App() {
     window.addEventListener('pointerdown', close)
     return () => window.removeEventListener('pointerdown', close)
   }, [showGridSettings])
+
+  // Explorateur du roster (mission "roster explorateur", 2026-07-31) : le
+  // dépôt (dragover/drop) est posé en listeners NATIFS sur le conteneur,
+  // pas en props React onDragOver/onDrop directement sur les lignes — le
+  // seul autre récepteur de drag-and-drop du projet (Scene.tsx, dépôt sur
+  // la scène 3D) utilise déjà ce pattern, jamais l'inverse ; le glisser
+  // d'un acteur sur un dossier ne déclenchait rien avec des props React,
+  // signe que ce couple onDragOver/onDrop synthétique n'est pas fiable
+  // dans ce WebView. `rosterProjectRef` évite un effet à re-brancher à
+  // chaque changement de projet (le `<ul>` lui-même ne change jamais).
+  const rosterListRef = useRef<HTMLUListElement>(null)
+  const rosterProjectRef = useRef(project)
+  rosterProjectRef.current = project
+  useEffect(() => {
+    const el = rosterListRef.current
+    if (!el) return
+    const extractPointIds = (dt: DataTransfer): string[] => {
+      const multi = dt.getData('application/x-lumitrack-points')
+      if (multi) {
+        try { return JSON.parse(multi) } catch { return [] }
+      }
+      const single = dt.getData('application/x-lumitrack-point')
+      return single ? [single] : []
+    }
+    // Déplace des acteurs vers `targetGroupId` (null = sans groupe),
+    // insérés juste avant `beforeId` dans l'ordre global (null = à la
+    // fin) — un seul geste fait à la fois le classement ET le rangement,
+    // comme glisser un fichier dans un dossier à un endroit précis.
+    const moveDroppedIds = (draggedIds: string[], targetGroupId: string | null, beforeId: string | null) => {
+      const proj = rosterProjectRef.current
+      if (!proj) return
+      const rest = proj.points.map((p) => p.id).filter((id) => !draggedIds.includes(id))
+      let at = beforeId ? rest.indexOf(beforeId) : -1
+      if (at < 0) at = rest.length
+      sidecar.reorderPoints([...rest.slice(0, at), ...draggedIds, ...rest.slice(at)])
+      for (const id of draggedIds) {
+        const p = proj.points.find((pp) => pp.id === id)
+        if (p && p.rosterGroupId !== targetGroupId) sidecar.updatePoint(id, { rosterGroupId: targetGroupId })
+      }
+    }
+    const onDragOver = (e: DragEvent) => {
+      const t = e.dataTransfer?.types
+      if (t && (t.includes('application/x-lumitrack-point') || t.includes('application/x-lumitrack-points') || t.includes('application/x-lumitrack-group'))) {
+        e.preventDefault()
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+      }
+    }
+    const onDrop = (e: DragEvent) => {
+      if (!e.dataTransfer) return
+      const target = (e.target as HTMLElement)
+        .closest('[data-drop-point], [data-drop-group-header], [data-drop-ungrouped]') as HTMLElement | null
+      if (!target) return
+      e.preventDefault()
+      const groupHeaderId = target.dataset.dropGroupHeader
+      if (groupHeaderId) {
+        const proj = rosterProjectRef.current
+        if (!proj) return
+        const srcGroupId = e.dataTransfer.getData('application/x-lumitrack-group')
+        if (srcGroupId && srcGroupId !== groupHeaderId) {
+          // Réordonner les dossiers : place srcGroup juste avant celui-ci.
+          const order = proj.rosterGroups.map((g) => g.id).filter((id) => id !== srcGroupId)
+          const at = order.indexOf(groupHeaderId)
+          order.splice(at, 0, srcGroupId)
+          sidecar.setRosterGroups(order.map((id) => proj.rosterGroups.find((g) => g.id === id)!))
+          return
+        }
+        const ids = extractPointIds(e.dataTransfer)
+        if (ids.length === 0) return
+        moveDroppedIds(ids, groupHeaderId, null)
+        return
+      }
+      if (target.dataset.dropUngrouped) {
+        const ids = extractPointIds(e.dataTransfer)
+        if (ids.length === 0) return
+        moveDroppedIds(ids, null, null)
+        return
+      }
+      const pointId = target.dataset.dropPoint
+      if (pointId) {
+        const rawGroup = target.dataset.dropGroup
+        const targetGroupId = rawGroup === UNGROUPED_MARKER ? null : (rawGroup ?? null)
+        const ids = extractPointIds(e.dataTransfer).filter((id) => id !== pointId)
+        if (ids.length === 0) return
+        moveDroppedIds(ids, targetGroupId, pointId)
+      }
+    }
+    el.addEventListener('dragover', onDragOver)
+    el.addEventListener('drop', onDrop)
+    return () => {
+      el.removeEventListener('dragover', onDragOver)
+      el.removeEventListener('drop', onDrop)
+    }
+  }, [])
 
   const tMs = tick?.tMs ?? 0
   const playing = tick?.playing ?? false
@@ -439,14 +536,19 @@ function App() {
             + Acteur
           </button>
         </div>
-        <ul>
+        <ul ref={rosterListRef}>
           {(() => {
             // Explorateur de fichiers (mission "roster explorateur",
             // 2026-07-31, remplace le popup de gestion en lot) : dossiers =
             // sous-groupes organisationnels, drag-and-drop pour ranger ET
             // réordonner. Un acteur porte au plus un dossier
             // (`rosterGroupId`), l'ordre à l'intérieur d'un dossier suit
-            // l'ordre relatif dans `project.points` (reorderPoints).
+            // l'ordre relatif dans `project.points` (reorderPoints). Le
+            // DÉPÔT (dragover/drop) est géré par un effet à listeners natifs
+            // sur `rosterListRef` (voir plus haut) — le seul autre récepteur
+            // de drag-and-drop du projet (Scene.tsx) utilise déjà ce
+            // pattern, jamais des props React onDragOver/onDrop, qui se
+            // sont avérées ne pas recevoir l'événement de façon fiable ici.
             const byId = new Map(project.points.map((p, i) => [p.id, i] as const))
             const selectRange = (point: Point) => (e: React.MouseEvent) => {
               const index = byId.get(point.id) ?? -1
@@ -468,46 +570,13 @@ function App() {
               }
             }
 
-            // Lit les ids transportés par un glisser d'acteur(s), qu'ils
-            // viennent d'une ligne seule ou d'un en-tête de dossier —
-            // Scene.tsx lit le même couple de types MIME pour le dépôt
-            // dans la scène 3D, réutilisé ici pour le classement local.
-            const extractPointIds = (dt: DataTransfer): string[] => {
-              const multi = dt.getData('application/x-lumitrack-points')
-              if (multi) {
-                try { return JSON.parse(multi) } catch { return [] }
-              }
-              const single = dt.getData('application/x-lumitrack-point')
-              return single ? [single] : []
-            }
-            const acceptPointDrag = (e: React.DragEvent) => {
-              const t = e.dataTransfer.types
-              if (t.includes('application/x-lumitrack-point') || t.includes('application/x-lumitrack-points')) {
-                e.preventDefault()
-                e.dataTransfer.dropEffect = 'move'
-              }
-            }
-            // Déplace des acteurs vers `targetGroupId` (null = sans
-            // groupe), insérés juste avant `beforeId` dans l'ordre global
-            // (null = à la fin) — un seul geste fait à la fois le
-            // classement ET le rangement, comme glisser un fichier dans un
-            // dossier à un endroit précis.
-            const moveDroppedIds = (draggedIds: string[], targetGroupId: string | null, beforeId: string | null) => {
-              const rest = project.points.map((p) => p.id).filter((id) => !draggedIds.includes(id))
-              let at = beforeId ? rest.indexOf(beforeId) : -1
-              if (at < 0) at = rest.length
-              sidecar.reorderPoints([...rest.slice(0, at), ...draggedIds, ...rest.slice(at)])
-              for (const id of draggedIds) {
-                const p = project.points.find((pp) => pp.id === id)
-                if (p && p.rosterGroupId !== targetGroupId) sidecar.updatePoint(id, { rosterGroupId: targetGroupId })
-              }
-            }
-
             const pointRow = (point: Point) => (
               <li
                 key={point.id}
                 className={selectedPointIds.includes(point.id) ? 'selected' : ''}
                 draggable
+                data-drop-point={point.id}
+                data-drop-group={point.rosterGroupId ?? UNGROUPED_MARKER}
                 onDragStart={(e) => {
                   // Glisser un acteur qui fait partie de la sélection
                   // courante embarque toute la sélection (comme dans un
@@ -517,14 +586,6 @@ function App() {
                   if (ids.length > 1) e.dataTransfer.setData('application/x-lumitrack-points', JSON.stringify(ids))
                   else e.dataTransfer.setData('application/x-lumitrack-point', point.id)
                   e.dataTransfer.effectAllowed = 'copyMove'
-                }}
-                onDragOver={acceptPointDrag}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  const ids = extractPointIds(e.dataTransfer).filter((id) => id !== point.id)
-                  if (ids.length === 0) return
-                  moveDroppedIds(ids, point.rosterGroupId, point.id)
                 }}
                 onClick={selectRange(point)}
               >
@@ -557,6 +618,7 @@ function App() {
                       <div
                         className="roster-group-head"
                         draggable
+                        data-drop-group-header={group.id}
                         onDragStart={(e) => {
                           // Glisser le dossier : batch vers la scène (mêmes
                           // acteurs, un seul dépôt) ET réordonnancement des
@@ -565,29 +627,6 @@ function App() {
                           e.dataTransfer.setData('application/x-lumitrack-points', JSON.stringify(members.map((m) => m.id)))
                           e.dataTransfer.setData('application/x-lumitrack-group', group.id)
                           e.dataTransfer.effectAllowed = 'copyMove'
-                        }}
-                        onDragOver={(e) => {
-                          const t = e.dataTransfer.types
-                          if (t.includes('application/x-lumitrack-group') || t.includes('application/x-lumitrack-point') || t.includes('application/x-lumitrack-points')) {
-                            e.preventDefault()
-                            e.dataTransfer.dropEffect = 'move'
-                          }
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          const srcGroupId = e.dataTransfer.getData('application/x-lumitrack-group')
-                          if (srcGroupId && srcGroupId !== group.id) {
-                            // Réordonner les dossiers : place srcGroup juste avant celui-ci.
-                            const order = project.rosterGroups.map((g) => g.id).filter((id) => id !== srcGroupId)
-                            const at = order.indexOf(group.id)
-                            order.splice(at, 0, srcGroupId)
-                            sidecar.setRosterGroups(order.map((id) => project.rosterGroups.find((g) => g.id === id)!))
-                            return
-                          }
-                          const ids = extractPointIds(e.dataTransfer)
-                          if (ids.length === 0) return
-                          moveDroppedIds(ids, group.id, null)
                         }}
                         onClick={() => {
                           // Sélectionne tout le groupe d'un clic (§demande
@@ -655,16 +694,7 @@ function App() {
                   )
                 })}
                 {project.rosterGroups.length > 0 && (
-                  <li
-                    className="roster-ungrouped-zone"
-                    onDragOver={acceptPointDrag}
-                    onDrop={(e) => {
-                      e.preventDefault()
-                      const ids = extractPointIds(e.dataTransfer)
-                      if (ids.length === 0) return
-                      moveDroppedIds(ids, null, null)
-                    }}
-                  >
+                  <li className="roster-ungrouped-zone" data-drop-ungrouped="1">
                     Sans groupe
                   </li>
                 )}
