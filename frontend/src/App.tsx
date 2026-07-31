@@ -13,12 +13,23 @@ import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
 import {
   DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
-  type DragEndEvent, type DragStartEvent,
+  type DragEndEvent, type DragOverEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
 const LUMITRACK_FILTER = [{ name: 'Projet Lumitrack', extensions: ['lumitrack'] }]
+
+/** Le curseur au-dessus de la moitié basse d'une ligne = insertion APRÈS
+ * elle, moitié haute = AVANT — même convention que la plupart des listes
+ * triables (Trello, Notion, etc.). `active.rect.current` n'a de valeur
+ * `translated` qu'une fois le geste commencé ; `initial` sert de repli. */
+function isInsertingAfter(event: DragOverEvent | DragEndEvent): boolean {
+  const activeRect = event.active.rect.current.translated ?? event.active.rect.current.initial
+  const overRect = event.over?.rect
+  if (!activeRect || !overRect) return false
+  return activeRect.top + activeRect.height / 2 > overRect.top + overRect.height / 2
+}
 
 /** Dialogue "Enregistrer sous…" : toujours affiché, crée/écrase un fichier
  * .lumitrack au chemin choisi (dossier créé si besoin côté backend). */
@@ -177,12 +188,16 @@ function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }
  * onClick (Ctrl/Maj/clic simple) : le PointerSensor de dnd-kit n'intercepte
  * le geste qu'au-delà d'un seuil de mouvement, un simple clic remonte donc
  * normalement (voir activationConstraint dans App). */
-function RosterPointRow({ point, selected, moving, offstage, onSelect }: {
+function RosterPointRow({ point, selected, moving, offstage, onSelect, dropLine }: {
   point: Point
   selected: boolean
   moving: boolean
   offstage: boolean
   onSelect: (e: React.MouseEvent) => void
+  /** Trait indiquant où l'élément glissé tomberait s'il était lâché ici —
+   * seul moyen fiable de viser la toute dernière place d'une liste
+   * (demande de Florian). null = pas la cible actuelle du survol. */
+  dropLine: 'before' | 'after' | null
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `point:${point.id}`,
@@ -193,11 +208,12 @@ function RosterPointRow({ point, selected, moving, offstage, onSelect }: {
     transition: transition ?? undefined,
     opacity: isDragging ? 0.4 : undefined,
   }
+  const dropLineClass = dropLine ? ` roster-drop-line-${dropLine}` : ''
   return (
     <li
       ref={setNodeRef}
       style={style}
-      className={selected ? 'selected' : ''}
+      className={`${selected ? 'selected' : ''}${dropLineClass}`}
       onClick={onSelect}
       {...attributes}
       {...listeners}
@@ -220,7 +236,7 @@ function RosterPointRow({ point, selected, moving, offstage, onSelect }: {
  * d'où vient l'élément actif). Les contrôles internes (caret, renommage,
  * suppression) coupent la propagation du pointerdown en plus du clic, sinon
  * les utiliser pourrait être lu comme le tout début d'un glisser de dossier. */
-function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleCollapse, onStartRename, onCommitRename, onCancelRename, onDelete, onSelectAll }: {
+function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleCollapse, onStartRename, onCommitRename, onCancelRename, onDelete, onSelectAll, dropLine }: {
   group: RosterGroup
   memberCount: number
   collapsed: boolean
@@ -231,6 +247,7 @@ function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleColl
   onCancelRename: () => void
   onDelete: () => void
   onSelectAll: () => void
+  dropLine: 'before' | 'after' | null
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `group:${group.id}`,
@@ -241,11 +258,12 @@ function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleColl
     transition: transition ?? undefined,
     opacity: isDragging ? 0.4 : undefined,
   }
+  const dropLineClass = dropLine ? ` roster-drop-line-${dropLine}` : ''
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className="roster-group-head"
+      className={`roster-group-head${dropLineClass}`}
       onClick={onSelectAll}
       {...attributes}
       {...listeners}
@@ -426,6 +444,15 @@ function App() {
 
   const activeDragIdsRef = useRef<string[]>([])
   const [activeDragLabel, setActiveDragLabel] = useState<string | null>(null)
+  // Ligne indiquant où l'élément tombera (demande de Florian : sans repère
+  // visuel explicite, difficile de viser la toute dernière place d'un
+  // dossier). Recalculée à chaque survol — seul un id + un booléen sont
+  // conservés, chaque ligne compare juste son propre id pour savoir si
+  // elle doit afficher un trait.
+  const [dropIndicator, setDropIndicator] = useState<{ overId: string; after: boolean } | null>(null)
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    setDropIndicator(event.over ? { overId: String(event.over.id), after: isInsertingAfter(event) } : null)
+  }, [])
 
   // Déplace des acteurs vers `targetGroupId` (null = sans groupe), insérés
   // juste avant `beforeId` dans l'ordre global (null = à la fin) — un seul
@@ -468,6 +495,7 @@ function App() {
     const ids = activeDragIdsRef.current
     activeDragIdsRef.current = []
     setActiveDragLabel(null)
+    setDropIndicator(null)
     const activeData = event.active.data.current as RosterDragData | undefined
     const overId = event.over ? String(event.over.id) : null
     if (!overId || !activeData) return
@@ -488,11 +516,13 @@ function App() {
       const targetGroupId = overId.slice('group:'.length)
       if (activeData.type === 'group') {
         if (activeData.groupId !== targetGroupId) {
-          // Réordonner les dossiers : place le dossier glissé juste avant celui-ci.
+          // Réordonner les dossiers : moitié basse de l'en-tête visé =
+          // après lui, moitié haute = avant (même convention que les lignes).
           const proj = rosterProjectRef.current
           if (!proj) return
           const order = proj.rosterGroups.map((g) => g.id).filter((id) => id !== activeData.groupId)
-          const at = order.indexOf(targetGroupId)
+          const targetIdx = order.indexOf(targetGroupId)
+          const at = isInsertingAfter(event) ? targetIdx + 1 : targetIdx
           order.splice(at, 0, activeData.groupId)
           sidecar.setRosterGroups(order.map((id) => proj.rosterGroups.find((g) => g.id === id)!))
         }
@@ -506,7 +536,19 @@ function App() {
       const proj = rosterProjectRef.current
       const targetPoint = proj?.points.find((p) => p.id === targetPointId)
       if (activeData.type === 'point') {
-        if (!ids.includes(targetPointId)) moveDroppedIds(ids, targetPoint?.rosterGroupId ?? null, targetPointId)
+        if (ids.includes(targetPointId)) return
+        const targetGroupId = targetPoint?.rosterGroupId ?? null
+        // Position exacte au sein du MÊME conteneur (dossier ou sans
+        // groupe) que la ligne visée : moitié basse = après elle (donc
+        // avant le membre suivant, ou en toute fin s'il n'y en a pas —
+        // seul moyen de "tomber en dernière place" dans un groupe), moitié
+        // haute = avant elle.
+        const containerMembers = (proj?.points ?? []).filter((p) => p.rosterGroupId === targetGroupId)
+        const targetIdx = containerMembers.findIndex((p) => p.id === targetPointId)
+        const beforeId = isInsertingAfter(event)
+          ? (containerMembers[targetIdx + 1]?.id ?? null)
+          : targetPointId
+        moveDroppedIds(ids, targetGroupId, beforeId)
       } else {
         // Un dossier déposé sur une ligne précise : rejoint le groupe de
         // cette ligne (comme sur son en-tête), sans viser une position
@@ -686,7 +728,7 @@ function App() {
         gridTemplateRows: `26px 1fr 6px ${timelineHeight}px`,
       }}
     >
-      <DndContext sensors={dndSensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      <DndContext sensors={dndSensors} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
       <MenuBar menus={menus} />
 
       <aside className="roster">
@@ -788,6 +830,7 @@ function App() {
                           }
                         }}
                         onSelectAll={() => setSelectedPointIds(members.map((m) => m.id))}
+                        dropLine={dropIndicator?.overId === `group:${group.id}` ? (dropIndicator.after ? 'after' : 'before') : null}
                       />
                       {!collapsed && (
                         <SortableContext
@@ -803,6 +846,7 @@ function App() {
                                 moving={movingPointIds.has(p.id)}
                                 offstage={!positions[p.id]}
                                 onSelect={selectRange(p)}
+                                dropLine={dropIndicator?.overId === `point:${p.id}` ? (dropIndicator.after ? 'after' : 'before') : null}
                               />
                             ))}
                           </ul>
@@ -824,6 +868,7 @@ function App() {
                       moving={movingPointIds.has(p.id)}
                       offstage={!positions[p.id]}
                       onSelect={selectRange(p)}
+                      dropLine={dropIndicator?.overId === `point:${p.id}` ? (dropIndicator.after ? 'after' : 'before') : null}
                     />
                   ))}
                 </SortableContext>
