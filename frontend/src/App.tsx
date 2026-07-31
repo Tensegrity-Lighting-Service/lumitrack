@@ -263,6 +263,8 @@ function App() {
     // fin) — un seul geste fait à la fois le classement ET le rangement,
     // comme glisser un fichier dans un dossier à un endroit précis.
     const moveDroppedIds = (draggedIds: string[], targetGroupId: string | null, beforeId: string | null) => {
+      // eslint-disable-next-line no-console
+      console.log('[roster-dnd] moveDroppedIds', { draggedIds, targetGroupId, beforeId })
       const proj = rosterProjectRef.current
       if (!proj) return
       const rest = proj.points.map((p) => p.id).filter((id) => !draggedIds.includes(id))
@@ -286,6 +288,16 @@ function App() {
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
     }
     const onDrop = (e: DragEvent) => {
+      // DIAGNOSTIC TEMPORAIRE (2026-07-31) — à retirer une fois le vrai
+      // point de blocage identifié. Ouvrir la console de la fenêtre (clic
+      // droit > Inspecter, ou F12) avant d'essayer un glisser, et copier
+      // ce qui s'affiche ici.
+      // eslint-disable-next-line no-console
+      console.log('[roster-dnd] onDrop fired', {
+        clientX: e.clientX, clientY: e.clientY,
+        hasDataTransfer: Boolean(e.dataTransfer),
+        types: e.dataTransfer ? Array.from(e.dataTransfer.types) : null,
+      })
       if (!e.dataTransfer) return
       // elementFromPoint plutôt que e.target : pour un drop natif routé par
       // l'OS (dragDropEnabled: false laisse la WebView gérer elle-même la
@@ -295,6 +307,11 @@ function App() {
       // la scène 3D, qui ne dépend jamais de e.target, lui, fonctionnait).
       const atPoint = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
       const target = atPoint?.closest('[data-drop-point], [data-drop-group-header], [data-drop-ungrouped]') as HTMLElement | null
+      // eslint-disable-next-line no-console
+      console.log('[roster-dnd] elementFromPoint', {
+        atPointTag: atPoint?.tagName, atPointClass: atPoint?.className,
+        targetFound: Boolean(target), targetDataset: target ? { ...target.dataset } : null,
+      })
       if (!target) return
       e.preventDefault()
       const groupHeaderId = target.dataset.dropGroupHeader
@@ -302,6 +319,8 @@ function App() {
         const proj = rosterProjectRef.current
         if (!proj) return
         const srcGroupId = e.dataTransfer.getData('application/x-lumitrack-group')
+        // eslint-disable-next-line no-console
+        console.log('[roster-dnd] branche dossier', { groupHeaderId, srcGroupId })
         if (srcGroupId && srcGroupId !== groupHeaderId) {
           // Réordonner les dossiers : place srcGroup juste avant celui-ci.
           const order = proj.rosterGroups.map((g) => g.id).filter((id) => id !== srcGroupId)
@@ -311,6 +330,8 @@ function App() {
           return
         }
         const ids = extractPointIds(e.dataTransfer)
+        // eslint-disable-next-line no-console
+        console.log('[roster-dnd] ids extraits pour le dossier', ids)
         if (ids.length === 0) return
         moveDroppedIds(ids, groupHeaderId, null)
         return
@@ -578,6 +599,8 @@ function App() {
                   if (ids.length > 1) e.dataTransfer.setData('application/x-lumitrack-points', JSON.stringify(ids))
                   else e.dataTransfer.setData('application/x-lumitrack-point', point.id)
                   e.dataTransfer.effectAllowed = 'copyMove'
+                  // eslint-disable-next-line no-console
+                  console.log('[roster-dnd] onDragStart acteur', { ids })
                 }}
                 onClick={selectRange(point)}
               >
@@ -619,6 +642,8 @@ function App() {
                           e.dataTransfer.setData('application/x-lumitrack-points', JSON.stringify(members.map((m) => m.id)))
                           e.dataTransfer.setData('application/x-lumitrack-group', group.id)
                           e.dataTransfer.effectAllowed = 'copyMove'
+                          // eslint-disable-next-line no-console
+                          console.log('[roster-dnd] onDragStart dossier', { groupId: group.id })
                         }}
                         onClick={() => {
                           // Sélectionne tout le groupe d'un clic (§demande
