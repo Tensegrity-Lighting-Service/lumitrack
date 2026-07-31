@@ -640,3 +640,181 @@ ligne, glisser un acteur sur un dossier range ET réordonne en un seul
 geste, glisser un dossier sur un autre les réordonne entre eux, Suppr
 supprime la sélection). Modèle et sidecar inchangés — seule la couche
 frontend a changé de forme.
+
+**Saga drag-and-drop du roster (2026-07-31/08-01)** : trois tentatives de
+réimplémenter le geste à la main ont échoué dans cette WebView — HTML5
+natif d'abord (bloqué par `dragDropEnabled` de Tauri, activé par défaut ;
+puis, une fois désactivé, dragstart se déclenchait mais plus RIEN ne
+suivait — dragover/drop/dragend absents même en écoutant au niveau window
+en capture, diagnostiqué avec logs + vidéo), puis un système pointer-events
+maison (fonctionnel mais entrait en course avec le lasso de sélection de la
+scène — même bug de fond que celui déjà rencontré et à moitié corrigé sur
+la boîte de transformation, cf. juste en dessous). Florian a tranché :
+passer par une librairie éprouvée plutôt que de continuer à fabriquer.
+**`@dnd-kit/core` + `@dnd-kit/sortable`** remplacent tout : `useSortable`
+sur chaque ligne/dossier (glissable ET cible de dépôt en un seul hook,
+anime le décalage des autres éléments), la scène 3D devient une zone
+`useDroppable` avec le point d'impact recalculé via une méthode impérative
+exposée par `Scene` (`placeActorsAt`, forwardRef/useImperativeHandle — plus
+de listeners HTML5 sur le canvas). Un trait indique où l'élément tombera
+(avant/après selon la moitié survolée, calculé depuis la position réelle du
+curseur — pas le rectangle de l'élément traîné, qui décale le point de
+bascule). `dragDropEnabled` de Tauri est resté à sa valeur par défaut
+(plus rien ne dépend du HTML5 natif). Popup d'ajout d'acteurs en lot
+ajouté au passage (nom de base + quantité, numérotation sur le premier
+trou libre, couleur cyclée sur une palette).
+**Leçon retenue pour la suite** : préférer une librairie éprouvée à du code
+maison pour toute interaction un peu riche (drag-and-drop, gizmos 3D,
+etc.) — voir la mission "refonte AE/Reaper" ci-dessous, qui applique le
+même principe à la boîte de transformation.
+
+### Mission "refonte inspirée After Effects / Reaper" (2026-08-01) — EN COURS
+
+Florian trouve l'ensemble scène/timeline/graph editor/boîte de
+transformation "trop rigide et pas assez visuel". Discussion complète
+avant tout codage (résumée ici pour survivre à un redémarrage de
+session) ; direction validée, à construire dans cet ordre de priorité
+(le plus sûr/utile d'abord) :
+
+**1. Boîte de transformation** — remplacer `SelectionTransform` (fabriqué
+à la main : instabilité de rotation près du pivot, course avec le lasso
+déjà partiellement corrigée) par `TransformControls`/`PivotControls` de
+`@react-three/drei` (déjà une dépendance). Gizmo éprouvé par des milliers
+de projets three.js, gère nativement la capture de pointeur et les
+contraintes d'axe — contraindre au plan XZ + rotation Y seule (vue du
+dessus). Analogie explicite avec la boîte AE : poignées claires, geste
+fluide.
+
+**2. Ligne d'automation dans un bloc** — supprimée pour x/y/z (déjà
+visible dans la scène, redondant) ; gardée seulement pour le lacet (moins
+lisible visuellement en vue du dessus). Remplacée pour le reste par un
+**overlay de trajectoire à la sélection** : sélectionner un ou plusieurs
+acteurs (scène ou roster) affiche leur courbe de déplacement en overlay
+sur la timeline, plutôt qu'une ligne permanente par bloc pour tout le
+monde (le "foutoir" que craignait Florian avec un modèle façon calques
+AE — un bloc reste un bloc partagé entre acteurs, pas une ligne par
+acteur).
+
+**3. Geste libre de déplacement dans la scène** — plus besoin de
+sélectionner un bloc avant de bouger un acteur ; sélectionner l'acteur
+(scène ou roster) suffit. Selon la position du playhead au moment du
+geste :
+   - **Trou** (aucun bloc ne gouverne l'acteur ici) → crée un nouveau
+     bloc, arrivée = playhead, début = playhead − distance/vitesse de
+     référence (chevauchement toléré sur les blocs voisins, LTP tranche
+     comme aujourd'hui pour deux blocs qui se chevauchent).
+   - **Plein fade d'un bloc actif** → insère un nœud dans le tracé spatial
+     à cet instant (réutilise le système de waypoints/tracé courbe déjà
+     livré en Mission 1 — juste un nouveau déclencheur, pas un nouveau
+     mécanisme).
+   - **Maintien** (après la fin du fade) → modifie simplement la cible,
+     comportement actuel inchangé.
+   - **Vitesse de référence** : réglage PROJET (pas une constante), par
+     défaut ~2 à 2,5 m/s (pas vif/jogging léger — cf. données générales de
+     vitesse humaine : marche ~1,3 m/s, jogging ~2,2 m/s, course ~2,2-2,8
+     m/s soutenue jusqu'à ~3,6-4 m/s en pointe, sprint tenable 5-10 s
+     ~4,5-5,8 m/s ; rien de spécifique à la danse trouvé, ce sont des
+     stats de population générale).
+   - **Bloc "durée automatique"** (option par bloc) : recalcule la durée
+     par défaut selon distance/vitesse — mais seulement pour les acteurs
+     NON personnalisés (voir point 6) ; un acteur personnalisé sort du
+     recalcul automatique tant qu'il reste personnalisé.
+   - **Thermomètre de vitesse** : indicateur visuel seul (jauge colorée
+     marche/jogging/course/sprint), jamais une contrainte bloquante —
+     tranché explicitement par Florian.
+   - **Aperçu pendant le geste** : bloc fantôme qui se dessine en temps
+     réel dans la timeline (position + durée) pendant le glisser.
+
+**4. Diviser un bloc au playhead** (nouvelle action, menu contextuel du
+bloc) — fige la position de CHAQUE acteur activé à l'instant précis du
+playhead (nouvelle cible = position interpolée à cet instant) dans le
+premier bloc résultant ; le second bloc reçoit une nouvelle activation par
+acteur avec pour cible la destination D'ORIGINE du bloc initial — la
+trajectoire globale ne change pas, on ajoute juste un point de passage dur
+et éditable au milieu. Si on éloigne le second bloc dans le temps après
+coup, les acteurs attendent simplement plus longtemps à leur position
+figée avant de repartir — automatique, c'est déjà le mécanisme de
+maintien/LTP existant, aucune logique spéciale à écrire pour ça.
+
+**5. Modes de rotation, par bloc OU par acteur** (3 modes) :
+   - **Manuel** (existant, inchangé) : valeur animée comme aujourd'hui.
+   - **Suivre la trajectoire** : le lacet devient la tangente de la
+     trajectoire résolue à cet instant (`atan2` de la direction de
+     déplacement) ; garde la dernière direction de marche pendant le
+     maintien.
+   - **Focus** : vise un point fixe (`focusXCm`/`focusYCm`, nouveaux
+     champs), `atan2` recalculé en continu selon la position de l'acteur.
+   - Le champ `orientationMode` existe DÉJÀ dans le modèle (Python ET TS,
+     `manual`/`path`) mais n'est branché nulle part dans la résolution —
+     juste à étendre à 3 valeurs et à réellement l'utiliser dans
+     `resolve_positions`/`resolve_block_context` (Python + miroir Rust).
+   - Réglage définitif par activation (bloc) ; un réglage par défaut au
+     niveau Point préremplit simplement les nouvelles activations de cet
+     acteur, sans autorité sur celles déjà réglées.
+
+**6. Timing global (bloc) vs sélectif (acteur)** — analogie validée par
+Florian. Le bloc fournit une valeur par défaut (fade, et nouveau champ
+**décalage de départ** par acteur, pour des effets d'entrée en escalier/
+vague) ; un acteur peut personnaliser individuellement. Clic droit
+"revenir au réglage du bloc" efface la personnalisation et réintègre
+l'acteur dans le calcul automatique du point 3. **Décalage en escalier** :
+respecte l'ORDRE DE SÉLECTION des acteurs (déjà suivi dans
+`selectedPointIds`, aucun nouveau suivi à écrire) — incrément en ms
+réglable par champ numérique ET par poignée à glisser directement dans la
+sous-timeline de sélection du point 2 (façon "time stretch" AE).
+
+**7. Refonte de l'inspecteur** — actuellement `CueInspector` affiche TOUTES
+les activations d'un bloc dépliées en même temps (pas l'esprit AE, où le
+panneau de propriétés suit la sélection du calque). Nouvelle version :
+   - Par défaut, liste compacte des acteurs activés (nom + couleur,
+     cliquables), pas leurs champs.
+   - Sélectionner un acteur affiche SES champs en détail, un seul à la
+     fois.
+   - Sélection multiple → panneau de timing groupé existant (fade/easing/
+     décalage en escalier).
+   - Sections visuelles distinctes Position / Rotation / Timing plutôt
+     qu'une grille plate.
+   - Valeurs scrubables à la souris (glisser sur l'étiquette, façon AE/
+     Blender) en plus du nudge clavier qui existe déjà (`NumericInput`,
+     flèches Haut/Bas, Maj=×10).
+
+**8. Table des menus contextuels (clic droit)** — validée :
+
+| Cible | Actions |
+|---|---|
+| Acteur (scène/roster) | Renommer, couleur, mode d'orientation par défaut, assigner un dossier, dupliquer, supprimer, aller à sa zone backstage |
+| Terrain/scène (vide) | Placer un acteur ici (popup, liste d'acteurs existants — pas création), grille on/off, ajuster à la fenêtre |
+| Bloc (timeline) | Renommer, dupliquer, supprimer, couleur, durée auto/manuelle, diviser au playhead, copier le timing vers d'autres acteurs |
+| Piste vide (timeline) | Nouveau bloc ici (reprend une plage sélectionnée si il y en a une, point 9), coller un bloc copié |
+| Piste audio | Importer, retirer |
+| Règle/playhead | Aller au début/fin |
+
+**9. Polish visuel de la timeline, inspiré Reaper** :
+   - **Grille du temps** : contraste actuel bien trop faible (vérifié —
+     sous-graduation à 2,8% d'opacité, majeure à 7% seulement) ; refonte
+     avec une vraie hiérarchie visuelle (mesures nettes/lumineuses,
+     subdivisions modérées, sous-graduation discrète mais réellement
+     visible).
+   - **Zoom par défaut** trop petit à l'ouverture (le premier cadrage
+     ajuste toute la durée du projet dans la fenêtre — minuscule pour un
+     projet long) : zoom par défaut fixe raisonnable, ou plancher minimum
+     même en mode "ajuster".
+   - **Sélection de plage temporelle** (glisser sur la règle/le vide, PAS
+     un bloc) : popup qui suit la souris avec départ/fin/durée en direct,
+     éditable au clavier. Peut servir à créer un bloc directement avec ce
+     timing (menu contextuel piste vide, point 8).
+   - Idées complémentaires dans le même esprit : surlignage translucide de
+     la plage sélectionnée sur toute la hauteur des pistes (pas juste la
+     règle) ; raccourci "zoom sur la sélection" ; marqueurs de projet
+     nommés ; vrai surlignage visuel de ce sur quoi on s'aligne pendant un
+     glisser (pas juste l'aimantation silencieuse actuelle).
+
+**10. Petites finitions** : le seul vrai spinner natif (`<input
+type="number">`, flèches minuscules) trouvé dans tout le frontend est le
+champ "Nombre à ajouter" d'`AddActorsPanel` — à uniformiser vers
+`NumericInput` comme partout ailleurs.
+
+**Périmètre volontairement pas encore tranché / à des sessions futures** :
+un système de points de focus RÉUTILISABLES et nommés (comme les zones
+backstage) plutôt que des coordonnées libres par activation, si le besoin
+s'en fait sentir à l'usage.
