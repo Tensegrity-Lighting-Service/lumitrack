@@ -235,27 +235,71 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     state.raf = requestAnimationFrame(step)
   }, [])
 
-  // Ctrl+molette = zoom au curseur (geste standard DAW) ; molette seule =
-  // défilement horizontal. Listener non-passif obligatoire pour pouvoir
-  // empêcher le zoom navigateur du Ctrl+molette.
+  // Molette seule = zoom au curseur (geste standard DAW : Logic/Ableton/
+  // Premiere zooment direct à la molette, pas besoin de modificateur) ;
+  // Maj+molette = défilement horizontal (2026-07-31, remplace l'ancienne
+  // convention Ctrl+molette=zoom / molette seule=scroll, jugée moins
+  // naturelle). Listener non-passif obligatoire pour empêcher le
+  // scroll/zoom natif du navigateur.
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault()
-        zoomAt(e.deltaY < 0 ? 1.25 : 0.8, e.clientX)
-      } else {
+      if (e.shiftKey) {
         const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
         if (d !== 0) {
           e.preventDefault()
           el.scrollLeft += d
         }
+      } else {
+        e.preventDefault()
+        zoomAt(e.deltaY < 0 ? 1.25 : 0.8, e.clientX)
       }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [zoomAt])
+
+  // Clic molette + glisser = panoramique horizontal façon surface tactile :
+  // le contenu suit le curseur au pixel près (1:1, aucune accélération), et
+  // preventDefault() sur le pointerdown coupe court à l'auto-scroll natif du
+  // navigateur (icône à 4 flèches + vitesse proportionnelle à la distance
+  // au clic) qui s'active sinon sur tout conteneur scrollable — c'est cet
+  // auto-scroll natif, pas notre code, qui donnait la sensation "pourrie"
+  // signalée le 2026-07-31.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    let lastX = 0
+    const onMove = (e: PointerEvent) => {
+      el.scrollLeft -= e.clientX - lastX
+      lastX = e.clientX
+    }
+    const onUp = (e: PointerEvent) => {
+      el.releasePointerCapture(e.pointerId)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      el.style.cursor = ''
+    }
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 1) return
+      e.preventDefault()
+      lastX = e.clientX
+      el.setPointerCapture(e.pointerId)
+      el.style.cursor = 'grabbing'
+      el.addEventListener('pointermove', onMove)
+      el.addEventListener('pointerup', onUp)
+    }
+    el.addEventListener('pointerdown', onDown)
+    // auxclick : filet de sécurité si un navigateur déclenche quand même
+    // son geste d'auto-scroll natif malgré le preventDefault ci-dessus.
+    const onAuxClick = (e: MouseEvent) => { if (e.button === 1) e.preventDefault() }
+    el.addEventListener('auxclick', onAuxClick)
+    return () => {
+      el.removeEventListener('pointerdown', onDown)
+      el.removeEventListener('auxclick', onAuxClick)
+    }
+  }, [])
 
   // Suivi automatique du playhead pendant la lecture (façon Logic : la vue
   // saute quand le curseur atteint le bord droit, jamais pendant l'édition).
