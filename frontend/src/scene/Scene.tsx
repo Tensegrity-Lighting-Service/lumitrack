@@ -1256,12 +1256,18 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     const a0 = Math.atan2(refLocal.z - centerLocal.z, refLocal.x - centerLocal.x)
     const a1 = Math.atan2(refNew.z - centerNew.z, refNew.x - centerNew.x)
     drag.lastTheta = a1 - a0
+    // Pendant le geste, le lacet suit en direct (pas seulement au lâcher) —
+    // sinon la façade de l'acteur ne pivote qu'un coup sec à la fin,
+    // signalé comme "pas en temps réel". L'arc/tracé final (plus coûteux,
+    // avec poignées Bézier) reste calculé uniquement au relâchement.
+    const thetaDegLive = (drag.lastTheta * 180) / Math.PI
 
     for (const m of drag.members) {
       const qLocal = new THREE.Vector3(...stageToLocal(m.baseX, m.baseY, 0))
       const qNew = qLocal.clone().applyMatrix4(effectiveDelta)
       sidecar.setActivation(selectedCueId, m.pointId, {
         targetXCm: qNew.x / CM_TO_M, targetYCm: qNew.z / CM_TO_M,
+        ...(drag.kind === 'rotate' && m.baseYaw !== null ? { targetYawDeg: m.baseYaw + thetaDegLive } : {}),
       })
     }
   }
