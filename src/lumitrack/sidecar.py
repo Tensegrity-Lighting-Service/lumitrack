@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Optional
 
@@ -30,6 +31,36 @@ logger = logging.getLogger("lumitrack.sidecar")
 
 TICK_HZ = 30
 AUTOSAVE_INTERVAL_S = 2.0
+
+# Undo/redo (§13.1.10 "non négociable", DIRECTIVES.md Mission 3). Historique
+# côté sidecar (backend-autoritaire, §12.11) : le frontend ne garde jamais
+# lui-même d'états passés, il envoie juste `undo`/`redo`.
+#
+# Une rafale d'éditions rapprochées (un drag d'acteur/de zone envoie un
+# `set_activation`/`update_stage_map` toutes les ~33 ms tout le temps du
+# geste, la saisie inspecteur peut committer plusieurs fois de suite) doit
+# rester UN SEUL pas d'annulation, pas un par message réseau — sinon
+# annuler un simple drag demanderait des dizaines de Ctrl+Z. Un nouveau
+# point de reprise n'est ouvert que si la dernière édition remonte à plus de
+# UNDO_COALESCE_S : tant que les messages s'enchaînent plus vite que ça
+# (un geste continu), ils fusionnent dans l'entrée déjà ouverte.
+UNDO_COALESCE_S = 0.7
+UNDO_MAX_DEPTH = 200
+
+# Types de commande qui modifient le contenu du projet et doivent donc être
+# annulables. Volontairement exclus : transport (lecture, pas édition),
+# psn_start/stop et update_psn_config (réglages réseau/sortie, pas contenu
+# créatif), resolve_block_context/list_ifaces/psn_preview (lecture seule).
+MUTATING_COMMANDS = {
+    "set_audio", "update_point", "update_stage_map", "set_backstage_zones",
+    "add_point", "add_cue", "update_cue", "delete_cue", "set_activation",
+    "apply_group_transform",
+}
+# Remplacement intégral du projet : l'historique d'un AUTRE projet n'a plus
+# de sens une fois chargé un nouveau, donc on le vide plutôt que de le
+# rendre annulable (annuler un "Nouveau projet" ramènerait dans l'ancien
+# projet sans qu'on l'ait "ouvert" — confusion garantie avec Fichier/Ouvrir).
+RESET_UNDO_COMMANDS = {"new_project", "import_stancz", "load_bundle"}
 
 
 def autosave_path() -> str:
@@ -106,6 +137,12 @@ class Session:
         self.broadcaster = PsnBroadcaster(self.transport)
         self._apply_psn_config()
         self.clients: set = set()
+        self._undo_stack: list = []
+        self._redo_stack: list = []
+        # None, not 0.0: a real time.monotonic() reading could legitimately
+        # be small (platform-dependent epoch), which would collide with a
+        # 0.0 sentinel and wrongly coalesce the very first edit away.
+        self._last_edit_wall: Optional[float] = None
 
     def _apply_psn_config(self):
         self.broadcaster.transform = OutputTransform.from_project(self.project)
@@ -125,11 +162,52 @@ class Session:
         self.transport.set_duration(self.timeline.duration_ms)
         self._apply_psn_config()
 
+    # ---- undo/redo ----
+
+    def checkpoint_undo(self):
+        """Call BEFORE applying a mutating command. Opens a new undo entry
+        unless the previous edit was less than UNDO_COALESCE_S ago — see
+        module docstring for why (gesture coalescing)."""
+        now = time.monotonic()
+        if self._last_edit_wall is None or now - self._last_edit_wall > UNDO_COALESCE_S:
+            self._undo_stack.append(self.project.to_dict())
+            if len(self._undo_stack) > UNDO_MAX_DEPTH:
+                del self._undo_stack[0]
+            self._redo_stack.clear()
+        self._last_edit_wall = now
+
+    def reset_undo_history(self):
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._last_edit_wall = None
+
+    def undo(self) -> bool:
+        if not self._undo_stack:
+            return False
+        current = self.project.to_dict()
+        previous = self._undo_stack.pop()
+        self._redo_stack.append(current)
+        self.set_project(Project.from_dict(previous))
+        self._last_edit_wall = None  # next edit always opens a fresh entry
+        return True
+
+    def redo(self) -> bool:
+        if not self._redo_stack:
+            return False
+        current = self.project.to_dict()
+        nxt = self._redo_stack.pop()
+        self._undo_stack.append(current)
+        self.set_project(Project.from_dict(nxt))
+        self._last_edit_wall = None
+        return True
+
     # ---- outbound snapshots ----
 
     def project_message(self) -> dict:
         return {"type": "project", "project": self.project.to_dict(),
-                "psnRunning": self.broadcaster.running}
+                "psnRunning": self.broadcaster.running,
+                "undoAvailable": bool(self._undo_stack),
+                "redoAvailable": bool(self._redo_stack)}
 
     def tick_message(self) -> dict:
         t_ms = self.transport.now_ms()
@@ -193,6 +271,21 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
     only to the requester, or None — in which case the caller broadcasts a
     fresh project snapshot to every connected client."""
     msg_type = msg.get("type")
+
+    if msg_type in MUTATING_COMMANDS:
+        session.checkpoint_undo()
+    elif msg_type in RESET_UNDO_COMMANDS:
+        session.reset_undo_history()
+
+    if msg_type == "undo":
+        if not session.undo():
+            return {"type": "ack"}  # rien à annuler : no-op silencieux
+        return None
+
+    if msg_type == "redo":
+        if not session.redo():
+            return {"type": "ack"}
+        return None
 
     if msg_type == "transport":
         # Never falls through to a project broadcast: `seek` fires on every
