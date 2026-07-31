@@ -2272,12 +2272,19 @@ function SceneContent({
                 )
               })()}
               {entry.targetPose && (
-                <TargetGhost
-                  pose={entry.targetPose}
-                  color={point.color}
-                  emphasis={emphasis}
-                  onPointerDown={(e) => handleGhostPointerDown(e, point.id, entry.targetPose![2])}
-                />
+                <>
+                  <TargetGhost
+                    pose={entry.targetPose}
+                    color={point.color}
+                    emphasis={emphasis}
+                    onPointerDown={(e) => handleGhostPointerDown(e, point.id, entry.targetPose![2])}
+                  />
+                  <ActorLabel
+                    text={actorLabelText(point)}
+                    xCm={entry.targetPose[0]} yCm={entry.targetPose[1]} zCm={entry.targetPose[2]}
+                    opacity={EMPHASIS_OPACITY[emphasis]}
+                  />
+                </>
               )}
             </group>
           )
