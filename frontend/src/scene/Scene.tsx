@@ -1294,6 +1294,28 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     }
   }
 
+  // Filet de sécurité : si PivotControls ne redéclenche pas onDragEnd pour
+  // une raison ou une autre (relâchement hors fenêtre, démontage du
+  // composant pendant le geste si la sélection change entre-temps, etc.),
+  // dragActiveRef resterait bloqué à true POUR TOUJOURS — et avec lui,
+  // TOUS les lassos suivants seraient silencieusement ignorés (leur garde
+  // vérifie justement cette référence), ce qui ressemble à "la sélection
+  // multiple ne marche plus" alors que le vrai problème est bien plus en
+  // amont (2026-08-01, signalé par Florian). Un simple pointerup/
+  // pointercancel global qui force la remise à zéro si un geste semblait
+  // actif referme ce risque sans dépendre de PivotControls pour le faire.
+  useEffect(() => {
+    const onGlobalPointerUp = () => {
+      if (dragRef.current) handleDragEnd()
+    }
+    window.addEventListener('pointerup', onGlobalPointerUp)
+    window.addEventListener('pointercancel', onGlobalPointerUp)
+    return () => {
+      window.removeEventListener('pointerup', onGlobalPointerUp)
+      window.removeEventListener('pointercancel', onGlobalPointerUp)
+    }
+  }, [selectedCueId])
+
   const outline = [
     new THREE.Vector3(...stageToLocal(minX, minY, 0)),
     new THREE.Vector3(...stageToLocal(maxX, minY, 0)),
