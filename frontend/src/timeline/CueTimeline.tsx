@@ -637,7 +637,6 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                         selectedPointId={selectedPointId}
                         widthPx={Math.max(4, dur * effPxPerMs)}
                         heightPx={LANE_H - 6}
-                        pxPerMs={effPxPerMs}
                       />
                     )}
                     <div className="cue-resize cue-resize-l" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-l')} />

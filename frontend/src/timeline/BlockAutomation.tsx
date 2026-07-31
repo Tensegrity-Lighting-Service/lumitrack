@@ -28,13 +28,12 @@ function touchedAxes(act: Cue['activations'][string]): string[] {
   return out.length ? out : ['x']
 }
 
-export function BlockAutomation({ cue, selected, selectedPointId, widthPx, heightPx, pxPerMs }: {
+export function BlockAutomation({ cue, selected, selectedPointId, widthPx, heightPx }: {
   cue: Cue
   selected: boolean
   selectedPointId: string | null
   widthPx: number
   heightPx: number
-  pxPerMs: number
 }) {
   const pointIds = Object.keys(cue.activations)
   const repId = selectedPointId && cue.activations[selectedPointId] ? selectedPointId : pointIds[0]
@@ -60,7 +59,17 @@ export function BlockAutomation({ cue, selected, selectedPointId, widthPx, heigh
 
   if (!rep || pointIds.length === 0) return null
 
-  const fadeW = Math.max(4, Math.min(widthPx, (rep.fadeMs || 1) * pxPerMs))
+  // La ligne occupe TOUJOURS 100% de la largeur du bloc (2026-07-31) — pas
+  // seulement la fenêtre de fade_ms de l'activation représentative. Avant
+  // ce fix, un bloc plus long que le fade (le cas courant : un fade de 1,5s
+  // dans un bloc de 4s) laissait une portion du bloc sans aucune ligne
+  // dessinée, ET pour le lacet (fenêtre de fondu propre, plafonnée à 400 ms
+  // — voir YAW_TURN_MS côté Python/Rust) la ligne semblait mentir sur la
+  // durée réelle du virage, dessinée sur la largeur du fade_ms STOCKÉ (non
+  // plafonné) plutôt que sur celle du bloc. Purement visuel : ne change
+  // rien à la sémantique des nœuds de courbe (toujours interprétés côté
+  // backend comme une fraction de la fenêtre de fade réelle de l'axe).
+  const fadeW = Math.max(4, widthPx)
 
   // Cadrage vertical : [0,1] étendu par l'overshoot éventuel.
   let vMin = 0
