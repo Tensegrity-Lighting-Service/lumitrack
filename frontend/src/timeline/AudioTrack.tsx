@@ -31,6 +31,49 @@ interface Peaks {
   durationS: number
 }
 
+// ---- cache des pics (IndexedDB) ----
+//
+// computePeaksAsync est le coût réel de la réouverture d'un projet avec
+// audio (le fix "chunké" ci-dessous existe justement parce que ça pouvait
+// geler l'UI) — décodage mis à part (rapide, natif), reparcourir tous les
+// buckets à chaque lancement de l'app pour un fichier qui n'a pas changé
+// est du travail refait pour rien (demande de Florian, 2026-07-31).
+// IndexedDB survit aux redémarrages complets de l'app (contrairement à une
+// simple variable module) et stocke les Float32Array directement, sans
+// sérialisation JSON. Clé = chemin du fichier ; la durée redécodée sert de
+// vérification légère (si elle diverge, le fichier a changé sous ce
+// chemin, on ignore le cache plutôt que d'afficher une forme fausse).
+const PEAKS_DB_NAME = 'lumitrack-waveform-cache'
+const PEAKS_STORE = 'peaks'
+
+function openPeaksDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(PEAKS_DB_NAME, 1)
+    req.onupgradeneeded = () => { req.result.createObjectStore(PEAKS_STORE) }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+}
+
+async function loadCachedPeaks(key: string): Promise<Peaks | null> {
+  try {
+    const db = await openPeaksDb()
+    return await new Promise((resolve, reject) => {
+      const req = db.transaction(PEAKS_STORE, 'readonly').objectStore(PEAKS_STORE).get(key)
+      req.onsuccess = () => resolve((req.result as Peaks | undefined) ?? null)
+      req.onerror = () => reject(req.error)
+    })
+  } catch {
+    return null // cache indisponible : on recalcule, jamais bloquant
+  }
+}
+
+function saveCachedPeaks(key: string, peaks: Peaks): void {
+  openPeaksDb()
+    .then((db) => { db.transaction(PEAKS_STORE, 'readwrite').objectStore(PEAKS_STORE).put(peaks, key) })
+    .catch(() => { /* best-effort : une écriture ratée ne doit rien casser */ })
+}
+
 /** Calcul des pics DÉCOUPÉ EN TRANCHES : chaque tranche de buckets rend la
  * main au navigateur (setTimeout 0) avant la suivante — l'interface reste
  * fluide pendant tout le calcul (fix « app freezée à l'import audio »).
@@ -105,8 +148,17 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
     ws.on('decode', () => {
       const buffer = ws.getDecodedData()
       if (!buffer) return
-      computePeaksAsync(buffer, () => cancelled).then((result) => {
-        if (result && !cancelled) setPeaks(result)
+      loadCachedPeaks(audioPath).then((cached) => {
+        if (cancelled) return
+        if (cached && Math.abs(cached.durationS - buffer.duration) < 0.05) {
+          setPeaks(cached)
+          return
+        }
+        computePeaksAsync(buffer, () => cancelled).then((result) => {
+          if (!result || cancelled) return
+          setPeaks(result)
+          saveCachedPeaks(audioPath, result)
+        })
       })
       // Le backend intègre la durée réelle au transport ; on ne l'envoie
       // que si elle manque ou diverge (> 50 ms).
