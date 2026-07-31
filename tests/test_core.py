@@ -199,6 +199,79 @@ def test_transform_swap_axes():
     assert (x, y) == pytest.approx((2.0, 1.0))
 
 
+# ------------------------------------------------- stage-map -> PSN calage --
+#
+# Regression coverage for the 2026-07-31 mismatch: a stage centred on a
+# terrain via the "Éditer la zone de jeu" gizmo (stage_map_origin_x_m/z_m,
+# CONCEPTION.md §4/§14.3) used to have zero effect on PSN output, so a point
+# shown correctly aligned with the terrain in Lumitrack's own 3D view landed
+# roughly half a stage-width away in the previz (Capture) sharing that same
+# terrain. `OutputTransform.to_metres` now folds the stage-map placement in
+# before origin/invert/swap, using the identical rotate-then-translate
+# formula `fit`/`StageGroup` apply in Scene.tsx.
+
+def test_stage_map_defaults_are_a_no_op():
+    """A project that never touches the terrain-mapping gizmo (defaults
+    0, 0, 0°) must see byte-for-byte the same PSN output as before this
+    fix — no behaviour change for stage-only projects."""
+    t = OutputTransform(origin_x_cm=2500, origin_y_cm=1500, invert_y=True)
+    x, y, z = t.to_metres(3050, 3505, z_cm=180)
+    assert x == pytest.approx(5.5)
+    assert y == pytest.approx(-20.05)
+    assert z == pytest.approx(1.8)
+
+
+def test_stage_centred_on_terrain_lands_at_terrain_origin():
+    """The exact shape of the reported bug: a 9140x5500cm stage centred on
+    a terrain (gizmo origin = -half width/height, no rotation). The
+    stage's own centre must land at the terrain's (0, 0), matching what
+    the 3D view already shows — not offset by half the stage width."""
+    t = OutputTransform(stage_map_origin_x_m=-45.7, stage_map_origin_z_m=-27.5)
+    x, y, _z = t.to_metres(4570, 2750)
+    assert (x, y) == pytest.approx((0.0, 0.0), abs=1e-6)
+
+
+def test_stage_map_translation_matches_reported_point():
+    """The concrete point from the live project that surfaced the bug:
+    p1 in "Entree" at (8541.88, 3640.70) cm must land at the same spot the
+    3D view already draws it at (world X/Z from the stage-map placement),
+    not at the old stage-local-origin PSN position."""
+    t = OutputTransform(stage_map_origin_x_m=-45.7, stage_map_origin_z_m=-27.5)
+    x, y, _z = t.to_metres(8541.882904242537, 3640.696565453493)
+    assert x == pytest.approx(39.71882904242537)
+    assert y == pytest.approx(8.90696565453493)
+
+
+def test_stage_map_rotation_matches_frontend_convention():
+    """Rotating the stage-map placement 90° must rotate positions using the
+    exact same convention `toWorldX`/`toWorldZ` use in Scene.tsx's `fit`
+    computation, so what's drawn on screen and what's sent over PSN never
+    disagree once a terrain alignment needs rotation, not just translation."""
+    t = OutputTransform(stage_map_rotation_deg=90.0)
+    x, y, _z = t.to_metres(100, 0)  # 1m along local +X
+    assert (x, y) == pytest.approx((0.0, -1.0), abs=1e-9)
+
+
+def test_stage_map_folds_before_origin_invert_swap():
+    """Origin/invert/swap remain a fine trim applied on top of the
+    terrain-world position, not a competing frame of reference."""
+    t = OutputTransform(stage_map_origin_x_m=10.0, stage_map_origin_z_m=5.0,
+                        invert_x=True)
+    x, y, _z = t.to_metres(100, 200)  # +1m local X, +2m local Y
+    assert (x, y) == pytest.approx((-11.0, 7.0))
+
+
+def test_output_transform_from_project_reads_stage_map():
+    project = Project()
+    project.stage_map_origin_x_m = -45.7
+    project.stage_map_origin_z_m = -27.5
+    project.stage_map_rotation_deg = 15.0
+    t = OutputTransform.from_project(project)
+    assert t.stage_map_origin_x_m == -45.7
+    assert t.stage_map_origin_z_m == -27.5
+    assert t.stage_map_rotation_deg == 15.0
+
+
 # ---------------------------------------------------------- timecode ------
 
 @pytest.mark.parametrize("text,expected_ms", [

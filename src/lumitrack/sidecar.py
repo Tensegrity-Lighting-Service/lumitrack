@@ -350,6 +350,12 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             project.grid_size_cm = max(1.0, float(msg["gridSizeCm"]))
         if "terrainRotationDeg" in msg and msg["terrainRotationDeg"] is not None:
             project.terrain_rotation_deg = float(msg["terrainRotationDeg"])
+        # The stage-map placement now feeds straight into PSN output
+        # (OutputTransform.to_metres, CONCEPTION.md §4) — the live
+        # broadcaster's transform must be rebuilt immediately, not just on
+        # the next unrelated project reload, or a zone drag would keep
+        # broadcasting from the pre-drag placement.
+        session._apply_psn_config()
         return None
 
     if msg_type == "set_backstage_zones":

@@ -1163,9 +1163,10 @@ lumitrack/
         └── audio/Waveform.tsx
 ```
 
-`PYTHONPATH=src python -m pytest -q` → **57 passed** (34 hérités de v0.1 +
-12 sidecar/v2 + 11 contexte de bloc). `npm run build` (dans `frontend/`) →
-`tsc` + `vite build` propres.
+`PYTHONPATH=src python -m pytest -q` → **82 passed** au 2026-07-31 (compteur
+non tenu à jour à chaque commit intermédiaire — se fier à la commande
+elle-même, pas à ce nombre, en cas de doute). `npm run build` (dans
+`frontend/`) → `tsc` + `vite build` propres.
 
 ### 14.3 Décisions d'implémentation à connaître
 
@@ -1179,14 +1180,20 @@ lumitrack/
   **toujours** renvoyer `{"type": "ack"}`, jamais `None` — `seek` part sur
   chaque `pointermove` de scrub, un broadcast à cette fréquence provoque une
   boucle de rendu (voir bug corrigé, §14.4).
-- **Deux systèmes de transformation de repère bien distincts, ne pas les
-  confondre** :
-  - `stage_map_origin_x_m/z_m/rotation_deg` (`Project`) — **placement/édition
-    3D uniquement** : où la zone de jeu (rectangle abstrait) est posée dans
-    l'espace du terrain glTF importé. N'a aucun effet sur la sortie PSN.
-  - `transform_origin_*`/`invert_*`/`swap_xy` (existant depuis v0.1, §4) —
-    façonnent la **sortie PSN**, indépendamment de comment la zone est
-    affichée à l'écran.
+- **Calage terrain → sortie PSN, dans cet ordre** (revu le 2026-07-31,
+  §14.4) :
+  1. `stage_map_origin_x_m/z_m/rotation_deg` (`Project`) — où la zone de jeu
+     (rectangle abstrait) est posée dans l'espace du terrain glTF importé,
+     réglé par le gizmo « Éditer la zone de jeu ». **Alimente maintenant
+     aussi la sortie PSN** (`OutputTransform.to_metres`, même formule de
+     rotation que `StageGroup`/`fit` dans Scene.tsx) : un point aligné sur
+     le terrain dans la vue 3D de Lumitrack arrive au même endroit dans une
+     prévisu qui partage ce terrain. Défaut (0,0,0°) = no-op, donc aucun
+     changement pour un projet qui n'utilise pas cette poignée.
+  2. `transform_origin_*`/`invert_*`/`swap_xy` (existant depuis v0.1, §4) —
+     réglage fin appliqué **par-dessus** le repère terrain, pour les
+     conventions d'axes résiduelles (inversion Y habituelle de Capture...),
+     pas une origine concurrente.
 - **Snap générique, jamais basé sur les noms de mesh** — contrainte
   explicite de l'utilisateur : le terrain de test (`Belfius_Hockey_Arena.glb`)
   a des noms de mesh spécifiques (`Marquage_FIH`...), mais le snapping doit
@@ -1259,6 +1266,22 @@ apparaissent :
   nouvelle référence d'objet à chaque fois, ce qui redéclenchait l'effet
   d'application caméra. Fixé via un pattern `fitRef` (l'effet lit `fit` par
   ref, sans en dépendre).
+- **Écart spatial Lumitrack ↔ Capture, ~45 m sur un projet réel (2026-07-31,
+  premier test PSN contre une vraie prévisu, §14.5 point 5)** : le placement
+  du terrain (`stage_map_origin_x_m/z_m/rotation_deg`, réglé par le gizmo
+  pour caler la zone de jeu sur le terrain glTF) n'avait **aucun effet** sur
+  la sortie PSN (`OutputTransform` ne connaissait que `transform_origin_*`,
+  ancré sur le coin haut-gauche de la zone). Deux applications partageant la
+  même source 3D (le cas d'usage réel de cette fonctionnalité) recevaient
+  donc des positions différentes pour le même point : sur un projet avec une
+  scène de 91,4 × 55 m centrée sur le terrain, un acteur affiché correctement
+  au centre du terrain dans Lumitrack partait en PSN décalé d'une demi-largeur
+  de scène (~45 m). Fixé en faisant porter le placement terrain dans
+  `OutputTransform.to_metres` (§14.3) — identité par défaut, donc aucun
+  changement pour un projet sans terrain. `update_stage_map` (sidecar.py)
+  rafraîchit maintenant aussi `broadcaster.transform` en direct, sinon un
+  drag de la zone ne se répercutait sur le flux PSN qu'au prochain réglage
+  PSN modifié.
 
 ### 14.5 Jamais vérifié / ouvert
 
@@ -1276,8 +1299,12 @@ apparaissent :
 4. **Undo/redo** : toujours **absent**, malgré §12.8 et §13.1 point 10 qui le
    marquent explicitement « non négociable ». C'est le manque le plus
    flagrant du MVP actuel.
-5. **Réseau PSN réel** : toujours jamais testé contre une vraie Capture/MA3
-   (hérité de §11.4 point 3, jamais traité cette session).
+5. **Réseau PSN réel** : premier test contre une vraie Capture le 2026-07-31
+   (hérité de §11.4 point 3) — a immédiatement révélé le bug de calage
+   terrain/PSN décrit en §14.4. Corrigé, mais **une seule session de test
+   avec un seul point** ; encore à confirmer avec une deuxième vérification
+   sur la scène complète avant un vrai show (voir §4 : « à caler sur le
+   terrain avec un point de test unique avant de lancer les 95 »).
 6. **Export bundle en fichier unique** (zip, §12.14 dernier point) : non
    fait, seul le dossier bundle incrémental existe.
 7. **Vues Face/Côté/3D libre** (§12.4) : non implémentées — conforme au

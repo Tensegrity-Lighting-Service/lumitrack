@@ -573,22 +573,59 @@ class OutputTransform:
 
     Keep this separate from the timeline so the maths can be unit-tested and
     so the same positions can feed other outputs later (OSC, Art-Net...).
+
+    Two placements are folded together here, in this order:
+
+    1. **Stage-map placement** (`stage_map_*`) — the rigid transform (drag +
+       rotate gizmo, §12.11) that positions the stage rectangle inside a
+       terrain glTF's own world space, purely for on-screen 3D alignment
+       until this point. When the previz software (Capture/MA3) has the
+       *same* terrain loaded — the common case once a venue survey exists —
+       PSN output must land in that shared world frame too, or a point
+       shown correctly aligned with the terrain in Lumitrack's own 3D view
+       arrives at the wrong spot in the previz (observed 2026-07-31: a
+       ~45m offset, half the stage width, on a project whose stage had been
+       centred on the terrain via this gizmo). Defaults to (0, 0, 0°), an
+       identity transform, so projects that never touch the terrain-mapping
+       gizmo see no change in PSN output from this step.
+    2. **Origin/invert/swap** (`origin_*_cm`/`invert_*`/`swap_xy`) — a fine
+       trim applied on top, in the same world frame, for any residual axis
+       convention mismatch the terrain alignment doesn't already resolve
+       (e.g. Capture's Y-inversion habits, §4).
     """
 
     def __init__(self, origin_x_cm: float = 0.0, origin_y_cm: float = 0.0,
                  invert_x: bool = False, invert_y: bool = False,
-                 swap_xy: bool = False, up_axis: str = "y"):
+                 swap_xy: bool = False, up_axis: str = "y",
+                 stage_map_origin_x_m: float = 0.0, stage_map_origin_z_m: float = 0.0,
+                 stage_map_rotation_deg: float = 0.0):
         self.origin_x_cm = origin_x_cm
         self.origin_y_cm = origin_y_cm
         self.invert_x = invert_x
         self.invert_y = invert_y
         self.swap_xy = swap_xy
         self.up_axis = up_axis
+        self.stage_map_origin_x_m = stage_map_origin_x_m
+        self.stage_map_origin_z_m = stage_map_origin_z_m
+        self.stage_map_rotation_deg = stage_map_rotation_deg
 
     def to_metres(self, x_cm: float, y_cm: float, z_cm: float = 0.0):
-        x = (x_cm - self.origin_x_cm) / 100.0
-        y = (y_cm - self.origin_y_cm) / 100.0
+        # Stage-local metres (the fine-trim origin, in the rectangle's own
+        # top-left-origin frame — same pivot the stage-map rotation below
+        # applies around, matching `StageGroup` in Scene.tsx).
+        lx = (x_cm - self.origin_x_cm) / 100.0
+        ly = (y_cm - self.origin_y_cm) / 100.0
         z = z_cm / 100.0
+
+        # Place into the terrain's own world frame: identical rigid
+        # transform (rotate then translate) to the one `StageGroup`/`fit`
+        # apply in Scene.tsx, so a point drawn at a given spot in the
+        # terrain-aligned 3D view lands at that same spot in PSN.
+        angle = math.radians(self.stage_map_rotation_deg)
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        x = self.stage_map_origin_x_m + lx * cos_a + ly * sin_a
+        y = self.stage_map_origin_z_m + (-lx * sin_a + ly * cos_a)
+
         if self.invert_x:
             x = -x
         if self.invert_y:
@@ -620,4 +657,7 @@ class OutputTransform:
             invert_y=project.transform_invert_y,
             swap_xy=project.transform_swap_xy,
             up_axis=getattr(project, "transform_up_axis", "y"),
+            stage_map_origin_x_m=project.stage_map_origin_x_m,
+            stage_map_origin_z_m=project.stage_map_origin_z_m,
+            stage_map_rotation_deg=project.stage_map_rotation_deg,
         )
