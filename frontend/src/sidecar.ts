@@ -139,8 +139,8 @@ class SidecarClient {
   }
 
   // ---- editing ----
-  addPoint(name: string, number?: number, rosterGroupId?: string | null) {
-    this.send({ type: 'add_point', name, number, rosterGroupId })
+  addPoint(name: string, number?: number, rosterGroupId?: string | null, color?: string) {
+    this.send({ type: 'add_point', name, number, rosterGroupId, color })
   }
   /** Jamais possible avant la mission "hiérarchie du roster" (2026-07-31) :
    * le roster ne savait qu'ajouter. */

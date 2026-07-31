@@ -11,6 +11,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
+import { AddActorsPanel } from './ui/AddActorsPanel'
 import {
   DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
   type DragEndEvent, type DragOverEvent, type DragStartEvent,
@@ -364,6 +365,7 @@ function App() {
   const [showGridSettings, setShowGridSettings] = useState(false)
   const [showPsnPanel, setShowPsnPanel] = useState(false)
   const [showBundleHistory, setShowBundleHistory] = useState(false)
+  const [showAddActors, setShowAddActors] = useState(false)
   const bundlePath = useBundlePath()
 
   // "Enregistrer" : réutilise le chemin connu sans dialogue ; sans chemin
@@ -753,11 +755,8 @@ function App() {
             + Dossier
           </button>
           <button
-            title="Ajouter un acteur (sans groupe)"
-            onClick={() => {
-              const base = project.points.length
-              sidecar.addPoint(`Acteur ${base + 1}`, base + 1, null)
-            }}
+            title="Ajouter un ou plusieurs acteurs"
+            onClick={() => setShowAddActors(true)}
           >
             + Acteur
           </button>
@@ -988,6 +987,7 @@ function App() {
       {showBundleHistory && bundlePath && (
         <BundleHistoryPanel path={bundlePath} onClose={() => setShowBundleHistory(false)} />
       )}
+      {showAddActors && <AddActorsPanel project={project} onClose={() => setShowAddActors(false)} />}
       <footer className="timeline-dock">
         <CueTimeline
           project={project}
