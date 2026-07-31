@@ -1296,22 +1296,31 @@ apparaissent :
    `PYTHONPATH` (`frontend/src-tauri/src/lib.rs`), **pas** encore packagé en
    `externalBin`/PyInstaller (§12.11/§12.13). Nécessaire avant tout binaire
    distribuable.
-4. **Undo/redo** : toujours **absent**, malgré §12.8 et §13.1 point 10 qui le
-   marquent explicitement « non négociable ». C'est le manque le plus
-   flagrant du MVP actuel.
+4. ~~Undo/redo absent~~ — **LIVRÉ le 2026-07-31** (historique backend-
+   autoritaire coalescé par fenêtre de temps, voir DIRECTIVES.md « CI +
+   undo/redo »). Toujours pas de vérification par une session d'édition
+   humaine réelle (point 1).
 5. **Réseau PSN réel** : premier test contre une vraie Capture le 2026-07-31
    (hérité de §11.4 point 3) — a immédiatement révélé le bug de calage
    terrain/PSN décrit en §14.4. Corrigé, mais **une seule session de test
    avec un seul point** ; encore à confirmer avec une deuxième vérification
    sur la scène complète avant un vrai show (voir §4 : « à caler sur le
    terrain avec un point de test unique avant de lancer les 95 »).
-6. **Export bundle en fichier unique** (zip, §12.14 dernier point) : non
-   fait, seul le dossier bundle incrémental existe.
+6. ~~Export bundle en fichier unique~~ — **LIVRÉ le 2026-07-31** : le format
+   bundle a été redessiné (`ProjectName/ProjectName.lumitrack` + `media/` +
+   `archive/`, historique de versions borné à 50), remplaçant l'ancien
+   dossier-comme-paquet ; lecture rétro-compatible de l'ancien format
+   conservée. Pas un zip au sens strict mais répond au besoin exprimé
+   (fichier `.lumitrack` unique visible, dépendances à côté, historique).
 7. **Vues Face/Côté/3D libre** (§12.4) : non implémentées — conforme au
    choix explicite du MVP (§13.1 point 3, vue Dessus seule), pas un oubli.
 8. **Groupes nommés réutilisables + LTP inter-groupes** (§12.2 complet) :
    reporté en v1.1 par décision explicite (§13.1 point 2), pas un manque du
-   MVP actuel.
+   MVP actuel. Distinct des sous-groupes de roster PUREMENT organisationnels
+   (`Point.rosterGroupId`/`Project.rosterGroups`), **LIVRÉS le 2026-07-31**
+   (voir DIRECTIVES.md « Mission hiérarchie du roster ») — pas
+   d'appartenance multiple, pas d'animation relative, juste un rangement
+   pour la vue/sélection/glisser-déposer.
 9. Tout le reste du §13.2 (collision, dégradé/seuil de vitesse, vue
    tableau, export vidéo) et la piste vidéo de référence du §13.3 : non
    commencés, reportés comme prévu.

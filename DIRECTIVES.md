@@ -360,9 +360,10 @@ Demandes de Florian après validation des tracés courbes :
   pastille de connexion et timecode vivent maintenant dans la barre de la
   timeline, sous le roster. Espace fonctionne toujours.
 
-Reste ouvert (souhait exprimé, pas encore construit) : hiérarchie du roster
-(équipes en sous-dossiers, appartenance multiple — spec §12.2/§12.10,
-référence UX ContainerBox de Friction). Prochaine mission logique.
+Hiérarchie du roster : LIVRÉE le 2026-07-31, voir en fin de fichier
+« Mission hiérarchie du roster ». Portée réduite par rapport au souhait
+initial (sous-groupes organisationnels seulement, pas d'appartenance
+multiple ni de groupes animables — voir §12.2, reporté en v1.1).
 
 ### Mission timeline pro + entrées scène + fichiers (2026-07-29) — LIVRÉE
 
@@ -590,3 +591,44 @@ dans Scene.tsx/AudioTrack.tsx), ajouter ruff côté Python, formaliser
 rustfmt/clippy strict. Les 2 `window.prompt` restants (Mission 3) n'ont pas
 non plus été traités — hors du périmètre choisi (undo/redo, pas dialogues
 natifs).
+
+## Mission hiérarchie du roster — 2026-07-31
+
+Demande de Florian : remplacer la gestion inline du roster (« + Acteur » à
+gauche, un par un, jamais de suppression) par un popup d'édition en lot, et
+organiser les acteurs en sous-groupes reflétés dans la colonne de gauche.
+Portée explicitement bornée par Florian aux sous-groupes ORGANISATIONNELS
+(ordonner la vue, faciliter sélection/glisser-déposer d'un ensemble) — pas
+les groupes animables complets du §12.2 (appartenance multiple, animation
+relative, LTP inter-groupes), reportés en v1.1.
+
+- **Modèle** (`core/project.py`) : `Point.rosterGroupId` (au plus un groupe
+  par acteur, comme un dossier de fichiers), `Project.rosterGroups` (liste
+  `{id, name}`). Premier ajout d'une vraie suppression d'acteur
+  (`delete_point`, retire aussi ses activations dans tous les blocs — le
+  roster ne savait qu'ajouter jusqu'ici), `reorder_points` (ordre complet),
+  `prune_roster_groups` (détache les acteurs d'un groupe supprimé). Pas de
+  miroir Rust — métadonnée d'organisation UI, hors du calcul de
+  positions/PSN, même logique que les autres champs d'affichage seulement.
+- **Sidecar** : commandes `delete_point`, `reorder_points`,
+  `set_roster_groups` ; `update_point`/`add_point` acceptent `rosterGroupId`.
+  Toutes annulables (undo/redo, mission précédente).
+- **Frontend** : panneau `RosterManagerPanel` (ajout multiple avec compteur
+  et groupe cible, sélection en lot Ctrl/Maj-clic, réassignation de groupe
+  et suppression en masse, table éditable nom/N°/couleur/groupe/suppression
+  par ligne, section sous-groupes créer/renommer/supprimer). Colonne
+  Roster réécrite : groupes en en-têtes repliables (glisser-déposer du
+  groupe entier vers la scène via un nouveau type MIME
+  `application/x-lumitrack-points`, JSON d'ids — active tous les membres au
+  même point de dépôt, sans étalement automatique), acteurs sans groupe
+  affichés en dessous inchangés. L'ancien contrôle inline « + Acteur » est
+  supprimé, remplacé par un bouton « Gérer… » ouvrant le panneau.
+- 8 tests pytest dédiés (modèle + protocole fil), 119 tests au total.
+
+**Non fait** (hors périmètre choisi par Florian) : pas de glisser-déposer
+pour réordonner DIRECTEMENT dans la colonne de gauche au-delà de ce que le
+popup fournit (le popup gère l'ordre) ; pas d'étalement/disposition en
+grille automatique au dépôt d'un groupe entier dans la scène (la boîte de
+transformation multi-acteurs sert à réarranger ensuite à la main) ; pas de
+groupes animables (§12.2) — pas d'appartenance multiple, pas d'animation
+de groupe relative, pas de résolution LTP inter-groupes.
