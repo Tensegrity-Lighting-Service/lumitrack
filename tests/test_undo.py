@@ -16,14 +16,9 @@ import pytest
 
 from lumitrack.sidecar import Session, _handle_message
 
-
-@pytest.fixture(autouse=True)
-def _isolated_autosave(tmp_path, monkeypatch):
-    # Session() relit %APPDATA%/Lumitrack/autosave.json sur une vraie
-    # machine — pointé ici sur un dossier tmp vide pour que chaque test
-    # démarre du même projet de démo propre, quel que soit ce qui traîne
-    # sur la machine du développeur qui lance la suite.
-    monkeypatch.setenv("APPDATA", str(tmp_path))
+# _isolated_autosave (autouse) vit maintenant dans tests/conftest.py — les
+# autres fichiers construisant Session() (test_block_context.py,
+# test_sidecar.py) en avaient besoin tout autant.
 
 
 def _run(coro):
