@@ -22,6 +22,7 @@ import json
 import math
 import os
 import shutil
+import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -628,6 +629,51 @@ def _write_media_and_snapshot(project: Project, bundle_dir: str) -> dict:
     return snapshot
 
 
+def _find_app_icon() -> Optional[str]:
+    """Chemin de l'icône de l'app (frontend/src-tauri/icons/icon.ico),
+    relatif au dépôt — comme `_demo_project` le fait déjà pour le terrain
+    de démo. Suppose un lancement depuis le dépôt (dev, `python -m
+    lumitrack`) : à revoir une fois l'app empaquetée (§12.13, jamais fait),
+    où les ressources devront être adressées différemment."""
+    # project.py est un niveau plus profond que sidecar.py (src/lumitrack/
+    # core/project.py contre src/lumitrack/sidecar.py) : un dirname() de plus.
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    icon_path = os.path.join(repo_root, "frontend", "src-tauri", "icons", "icon.ico")
+    return icon_path if os.path.isfile(icon_path) else None
+
+
+def _ensure_folder_icon(bundle_dir: str):
+    """Icône de dossier distinctive pour un projet Lumitrack (desktop.ini +
+    IconResource, convention Windows Explorer) — purement cosmétique,
+    jamais bloquant : ignore silencieusement hors Windows, si l'icône
+    source est introuvable, ou en cas d'erreur (droits, disque en lecture
+    seule...). N'agit qu'une fois (si desktop.ini existe déjà, no-op)."""
+    if sys.platform != "win32":
+        return
+    ini_path = os.path.join(bundle_dir, "desktop.ini")
+    if os.path.isfile(ini_path):
+        return
+    icon_source = _find_app_icon()
+    if icon_source is None:
+        return
+    try:
+        icon_dest = os.path.join(bundle_dir, ".lumitrack.ico")
+        shutil.copyfile(icon_source, icon_dest)
+        with open(ini_path, "w", encoding="utf-8") as fh:
+            fh.write("[.ShellClassInfo]\nIconResource=.lumitrack.ico,0\n")
+        import ctypes
+        FILE_ATTRIBUTE_READONLY = 0x1
+        FILE_ATTRIBUTE_HIDDEN = 0x2
+        FILE_ATTRIBUTE_SYSTEM = 0x4
+        ctypes.windll.kernel32.SetFileAttributesW(icon_dest, FILE_ATTRIBUTE_HIDDEN)
+        ctypes.windll.kernel32.SetFileAttributesW(ini_path, FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)
+        # Marqueur Windows conventionnel pour "ce dossier a des réglages
+        # d'affichage personnalisés" — pas une vraie protection en écriture.
+        ctypes.windll.kernel32.SetFileAttributesW(bundle_dir, FILE_ATTRIBUTE_READONLY)
+    except OSError:
+        pass
+
+
 def save_bundle(project: Project, file_path: str) -> str:
     """Write `project` to `file_path` (a .lumitrack file). If a file already
     exists there, it is archived first (timestamped copy in archive/,
@@ -636,6 +682,7 @@ def save_bundle(project: Project, file_path: str) -> str:
     directory. Returns `file_path`."""
     bundle_dir = os.path.dirname(file_path) or "."
     os.makedirs(bundle_dir, exist_ok=True)
+    _ensure_folder_icon(bundle_dir)
 
     if os.path.isfile(file_path):
         archive_dir = _archive_dir(bundle_dir)

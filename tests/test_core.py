@@ -9,6 +9,7 @@ import math
 import os
 import shutil
 import struct
+import sys
 
 import pytest
 
@@ -437,6 +438,26 @@ def _bundled_project(tmp_path, audio_bytes=b"fake-audio-bytes"):
     project.name = "Bundled"
     project.audio_path = str(audio)
     return project
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="icône de dossier = convention Windows Explorer uniquement")
+def test_save_bundle_sets_a_windows_folder_icon(tmp_path):
+    project = _bundled_project(tmp_path)
+    bundle_dir = tmp_path / "IconShow"
+    file_path = str(bundle_dir / f"IconShow{BUNDLE_FILE_EXT}")
+
+    save_bundle(project, file_path)
+
+    ini_path = bundle_dir / "desktop.ini"
+    icon_path = bundle_dir / ".lumitrack.ico"
+    assert ini_path.is_file()
+    assert icon_path.is_file()
+    assert "IconResource=.lumitrack.ico,0" in ini_path.read_text(encoding="utf-8")
+
+    # Idempotent : un second save ne doit ni échouer ni dupliquer quoi que
+    # ce soit (desktop.ini existant = no-op côté icône).
+    save_bundle(project, file_path)
+    assert ini_path.is_file()
 
 
 def test_bundle_roundtrip_dedupes_media_by_hash(tmp_path):
