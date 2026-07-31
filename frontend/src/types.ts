@@ -119,6 +119,10 @@ export interface ProjectMessage {
   type: 'project'
   project: Project
   psnRunning: boolean
+  /** Historique d'édition côté sidecar (undo/redo, backend-autoritaire) —
+   * pilote l'état grisé du menu Édition et des raccourcis Ctrl+Z. */
+  undoAvailable: boolean
+  redoAvailable: boolean
 }
 
 export interface TickMessage {

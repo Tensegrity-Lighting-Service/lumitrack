@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { Scene } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
-import { sidecar, useBlockContext, useConnected, useProject, usePsnRunning, useTick } from './sidecar'
+import {
+  sidecar, useBlockContext, useConnected, useProject, usePsnRunning,
+  useRedoAvailable, useTick, useUndoAvailable,
+} from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
@@ -150,6 +153,8 @@ function App() {
   const connected = useConnected()
   const psnRunning = usePsnRunning()
   const blockContext = useBlockContext()
+  const undoAvailable = useUndoAvailable()
+  const redoAvailable = useRedoAvailable()
 
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null)
   // Sélection multiple d'acteurs (Ctrl/Shift-clic au roster). Ordonnée :
@@ -253,6 +258,13 @@ function App() {
         e.preventDefault()
         if (playing) sidecar.pause()
         else sidecar.play()
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        // Ctrl+Z / Ctrl+Maj+Z (§13.1.10) : historique côté sidecar, ce
+        // raccourci n'envoie qu'une intention — un undo/redo sans rien à
+        // faire est un no-op silencieux côté serveur (test_undo.py).
+        e.preventDefault()
+        if (e.shiftKey) sidecar.redo()
+        else sidecar.undo()
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedCueId) {
           e.preventDefault()
@@ -317,6 +329,13 @@ function App() {
           })
           if (typeof path === 'string') sidecar.loadBundle(path)
         } },
+      ],
+    },
+    {
+      label: 'Édition',
+      items: [
+        { label: 'Annuler (Ctrl+Z)', disabled: !undoAvailable, onClick: () => sidecar.undo() },
+        { label: 'Rétablir (Ctrl+Maj+Z)', disabled: !redoAvailable, onClick: () => sidecar.redo() },
       ],
     },
     {

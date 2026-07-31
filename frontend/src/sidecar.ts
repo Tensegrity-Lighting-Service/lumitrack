@@ -17,6 +17,8 @@ class SidecarClient {
   blockContext: BlockContextMessage | null = null
   connected = false
   psnRunning = false
+  undoAvailable = false
+  redoAvailable = false
   lastError: string | null = null
   ifaces: IfacesMessage | null = null
   psnPreview: PsnPreviewMessage | null = null
@@ -48,6 +50,8 @@ class SidecarClient {
       if (msg.type === 'project') {
         this.project = msg.project
         this.psnRunning = msg.psnRunning
+        this.undoAvailable = msg.undoAvailable
+        this.redoAvailable = msg.redoAvailable
       } else if (msg.type === 'tick') {
         this.tick = msg
       } else if (msg.type === 'block_context') {
@@ -86,6 +90,11 @@ class SidecarClient {
   play() { this.send({ type: 'transport', action: 'play' }) }
   pause() { this.send({ type: 'transport', action: 'pause' }) }
   seek(tMs: number) { this.send({ type: 'transport', action: 'seek', tMs }) }
+
+  // ---- undo/redo (§13.1.10, backend-autoritaire) : le sidecar seul garde
+  // l'historique, ces méthodes n'envoient qu'une intention. ----
+  undo() { this.send({ type: 'undo' }) }
+  redo() { this.send({ type: 'redo' }) }
 
   // ---- PSN (§12.9: stays independent of edit vs. playback mode) ----
   psnStart() { this.send({ type: 'psn_start' }) }
@@ -204,4 +213,12 @@ export function usePsnPreview(): PsnPreviewMessage | null {
 
 export function usePsnRunning(): boolean {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.psnRunning)
+}
+
+export function useUndoAvailable(): boolean {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.undoAvailable)
+}
+
+export function useRedoAvailable(): boolean {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.redoAvailable)
 }
