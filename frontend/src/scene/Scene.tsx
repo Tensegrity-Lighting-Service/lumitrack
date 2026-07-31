@@ -62,6 +62,14 @@ const WAYPOINT_PX = 9
 const BOX_PAD_PX = 14
 const EDGE_HIT_PX = 12
 const PATH_HANDLE_PX = 6
+// Rayon minimal (cm scène) entre le curseur et le pivot pour que l'angle de
+// rotation de la boîte de transformation soit considéré fiable. atan2 est
+// numériquement instable près de son origine : sans ce plancher, un geste
+// de rotation normal qui passe près du centre (facile à faire par
+// inadvertance à la souris) fait sauter l'angle calculé de façon erratique
+// — "ça part en cacahuète" (signalé 2026-07-31). Sous ce rayon, l'échantillon
+// est ignoré et le dernier angle stable est conservé plutôt que recalculé.
+const MIN_ROTATE_RADIUS_CM = 30
 // Live-state dimming in block-edit mode (§12.6): activated actors stay
 // readable, the rest is context; the ghosts/trajectories are the subject.
 const EDIT_ACTIVATED_OPACITY = 0.45
@@ -1144,7 +1152,7 @@ function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZo
  * au-dessus. La rotation écrit au lâcher un arc de Bézier par acteur
  * autour du centre de la boîte (chaque acteur suit son cercle, pas une
  * droite) + rotation du lacet. */
-function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, stageGroupRef, controlsRef, snapToGrid, gridSizeCm }: {
+function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, stageGroupRef, controlsRef, snapToGrid, gridSizeCm, dragActiveRef }: {
   project: Project
   positions: Record<string, Pose>
   selectedCueId: string
@@ -1153,6 +1161,9 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
   controlsRef: React.RefObject<MapControlsImpl | null>
   snapToGrid: boolean
   gridSizeCm: number
+  /** Partagé avec le lasso de la scène parente (voir son commentaire) : ce
+   * composant a son propre dragRef, invisible sans ce pont. */
+  dragActiveRef: React.RefObject<boolean>
 }) {
   const { camera, raycaster, gl } = useThree()
 
@@ -1212,6 +1223,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     const endDrag = () => {
       const drag = dragRef.current
       dragRef.current = null
+      dragActiveRef.current = false
       if (controlsRef.current) controlsRef.current.enabled = true
       if (!drag || drag.kind !== 'rotate' || Math.abs(drag.lastTheta) < 1e-4) return
       // Écriture finale de la rotation : cible + ARC autour du centre +
@@ -1273,6 +1285,9 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
           })
         }
       } else if (drag.kind === 'rotate') {
+        // Trop près du pivot : atan2 y est instable, on gèle plutôt que de
+        // recalculer un angle erratique (voir MIN_ROTATE_RADIUS_CM).
+        if (Math.hypot(p.x - c.x, p.y - c.y) < MIN_ROTATE_RADIUS_CM) return
         const angle = Math.atan2(p.y - c.y, p.x - c.x)
         if (drag.startAngle === undefined) { drag.startAngle = angle; return }
         const theta = angle - drag.startAngle
@@ -1320,6 +1335,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       startCm: { x: local.x / CM_TO_M, y: local.z / CM_TO_M },
       lastTheta: 0, lastSent: 0,
     }
+    dragActiveRef.current = true
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
@@ -1513,6 +1529,17 @@ function SceneContent({
     | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number }
 
   const dragRef = useRef<SceneDrag | null>(null)
+  // Drag actif DANS SelectionTransform (boîte de transfo multi-sélection) :
+  // ce composant gère son propre geste avec un dragRef qui lui est privé,
+  // donc invisible pour le lasso ci-dessous. `e.stopPropagation()` sur un
+  // onPointerDown r3f n'empêche PAS les listeners natifs posés directement
+  // sur le même canvas (lassoStart/lassoMove/lassoEnd) de recevoir le même
+  // événement — ce ne sont pas le même mécanisme de propagation. Sans ce
+  // partage, cliquer-glisser sur la boîte armait AUSSI un lasso, et son
+  // relâchement remplaçait la sélection par ce qui se trouvait (souvent
+  // rien) sous le rectangle de lasso tracé par mégarde pendant le geste —
+  // "la sélection disparaît au lâcher" (signalé 2026-07-31).
+  const boxDragActiveRef = useRef(false)
   // Sélection d'un waypoint du tracé (Suppr le retire, voir keydown).
   const [selectedWaypoint, setSelectedWaypoint] = useState<{ pointId: string; index: number } | null>(null)
   // Lus par le onMove global au moment de l'évènement (l'effet ne dépend
@@ -1817,8 +1844,10 @@ function SceneContent({
     const lassoStart = (e: PointerEvent) => {
       // r3f a déjà traité le pointerdown : si un acteur/ghost/waypoint a
       // armé un drag, pas de lasso. Pas de lasso non plus en édition de
-      // zone, ni au clic droit seul (pan MapControls).
-      if (e.button !== 0 || dragRef.current || editingZone) return
+      // zone, ni au clic droit seul (pan MapControls), ni si la boîte de
+      // transformation multi-sélection a déjà pris le geste (son propre
+      // dragRef est privé à SelectionTransform, d'où ce ref partagé).
+      if (e.button !== 0 || dragRef.current || editingZone || boxDragActiveRef.current) return
       const rect = dom.getBoundingClientRect()
       lassoRef.current = {
         x0: e.clientX - rect.left, y0: e.clientY - rect.top,
@@ -2238,6 +2267,7 @@ function SceneContent({
             controlsRef={controlsRef}
             snapToGrid={snapToGrid}
             gridSizeCm={project.gridSizeCm}
+            dragActiveRef={boxDragActiveRef}
           />
         )}
 
