@@ -157,6 +157,19 @@
 }
 .roster-ungrouped-zone:hover { background: #22262f; }
 
+/* Badge suivant le curseur pendant un glisser d'acteur(s)/dossier — seul
+   retour visuel du geste depuis le passage en pointer-events (2026-07-31,
+   le drag-and-drop HTML5 natif ne délivrait plus aucun événement après le
+   dragstart dans cette WebView). */
+.roster-drag-ghost {
+  position: fixed; z-index: 9999; pointer-events: none;
+  transform: translate(14px, 10px);
+  background: #2a3352; color: #e8e8ec; border: 1px solid #4F6DF5;
+  border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight: 600;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
 .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .status-dot.idle { background: #b06fe0; }
 .status-dot.moving { background: #4ff5e0; }

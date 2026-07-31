@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { Scene } from './scene/Scene'
+import { Scene, type SceneHandle } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import {
   sidecar, useBlockContext, useBundlePath, useConnected, useProject, usePsnRunning,
   useRedoAvailable, useTick, useUndoAvailable,
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
@@ -26,7 +27,7 @@ async function pickSaveAsPath(projectName: string): Promise<string | null> {
 import type { Activation, BackstageZone, Cue, Point, Project } from './types'
 
 // Sentinelle pour transporter "sans groupe" dans un attribut data-* HTML
-// (qui ne peut porter que des chaînes) — voir data-drop-group / rosterListRef.
+// (qui ne peut porter que des chaînes) — voir data-drop-group.
 const UNGROUPED_MARKER = '__ungrouped__'
 
 const ROSTER_MIN = 160
@@ -230,189 +231,142 @@ function App() {
     return () => window.removeEventListener('pointerdown', close)
   }, [showGridSettings])
 
-  // Explorateur du roster (mission "roster explorateur", 2026-07-31) : le
-  // dépôt (dragover/drop) est posé en listeners natifs sur le conteneur —
-  // même pattern que Scene.tsx (dépôt sur la scène 3D). Vrai coupable du
-  // "ça ne marche pas du tout", trouvé après coup : `dragDropEnabled` de
-  // Tauri est activé par défaut, et sur Windows ça DÉSACTIVE le drag-and-
-  // drop HTML5 dans la webview (la doc du champ le dit noir sur blanc :
-  // "Disabling it is required to use HTML5 drag and drop on the frontend
-  // on Windows") — aucun événement dragover/drop n'atteignait le DOM,
-  // React ou natif, peu importe. Fixé dans tauri.conf.json
-  // (dragDropEnabled: false), au prix du drop de fichiers OS sur la
-  // fenêtre (ancien useEffect onDragDropEvent, retiré) — sans perte
-  // fonctionnelle, "Importer…"/"Ouvrir…" au menu couvraient déjà les
-  // mêmes imports. `rosterProjectRef` évite un effet à re-brancher à
-  // chaque changement de projet (le `<ul>` lui-même ne change jamais).
-  const rosterListRef = useRef<HTMLUListElement>(null)
+  // Drag & drop de fichiers sur la fenêtre : routage par extension — audio
+  // -> piste audio, .stancz -> import, .lumitrack/.bundle -> ouvrir.
+  // (Événement natif Tauri : contrairement au drop HTML5, il porte les
+  // vrais chemins disque, que le sidecar peut ouvrir.) Retiré puis remis le
+  // 2026-07-31 : désactivé un temps le temps de soupçonner un conflit avec
+  // le glisser-déposer interne (roster/scène), qui s'est finalement avéré
+  // ne dépendre d'aucune API drag-and-drop HTML5 (voir plus bas,
+  // beginRosterDrag) — dragDropEnabled peut donc rester à sa valeur par
+  // défaut (true) sans rien casser.
+  useEffect(() => {
+    const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac']
+    let unlisten: (() => void) | null = null
+    getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type !== 'drop') return
+      for (const path of event.payload.paths) {
+        const ext = path.split('.').pop()?.toLowerCase() ?? ''
+        if (AUDIO_EXT.includes(ext)) sidecar.setAudio({ path })
+        else if (ext === 'stancz') sidecar.importStancz(path)
+        // .lumitrack = fichier (format courant) ; .bundle = ancien dossier
+        // (lecture seule, voir core/project.py::load_bundle) — les deux
+        // passent par la même commande, le backend distingue fichier/dossier.
+        else if (ext === 'lumitrack' || ext === 'bundle') sidecar.loadBundle(path)
+      }
+    }).then((fn) => { unlisten = fn }).catch(() => { /* hors Tauri (dev navigateur) */ })
+    return () => { if (unlisten) unlisten() }
+  }, [])
+
+  // Explorateur du roster (mission "roster explorateur", 2026-07-31) —
+  // diagnostiqué le même jour avec des logs + une vidéo de Florian : le
+  // drag-and-drop HTML5 (dragstart/dragover/drop/dragend) sur un élément
+  // DOM classique ne produit STRICTEMENT AUCUN événement après le
+  // dragstart dans cette WebView (même en écoutant au niveau window en
+  // phase de capture) — seul un canvas semble échapper au problème. Plutôt
+  // que de continuer à patcher une API dont on a maintenant la preuve
+  // qu'elle ne fonctionne pas ici, ce geste est entièrement réimplémenté
+  // en pointer-events (pointerdown/pointermove/pointerup + capture de
+  // pointeur), exactement le pattern déjà fiable ailleurs dans ce fichier
+  // (boîte de transformation, blocs de la timeline) — la cible réelle est
+  // retrouvée via document.elementFromPoint au relâchement, pas via un
+  // DataTransfer. `rosterProjectRef` évite de recréer les callbacks à
+  // chaque écho de projet.
   const rosterProjectRef = useRef(project)
   rosterProjectRef.current = project
-  useEffect(() => {
-    const el = rosterListRef.current
-    if (!el) return
-    const extractPointIds = (dt: DataTransfer): string[] => {
-      const multi = dt.getData('application/x-lumitrack-points')
-      if (multi) {
-        try { return JSON.parse(multi) } catch { return [] }
-      }
-      const single = dt.getData('application/x-lumitrack-point')
-      return single ? [single] : []
+  const sceneRef = useRef<SceneHandle>(null)
+  const rosterDragRef = useRef<{
+    ids: string[]
+    kind: 'points' | 'group'
+    sourceGroupId: string | null
+    startX: number
+    startY: number
+    moved: boolean
+  } | null>(null)
+  const [rosterDragGhost, setRosterDragGhost] = useState<{ x: number; y: number; label: string } | null>(null)
+
+  // Déplace des acteurs vers `targetGroupId` (null = sans groupe), insérés
+  // juste avant `beforeId` dans l'ordre global (null = à la fin) — un seul
+  // geste fait à la fois le classement ET le rangement, comme glisser un
+  // fichier dans un dossier à un endroit précis.
+  const moveDroppedIds = useCallback((draggedIds: string[], targetGroupId: string | null, beforeId: string | null) => {
+    const proj = rosterProjectRef.current
+    if (!proj) return
+    const rest = proj.points.map((p) => p.id).filter((id) => !draggedIds.includes(id))
+    let at = beforeId ? rest.indexOf(beforeId) : -1
+    if (at < 0) at = rest.length
+    sidecar.reorderPoints([...rest.slice(0, at), ...draggedIds, ...rest.slice(at)])
+    for (const id of draggedIds) {
+      const p = proj.points.find((pp) => pp.id === id)
+      if (p && p.rosterGroupId !== targetGroupId) sidecar.updatePoint(id, { rosterGroupId: targetGroupId })
     }
-    // Déplace des acteurs vers `targetGroupId` (null = sans groupe),
-    // insérés juste avant `beforeId` dans l'ordre global (null = à la
-    // fin) — un seul geste fait à la fois le classement ET le rangement,
-    // comme glisser un fichier dans un dossier à un endroit précis.
-    const moveDroppedIds = (draggedIds: string[], targetGroupId: string | null, beforeId: string | null) => {
-      // eslint-disable-next-line no-console
-      console.log('[roster-dnd] moveDroppedIds', { draggedIds, targetGroupId, beforeId })
-      const proj = rosterProjectRef.current
-      if (!proj) return
-      const rest = proj.points.map((p) => p.id).filter((id) => !draggedIds.includes(id))
-      let at = beforeId ? rest.indexOf(beforeId) : -1
-      if (at < 0) at = rest.length
-      sidecar.reorderPoints([...rest.slice(0, at), ...draggedIds, ...rest.slice(at)])
-      for (const id of draggedIds) {
-        const p = proj.points.find((pp) => pp.id === id)
-        if (p && p.rosterGroupId !== targetGroupId) sidecar.updatePoint(id, { rosterGroupId: targetGroupId })
-      }
-    }
-    // Pas de filtre sur dataTransfer.types ici : ce conteneur ne reçoit de
-    // toute façon jamais que nos propres glissers (acteur(s)/dossier), et
-    // filtrer par type pendant dragover s'est avéré peu fiable dans cette
-    // WebView (rond barré "dépôt refusé" en permanence, 2026-07-31 —
-    // preventDefault() n'était visiblement jamais atteint). accepter
-    // inconditionnellement ici ; onDrop reste, lui, strict sur le contenu
-    // réel du dataTransfer avant d'agir.
-    // DIAGNOSTIC TEMPORAIRE : un seul log par geste (pas à chaque frame de
-    // dragover, ça noierait la console) pour confirmer si dragover ATTEINT
-    // seulement ce conteneur.
-    let loggedThisDrag = false
-    const onDragOver = (e: DragEvent) => {
-      e.preventDefault()
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-      if (!loggedThisDrag) {
-        loggedThisDrag = true
-        // eslint-disable-next-line no-console
-        console.log('[roster-dnd] onDragOver atteint le conteneur (premier événement de ce geste)')
-      }
-    }
-    const onDragEnter = (e: DragEvent) => {
-      // eslint-disable-next-line no-console
-      console.log('[roster-dnd] onDragEnter conteneur', { target: (e.target as HTMLElement)?.className })
-    }
-    const onDrop = (e: DragEvent) => {
-      // DIAGNOSTIC TEMPORAIRE (2026-07-31) — à retirer une fois le vrai
-      // point de blocage identifié. Ouvrir la console de la fenêtre (clic
-      // droit > Inspecter, ou F12) avant d'essayer un glisser, et copier
-      // ce qui s'affiche ici.
-      // eslint-disable-next-line no-console
-      console.log('[roster-dnd] onDrop fired', {
-        clientX: e.clientX, clientY: e.clientY,
-        hasDataTransfer: Boolean(e.dataTransfer),
-        types: e.dataTransfer ? Array.from(e.dataTransfer.types) : null,
-      })
-      if (!e.dataTransfer) return
-      // elementFromPoint plutôt que e.target : pour un drop natif routé par
-      // l'OS (dragDropEnabled: false laisse la WebView gérer elle-même la
-      // session de drag), e.target s'est avéré ne pas toujours pointer
-      // l'élément réellement sous le curseur au relâchement (2026-07-31 —
-      // le dépôt sur un dossier restait sans effet alors que le dépôt sur
-      // la scène 3D, qui ne dépend jamais de e.target, lui, fonctionnait).
-      const atPoint = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
-      const target = atPoint?.closest('[data-drop-point], [data-drop-group-header], [data-drop-ungrouped]') as HTMLElement | null
-      // eslint-disable-next-line no-console
-      console.log('[roster-dnd] elementFromPoint', {
-        atPointTag: atPoint?.tagName, atPointClass: atPoint?.className,
-        targetFound: Boolean(target), targetDataset: target ? { ...target.dataset } : null,
-      })
-      if (!target) return
-      e.preventDefault()
+  }, [])
+
+  const handleRosterDrop = useCallback((clientX: number, clientY: number, altKey: boolean) => {
+    const d = rosterDragRef.current
+    if (!d) return
+    const atPoint = document.elementFromPoint(clientX, clientY) as HTMLElement | null
+    const target = atPoint?.closest('[data-drop-point], [data-drop-group-header], [data-drop-ungrouped]') as HTMLElement | null
+    if (target) {
       const groupHeaderId = target.dataset.dropGroupHeader
       if (groupHeaderId) {
-        const proj = rosterProjectRef.current
-        if (!proj) return
-        const srcGroupId = e.dataTransfer.getData('application/x-lumitrack-group')
-        // eslint-disable-next-line no-console
-        console.log('[roster-dnd] branche dossier', { groupHeaderId, srcGroupId })
-        if (srcGroupId && srcGroupId !== groupHeaderId) {
-          // Réordonner les dossiers : place srcGroup juste avant celui-ci.
-          const order = proj.rosterGroups.map((g) => g.id).filter((id) => id !== srcGroupId)
+        if (d.kind === 'group' && d.sourceGroupId && d.sourceGroupId !== groupHeaderId) {
+          // Réordonner les dossiers : place le dossier glissé juste avant celui-ci.
+          const proj = rosterProjectRef.current
+          if (!proj) return
+          const order = proj.rosterGroups.map((g) => g.id).filter((id) => id !== d.sourceGroupId)
           const at = order.indexOf(groupHeaderId)
-          order.splice(at, 0, srcGroupId)
+          order.splice(at, 0, d.sourceGroupId)
           sidecar.setRosterGroups(order.map((id) => proj.rosterGroups.find((g) => g.id === id)!))
           return
         }
-        const ids = extractPointIds(e.dataTransfer)
-        // eslint-disable-next-line no-console
-        console.log('[roster-dnd] ids extraits pour le dossier', ids)
-        if (ids.length === 0) return
-        moveDroppedIds(ids, groupHeaderId, null)
+        moveDroppedIds(d.ids, groupHeaderId, null)
         return
       }
       if (target.dataset.dropUngrouped) {
-        const ids = extractPointIds(e.dataTransfer)
-        if (ids.length === 0) return
-        moveDroppedIds(ids, null, null)
+        moveDroppedIds(d.ids, null, null)
         return
       }
       const pointId = target.dataset.dropPoint
-      if (pointId) {
+      if (pointId && !d.ids.includes(pointId)) {
         const rawGroup = target.dataset.dropGroup
         const targetGroupId = rawGroup === UNGROUPED_MARKER ? null : (rawGroup ?? null)
-        const ids = extractPointIds(e.dataTransfer).filter((id) => id !== pointId)
-        if (ids.length === 0) return
-        moveDroppedIds(ids, targetGroupId, pointId)
+        moveDroppedIds(d.ids, targetGroupId, pointId)
       }
+      return
     }
-    el.addEventListener('dragover', onDragOver)
-    el.addEventListener('dragenter', onDragEnter)
-    el.addEventListener('drop', onDrop)
-    // DIAGNOSTIC TEMPORAIRE : capture au niveau window pour voir si drop/
-    // dragend atterrissent ailleurs que sur ce conteneur (coordonnées
-    // décalées, événement qui remonte plus haut, etc.) — dragend fire
-    // TOUJOURS en fin de geste, drop=false dedans si le navigateur a
-    // considéré qu'aucune cible n'acceptait le dépôt.
-    const onWindowDrop = (e: DragEvent) => {
-      // eslint-disable-next-line no-console
-      console.log('[roster-dnd] drop vu au niveau window (capture)', {
-        target: (e.target as HTMLElement)?.className, defaultPrevented: e.defaultPrevented,
-      })
+    // Pas dans le roster : tenter un dépôt dans la scène 3D (placement
+    // d'acteur, ou attache de zone backstage avec Alt) — no-op silencieux
+    // si le point tombe hors du canvas.
+    sceneRef.current?.placeActorsAt(d.ids, clientX, clientY, altKey)
+  }, [moveDroppedIds])
+
+  const beginRosterDrag = useCallback((e: React.PointerEvent, ids: string[], kind: 'points' | 'group', sourceGroupId: string | null, label: string) => {
+    // ids vide accepté pour un dossier (kind 'group') : un dossier sans
+    // membre doit quand même pouvoir être réordonné parmi les autres.
+    if (e.button !== 0 || (kind === 'points' && ids.length === 0)) return
+    const el = e.currentTarget as HTMLElement
+    const pointerId = e.pointerId
+    el.setPointerCapture(pointerId)
+    rosterDragRef.current = { ids, kind, sourceGroupId, startX: e.clientX, startY: e.clientY, moved: false }
+    const onMove = (ev: PointerEvent) => {
+      const d = rosterDragRef.current
+      if (!d) return
+      if (!d.moved && Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY) > 4) d.moved = true
+      if (d.moved) setRosterDragGhost({ x: ev.clientX, y: ev.clientY, label })
     }
-    const onWindowDragEnd = (e: DragEvent) => {
-      // eslint-disable-next-line no-console
-      console.log('[roster-dnd] dragend (fin de geste, succès ou annulation)', {
-        dropEffect: e.dataTransfer?.dropEffect,
-      })
+    const onUp = (ev: PointerEvent) => {
+      if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      const d = rosterDragRef.current
+      rosterDragRef.current = null
+      setRosterDragGhost(null)
+      if (d && d.moved) handleRosterDrop(ev.clientX, ev.clientY, ev.altKey)
     }
-    // DIAGNOSTIC TEMPORAIRE (suite) : dragover/dragenter n'atteignaient
-    // même pas ce conteneur — on vérifie ici si ÇA ATTEINT NE SERAIT-CE
-    // QUE LA FENÊTRE, n'importe où, à un seul endroit du document.
-    let loggedWindowDragOver = false
-    const onWindowDragOver = () => {
-      if (!loggedWindowDragOver) {
-        loggedWindowDragOver = true
-        // eslint-disable-next-line no-console
-        console.log('[roster-dnd] dragover vu AU NIVEAU WINDOW (capture) — premier de ce geste')
-      }
-    }
-    const onWindowDragEnter = (e: DragEvent) => {
-      // eslint-disable-next-line no-console
-      console.log('[roster-dnd] dragenter vu au niveau window (capture)', { target: (e.target as HTMLElement)?.tagName })
-    }
-    window.addEventListener('dragover', onWindowDragOver, true)
-    window.addEventListener('dragenter', onWindowDragEnter, true)
-    window.addEventListener('drop', onWindowDrop, true)
-    window.addEventListener('dragend', onWindowDragEnd, true)
-    return () => {
-      el.removeEventListener('dragover', onDragOver)
-      el.removeEventListener('dragenter', onDragEnter)
-      el.removeEventListener('drop', onDrop)
-      window.removeEventListener('dragover', onWindowDragOver, true)
-      window.removeEventListener('dragenter', onWindowDragEnter, true)
-      window.removeEventListener('drop', onWindowDrop, true)
-      window.removeEventListener('dragend', onWindowDragEnd, true)
-    }
-  }, [])
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [handleRosterDrop])
 
   const tMs = tick?.tMs ?? 0
   const playing = tick?.playing ?? false
@@ -604,19 +558,15 @@ function App() {
             + Acteur
           </button>
         </div>
-        <ul ref={rosterListRef}>
+        <ul>
           {(() => {
             // Explorateur de fichiers (mission "roster explorateur",
             // 2026-07-31, remplace le popup de gestion en lot) : dossiers =
-            // sous-groupes organisationnels, drag-and-drop pour ranger ET
-            // réordonner. Un acteur porte au plus un dossier
-            // (`rosterGroupId`), l'ordre à l'intérieur d'un dossier suit
-            // l'ordre relatif dans `project.points` (reorderPoints). Le
-            // DÉPÔT (dragover/drop) est géré par un effet à listeners natifs
-            // sur `rosterListRef` (voir plus haut) — le seul autre récepteur
-            // de drag-and-drop du projet (Scene.tsx) utilise déjà ce
-            // pattern, jamais des props React onDragOver/onDrop, qui se
-            // sont avérées ne pas recevoir l'événement de façon fiable ici.
+            // sous-groupes organisationnels, glisser-déposer pour ranger ET
+            // réordonner (pointer-events, voir beginRosterDrag/
+            // handleRosterDrop plus haut). Un acteur porte au plus un
+            // dossier (`rosterGroupId`), l'ordre à l'intérieur d'un dossier
+            // suit l'ordre relatif dans `project.points` (reorderPoints).
             const byId = new Map(project.points.map((p, i) => [p.id, i] as const))
             const selectRange = (point: Point) => (e: React.MouseEvent) => {
               const index = byId.get(point.id) ?? -1
@@ -642,22 +592,20 @@ function App() {
               <li
                 key={point.id}
                 className={selectedPointIds.includes(point.id) ? 'selected' : ''}
-                draggable
                 data-drop-point={point.id}
                 data-drop-group={point.rosterGroupId ?? UNGROUPED_MARKER}
-                onDragStart={(e) => {
-                  // Glisser un acteur qui fait partie de la sélection
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return
+                  // Glisser un acteur qui fait déjà partie de la sélection
                   // courante embarque toute la sélection (comme dans un
-                  // explorateur de fichiers).
-                  const ids = selectedPointIds.includes(point.id) && selectedPointIds.length > 1
-                    ? selectedPointIds : [point.id]
-                  if (ids.length > 1) e.dataTransfer.setData('application/x-lumitrack-points', JSON.stringify(ids))
-                  else e.dataTransfer.setData('application/x-lumitrack-point', point.id)
-                  e.dataTransfer.effectAllowed = 'copyMove'
-                  // eslint-disable-next-line no-console
-                  console.log('[roster-dnd] onDragStart acteur', { ids })
+                  // explorateur de fichiers) — lu AVANT selectRange, qui
+                  // modifie la sélection pour le clic lui-même.
+                  const alreadySelected = selectedPointIds.includes(point.id)
+                  const dragIds = alreadySelected && selectedPointIds.length > 1 ? selectedPointIds : [point.id]
+                  selectRange(point)(e)
+                  beginRosterDrag(e, dragIds, 'points', null,
+                    dragIds.length > 1 ? `${dragIds.length} acteurs` : point.name)
                 }}
-                onClick={selectRange(point)}
               >
                 <span
                   className={`status-dot ${movingPointIds.has(point.id) ? 'moving' : 'idle'}`}
@@ -687,18 +635,13 @@ function App() {
                     <li key={group.id} className="roster-group">
                       <div
                         className="roster-group-head"
-                        draggable
                         data-drop-group-header={group.id}
-                        onDragStart={(e) => {
+                        onPointerDown={(e) => {
+                          if (e.button !== 0) return
                           // Glisser le dossier : batch vers la scène (mêmes
                           // acteurs, un seul dépôt) ET réordonnancement des
-                          // dossiers entre eux (deux types MIME distincts,
-                          // Scene.tsx ignore le second).
-                          e.dataTransfer.setData('application/x-lumitrack-points', JSON.stringify(members.map((m) => m.id)))
-                          e.dataTransfer.setData('application/x-lumitrack-group', group.id)
-                          e.dataTransfer.effectAllowed = 'copyMove'
-                          // eslint-disable-next-line no-console
-                          console.log('[roster-dnd] onDragStart dossier', { groupId: group.id })
+                          // dossiers entre eux (branche 'group' de handleRosterDrop).
+                          beginRosterDrag(e, members.map((m) => m.id), 'group', group.id, group.name)
                         }}
                         onClick={() => {
                           // Sélectionne tout le groupe d'un clic (§demande
@@ -781,6 +724,7 @@ function App() {
 
       <main className="scene-view">
         <Scene
+          ref={sceneRef}
           project={project}
           positions={positions}
           tMs={tMs}
@@ -878,6 +822,18 @@ function App() {
       {showPsnPanel && <PsnPanel project={project} onClose={() => setShowPsnPanel(false)} />}
       {showBundleHistory && bundlePath && (
         <BundleHistoryPanel path={bundlePath} onClose={() => setShowBundleHistory(false)} />
+      )}
+      {rosterDragGhost && (
+        // Le drag-and-drop HTML5 fournit normalement une image de glisser
+        // native — remplacé ici par pointer-events (voir beginRosterDrag),
+        // donc ce petit badge qui suit le curseur est le seul retour visuel
+        // pendant le geste.
+        <div
+          className="roster-drag-ghost"
+          style={{ left: rosterDragGhost.x, top: rosterDragGhost.y }}
+        >
+          {rosterDragGhost.label}
+        </div>
       )}
 
       <footer className="timeline-dock">

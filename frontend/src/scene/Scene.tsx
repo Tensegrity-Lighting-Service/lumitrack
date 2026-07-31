@@ -25,7 +25,7 @@
 // outline/handles) is nested inside one <StageGroup> so it only has to
 // reason in the rectangle's own local metres — the group's transform does
 // the placement once, rather than every child re-deriving it.
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
 import { OrthographicCamera, MapControls, Grid, useGLTF, Line } from '@react-three/drei'
 import type { MapControls as MapControlsImpl } from 'three-stdlib'
@@ -1509,7 +1509,7 @@ function SelectionRotateHandle({ topCenter, onPointerDown }: {
 function SceneContent({
   project, positions, tMs, selectedPointId, selectedPointIds, selectedCueId, blockContext, onSelectPoint, onSelectPoints,
   onLassoRect, cameraLocked, fitToken, editingZone,
-  gridOpacity, snapToGrid, zoomAction,
+  gridOpacity, snapToGrid, zoomAction, dropHandleRef,
 }: {
   project: Project
   positions: Record<string, Pose>
@@ -1527,6 +1527,7 @@ function SceneContent({
   gridOpacity: number
   snapToGrid: boolean
   zoomAction: { token: number; factor: number }
+  dropHandleRef: React.RefObject<SceneHandle | null>
 }) {
   const widthM = project.stageWidthCm * CM_TO_M
   const heightM = project.stageHeightCm * CM_TO_M
@@ -2040,56 +2041,43 @@ function SceneContent({
     sidecar.setActivation(selectedCueId, pointId, { pathPoints: wps })
   }
 
-  // Drag & drop du roster vers la scène (mission backstage) : dépôt sur le
-  // sol = activer l'acteur dans le bloc sélectionné à cet endroit — ou dans
-  // un bloc créé au playhead s'il n'y en a pas (arbitrage Florian). Dépôt
-  // avec Alt sur une zone backstage = changer la zone d'ATTACHE de
-  // l'acteur (sans créer de mouvement).
-  useEffect(() => {
-    const dom = gl.domElement
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
-    const hit = new THREE.Vector3()
-    // Pas de filtre sur dataTransfer.types ici : ce canvas ne reçoit de
-    // toute façon jamais que nos propres glissers d'acteur(s), et filtrer
-    // par type pendant dragover s'est avéré peu fiable dans cette WebView
-    // (rond barré "dépôt refusé" en permanence côté roster, 2026-07-31 —
-    // même pattern ici, corrigé pareil). onDrop reste strict sur le
-    // contenu réel du dataTransfer avant d'agir.
-    const onDragOver = (e: DragEvent) => {
-      e.preventDefault()
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
-    }
-    const onDrop = (e: DragEvent) => {
-      // Dépôt d'un sous-groupe entier (roster-group-head) = même geste
-      // qu'un acteur seul, répété pour chaque membre — tous au même point
-      // de dépôt ; aucun étalement automatique (la boîte de transformation
-      // multi-acteurs sert ensuite à les réarranger à la main).
-      const multi = e.dataTransfer?.getData('application/x-lumitrack-points')
-      let pointIds: string[] = []
-      if (multi) {
-        try { pointIds = JSON.parse(multi) } catch { pointIds = [] }
-      } else {
-        const single = e.dataTransfer?.getData('application/x-lumitrack-point')
-        if (single) pointIds = [single]
-      }
-      if (pointIds.length === 0) return
-      e.preventDefault()
+  // Dépôt du roster vers la scène (mission backstage) : dépôt sur le sol =
+  // activer l'acteur dans le bloc sélectionné à cet endroit — ou dans un
+  // bloc créé au playhead s'il n'y en a pas (arbitrage Florian). Dépôt avec
+  // Alt sur une zone backstage = changer la zone d'ATTACHE de l'acteur
+  // (sans créer de mouvement).
+  //
+  // Exposé en méthode impérative (pas des listeners dragover/drop HTML5,
+  // voir dropHandleRef) : le drag-and-drop HTML5 natif s'est avéré ne
+  // produire STRICTEMENT AUCUN événement dragover/dragenter/drop/dragend
+  // après le dragstart pour un élément DOM classique dans cette WebView
+  // (2026-07-31, diagnostiqué avec des logs + une vidéo de Florian —
+  // seul le dragstart se déclenchait, jamais la suite, jusqu'au niveau
+  // window en phase de capture). Le roster utilise le même mécanisme
+  // (pointerdown/pointermove/pointerup) pour déclencher ce dépôt.
+  useImperativeHandle(dropHandleRef, () => ({
+    placeActorsAt: (pointIds: string[], clientX: number, clientY: number, altKey: boolean): boolean => {
+      if (pointIds.length === 0) return false
+      const dom = gl.domElement
       const rect = dom.getBoundingClientRect()
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return false
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+      const hit = new THREE.Vector3()
       raycaster.setFromCamera(new THREE.Vector2(
-        ((e.clientX - rect.left) / rect.width) * 2 - 1,
-        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
       ), camera)
-      if (!raycaster.ray.intersectPlane(plane, hit) || !stageGroupRef.current) return
+      if (!raycaster.ray.intersectPlane(plane, hit) || !stageGroupRef.current) return false
       const local = stageGroupRef.current.worldToLocal(hit.clone())
       const xCm = local.x / CM_TO_M
       const yCm = local.z / CM_TO_M
       const proj = liveRef.current.project
       const zone = (proj.backstageZones ?? []).find((z) =>
         xCm >= z.xCm && xCm <= z.xCm + z.widthCm && yCm >= z.yCm && yCm <= z.yCm + z.heightCm)
-      if (zone && e.altKey) {
-        // Alt+drop sur une zone : changer l'attache (position de repos).
+      if (zone && altKey) {
+        // Alt+dépôt sur une zone : changer l'attache (position de repos).
         for (const pointId of pointIds) sidecar.updatePoint(pointId, { homeZoneId: zone.id })
-        return
+        return true
       }
       let cueId = selectedCueId
       if (!cueId) {
@@ -2099,14 +2087,9 @@ function SceneContent({
       for (const pointId of pointIds) sidecar.setActivation(cueId, pointId, { targetXCm: xCm, targetYCm: yCm })
       if (pointIds.length === 1) onSelectPoint(pointIds[0])
       else onSelectPoints(pointIds)
-    }
-    dom.addEventListener('dragover', onDragOver)
-    dom.addEventListener('drop', onDrop)
-    return () => {
-      dom.removeEventListener('dragover', onDragOver)
-      dom.removeEventListener('drop', onDrop)
-    }
-  }, [gl, camera, raycaster, selectedCueId, onSelectPoint, onSelectPoints])
+      return true
+    },
+  }), [gl, camera, raycaster, selectedCueId, onSelectPoint, onSelectPoints])
 
   // Suppr retire le waypoint sélectionné AVANT que le raccourci global ne
   // supprime le bloc (phase capture + stopPropagation) ; Échap désélectionne
@@ -2376,7 +2359,16 @@ function SceneContent({
   )
 }
 
-export function Scene(props: {
+/** Dépôt d'acteur(s) depuis le roster, appelé directement (pas de drag-and-
+ * drop HTML5, voir le commentaire près de useImperativeHandle plus haut).
+ * `clientX/clientY` en coordonnées écran ; retourne false si le point
+ * tombe hors du canvas (l'appelant sait alors qu'il doit chercher une
+ * autre cible, ex. le roster lui-même). */
+export interface SceneHandle {
+  placeActorsAt: (pointIds: string[], clientX: number, clientY: number, altKey: boolean) => boolean
+}
+
+export const Scene = forwardRef<SceneHandle, {
   project: Project
   positions: Record<string, Pose>
   tMs: number
@@ -2392,14 +2384,19 @@ export function Scene(props: {
   gridOpacity: number
   snapToGrid: boolean
   zoomAction: { token: number; factor: number }
-}) {
+}>(function Scene(props, ref) {
   // Rectangle du lasso : dessiné en HTML au-dessus du canvas (le canvas ne
   // peut pas rendre de DOM) — SceneContent pilote, ce wrapper affiche.
   const [lassoRect, setLassoRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const dropHandleRef = useRef<SceneHandle | null>(null)
+  useImperativeHandle(ref, () => ({
+    placeActorsAt: (pointIds, clientX, clientY, altKey) =>
+      dropHandleRef.current?.placeActorsAt(pointIds, clientX, clientY, altKey) ?? false,
+  }), [])
   return (
     <div className="scene-canvas-wrap">
       <Canvas>
-        <SceneContent {...props} onLassoRect={setLassoRect} />
+        <SceneContent {...props} onLassoRect={setLassoRect} dropHandleRef={dropHandleRef} />
       </Canvas>
       {lassoRect && (
         <div
@@ -2409,4 +2406,4 @@ export function Scene(props: {
       )}
     </div>
   )
-}
+})
