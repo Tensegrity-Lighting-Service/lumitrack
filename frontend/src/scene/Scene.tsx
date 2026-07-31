@@ -1209,6 +1209,15 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
   const centerX = (minX + maxX) / 2
   const centerY = (minY + maxY) / 2
   const matrix = new THREE.Matrix4().makeTranslation(...stageToLocal(centerX, centerY, 0))
+  // La bague de rotation (et les autres poignées) doit dépasser l'étendue
+  // du groupe, pas rester collée au pivot central — sinon elle semble
+  // "trop près" pour une sélection large (signalé 2026-08-01). `scale` de
+  // PivotControls est un rayon en PIXELS ÉCRAN (fixed=true) ; on le calcule
+  // depuis la demi-diagonale du groupe (cm -> px, même conversion que
+  // padCm juste au-dessus, inversée) avec 30% de marge, jamais en dessous
+  // d'un plancher pour qu'un acteur seul reste saisissable.
+  const halfDiagCm = Math.hypot(maxX - centerX, maxY - centerY)
+  const gizmoScalePx = Math.max(70, halfDiagCm * CM_TO_M * zoomNow * 1.3)
 
   const kindFor = (component: string): DragKind =>
     component === 'Rotator' ? 'rotate' : component === 'Sphere' ? 'resize' : 'move'
@@ -1337,7 +1346,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
         disableScaling={singleMember}
         disableSliders={false}
         fixed
-        scale={90}
+        scale={gizmoScalePx}
         lineWidth={2.5}
         axisColors={['#4F6DF5', '#4F6DF5', '#4F6DF5']}
         hoveredColor="#f5c84f"
