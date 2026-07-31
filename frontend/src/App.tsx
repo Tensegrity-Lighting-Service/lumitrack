@@ -11,6 +11,12 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
+import {
+  DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
+  type DragEndEvent, type DragStartEvent,
+} from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 const LUMITRACK_FILTER = [{ name: 'Projet Lumitrack', extensions: ['lumitrack'] }]
 
@@ -24,11 +30,12 @@ async function pickSaveAsPath(projectName: string): Promise<string | null> {
   })
   return typeof path === 'string' ? path : null
 }
-import type { Activation, BackstageZone, Cue, Point, Project } from './types'
+import type { Activation, BackstageZone, Cue, Point, Project, RosterGroup } from './types'
 
-// Sentinelle pour transporter "sans groupe" dans un attribut data-* HTML
-// (qui ne peut porter que des chaînes) — voir data-drop-group.
-const UNGROUPED_MARKER = '__ungrouped__'
+// Payload porté par chaque item dnd-kit du roster (acteur ou dossier) —
+// lu dans App.handleDragStart/handleDragEnd pour savoir quoi déplacer et
+// où, et par les lignes elles-mêmes pour s'enregistrer sous le bon id.
+type RosterDragData = { type: 'point'; pointId: string } | { type: 'group'; groupId: string }
 
 const ROSTER_MIN = 160
 const ROSTER_MAX = 420
@@ -165,6 +172,136 @@ function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }
   )
 }
 
+/** Ligne d'acteur du roster — glissable ET cible de dépôt (dnd-kit fusionne
+ * les deux via useSortable) pour ranger/réordonner. onSelect reste un plain
+ * onClick (Ctrl/Maj/clic simple) : le PointerSensor de dnd-kit n'intercepte
+ * le geste qu'au-delà d'un seuil de mouvement, un simple clic remonte donc
+ * normalement (voir activationConstraint dans App). */
+function RosterPointRow({ point, selected, moving, offstage, onSelect }: {
+  point: Point
+  selected: boolean
+  moving: boolean
+  offstage: boolean
+  onSelect: (e: React.MouseEvent) => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `point:${point.id}`,
+    data: { type: 'point', pointId: point.id } satisfies RosterDragData,
+  })
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition: transition ?? undefined,
+    opacity: isDragging ? 0.4 : undefined,
+  }
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={selected ? 'selected' : ''}
+      onClick={onSelect}
+      {...attributes}
+      {...listeners}
+    >
+      <span
+        className={`status-dot ${moving ? 'moving' : 'idle'}`}
+        title={moving ? 'En mouvement' : 'Immobile'}
+      />
+      <span className="swatch" style={{ background: point.color }} />
+      {point.number !== null && <span className="point-number">{point.number}</span>}
+      <span className="point-name">{point.name}</span>
+      {offstage && <span className="offstage" title="Hors scène">•</span>}
+    </li>
+  )
+}
+
+/** En-tête de dossier — glissable (réordonner les dossiers entre eux) ET
+ * cible de dépôt (recevoir des acteurs, de n'importe quel autre conteneur :
+ * useSortable enregistre le droppable indépendamment du SortableContext
+ * d'où vient l'élément actif). Les contrôles internes (caret, renommage,
+ * suppression) coupent la propagation du pointerdown en plus du clic, sinon
+ * les utiliser pourrait être lu comme le tout début d'un glisser de dossier. */
+function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleCollapse, onStartRename, onCommitRename, onCancelRename, onDelete, onSelectAll }: {
+  group: RosterGroup
+  memberCount: number
+  collapsed: boolean
+  renaming: boolean
+  onToggleCollapse: () => void
+  onStartRename: () => void
+  onCommitRename: (name: string) => void
+  onCancelRename: () => void
+  onDelete: () => void
+  onSelectAll: () => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `group:${group.id}`,
+    data: { type: 'group', groupId: group.id } satisfies RosterDragData,
+  })
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition: transition ?? undefined,
+    opacity: isDragging ? 0.4 : undefined,
+  }
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="roster-group-head"
+      onClick={onSelectAll}
+      {...attributes}
+      {...listeners}
+    >
+      <span
+        className={`roster-group-caret ${collapsed ? 'collapsed' : ''}`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); onToggleCollapse() }}
+      >▾</span>
+      {renaming ? (
+        <input
+          className="roster-group-rename"
+          autoFocus
+          defaultValue={group.name}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          onBlur={(e) => onCommitRename(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            if (e.key === 'Escape') onCancelRename()
+          }}
+        />
+      ) : (
+        <span
+          className="roster-group-name"
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => { e.stopPropagation(); onStartRename() }}
+          title="Double-clic pour renommer"
+        >
+          {group.name}
+        </span>
+      )}
+      <span className="roster-group-count">{memberCount}</span>
+      <button
+        className="roster-group-delete"
+        title="Supprimer ce sous-groupe (les acteurs deviennent sans groupe)"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); onDelete() }}
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
+/** Zone "Sans groupe" : cible de dépôt pure (jamais glissée elle-même) pour
+ * sortir un acteur d'un dossier. */
+function RosterUngroupedZone() {
+  const { setNodeRef, isOver } = useDroppable({ id: 'ungrouped' })
+  return (
+    <li ref={setNodeRef} className={`roster-ungrouped-zone${isOver ? ' roster-drop-over' : ''}`}>
+      Sans groupe
+    </li>
+  )
+}
+
 function App() {
   const project = useProject()
   const tick = useTick()
@@ -236,10 +373,9 @@ function App() {
   // (Événement natif Tauri : contrairement au drop HTML5, il porte les
   // vrais chemins disque, que le sidecar peut ouvrir.) Retiré puis remis le
   // 2026-07-31 : désactivé un temps le temps de soupçonner un conflit avec
-  // le glisser-déposer interne (roster/scène), qui s'est finalement avéré
-  // ne dépendre d'aucune API drag-and-drop HTML5 (voir plus bas,
-  // beginRosterDrag) — dragDropEnabled peut donc rester à sa valeur par
-  // défaut (true) sans rien casser.
+  // le glisser-déposer interne (roster/scène), qui repose maintenant sur
+  // dnd-kit (pointer-events en interne, pas l'API HTML5) — dragDropEnabled
+  // peut donc rester à sa valeur par défaut (true) sans rien casser.
   useEffect(() => {
     const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac']
     let unlisten: (() => void) | null = null
@@ -258,32 +394,38 @@ function App() {
     return () => { if (unlisten) unlisten() }
   }, [])
 
-  // Explorateur du roster (mission "roster explorateur", 2026-07-31) —
-  // diagnostiqué le même jour avec des logs + une vidéo de Florian : le
-  // drag-and-drop HTML5 (dragstart/dragover/drop/dragend) sur un élément
-  // DOM classique ne produit STRICTEMENT AUCUN événement après le
-  // dragstart dans cette WebView (même en écoutant au niveau window en
-  // phase de capture) — seul un canvas semble échapper au problème. Plutôt
-  // que de continuer à patcher une API dont on a maintenant la preuve
-  // qu'elle ne fonctionne pas ici, ce geste est entièrement réimplémenté
-  // en pointer-events (pointerdown/pointermove/pointerup + capture de
-  // pointeur), exactement le pattern déjà fiable ailleurs dans ce fichier
-  // (boîte de transformation, blocs de la timeline) — la cible réelle est
-  // retrouvée via document.elementFromPoint au relâchement, pas via un
-  // DataTransfer. `rosterProjectRef` évite de recréer les callbacks à
+  // Explorateur du roster (mission "roster explorateur", 2026-07-31) — après
+  // trois tentatives ratées de réimplémenter le glisser-déposer à la main
+  // (HTML5 natif, puis pointer-events maison : dragstart se déclenchait
+  // mais plus rien ne suivait dans cette WebView, et une course avec le
+  // lasso de la scène s'ajoutait par-dessus), Florian a demandé de passer
+  // à une librairie éprouvée plutôt que de continuer à fabriquer —
+  // dnd-kit, qui gère lui-même les subtilités de capture de pointeur, de
+  // seuil de mouvement (clic vs glisser) et l'animation "les autres
+  // éléments se décalent" que du code maison n'aurait pas donnée aussi
+  // proprement. `rosterProjectRef` évite de recréer les callbacks à
   // chaque écho de projet.
   const rosterProjectRef = useRef(project)
   rosterProjectRef.current = project
   const sceneRef = useRef<SceneHandle>(null)
-  const rosterDragRef = useRef<{
-    ids: string[]
-    kind: 'points' | 'group'
-    sourceGroupId: string | null
-    startX: number
-    startY: number
-    moved: boolean
-  } | null>(null)
-  const [rosterDragGhost, setRosterDragGhost] = useState<{ x: number; y: number; label: string } | null>(null)
+  const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+  // Alt au moment du relâchement (dnd-kit n'expose pas l'event natif du
+  // drop, seulement celui qui a déclenché le geste) — attache de zone
+  // backstage vs déplacement normal, voir handleDragEnd/branche 'scene'.
+  const altHeldRef = useRef(false)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Alt') altHeldRef.current = true }
+    const onKeyUp = (e: KeyboardEvent) => { if (e.key === 'Alt') altHeldRef.current = false }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [])
+
+  const activeDragIdsRef = useRef<string[]>([])
+  const [activeDragLabel, setActiveDragLabel] = useState<string | null>(null)
 
   // Déplace des acteurs vers `targetGroupId` (null = sans groupe), insérés
   // juste avant `beforeId` dans l'ordre global (null = à la fin) — un seul
@@ -302,71 +444,83 @@ function App() {
     }
   }, [])
 
-  const handleRosterDrop = useCallback((clientX: number, clientY: number, altKey: boolean) => {
-    const d = rosterDragRef.current
-    if (!d) return
-    const atPoint = document.elementFromPoint(clientX, clientY) as HTMLElement | null
-    const target = atPoint?.closest('[data-drop-point], [data-drop-group-header], [data-drop-ungrouped]') as HTMLElement | null
-    if (target) {
-      const groupHeaderId = target.dataset.dropGroupHeader
-      if (groupHeaderId) {
-        if (d.kind === 'group' && d.sourceGroupId && d.sourceGroupId !== groupHeaderId) {
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const data = event.active.data.current as RosterDragData | undefined
+    const proj = rosterProjectRef.current
+    if (!data || !proj) return
+    if (data.type === 'point') {
+      // Glisser un acteur qui fait déjà partie de la sélection courante
+      // embarque toute la sélection (comme dans un explorateur de fichiers).
+      const alreadySelected = selectedPointIds.includes(data.pointId)
+      const ids = alreadySelected && selectedPointIds.length > 1 ? selectedPointIds : [data.pointId]
+      activeDragIdsRef.current = ids
+      const point = proj.points.find((p) => p.id === data.pointId)
+      setActiveDragLabel(ids.length > 1 ? `${ids.length} acteurs` : (point?.name ?? ''))
+    } else {
+      const members = proj.points.filter((p) => p.rosterGroupId === data.groupId)
+      activeDragIdsRef.current = members.map((m) => m.id)
+      const group = proj.rosterGroups.find((g) => g.id === data.groupId)
+      setActiveDragLabel(group?.name ?? '')
+    }
+  }, [selectedPointIds])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const ids = activeDragIdsRef.current
+    activeDragIdsRef.current = []
+    setActiveDragLabel(null)
+    const activeData = event.active.data.current as RosterDragData | undefined
+    const overId = event.over ? String(event.over.id) : null
+    if (!overId || !activeData) return
+
+    if (overId === 'scene') {
+      if (ids.length === 0) return
+      const activator = event.activatorEvent as (PointerEvent | MouseEvent) | undefined
+      const clientX = (activator?.clientX ?? 0) + event.delta.x
+      const clientY = (activator?.clientY ?? 0) + event.delta.y
+      sceneRef.current?.placeActorsAt(ids, clientX, clientY, altHeldRef.current)
+      return
+    }
+    if (overId === 'ungrouped') {
+      moveDroppedIds(ids, null, null)
+      return
+    }
+    if (overId.startsWith('group:')) {
+      const targetGroupId = overId.slice('group:'.length)
+      if (activeData.type === 'group') {
+        if (activeData.groupId !== targetGroupId) {
           // Réordonner les dossiers : place le dossier glissé juste avant celui-ci.
           const proj = rosterProjectRef.current
           if (!proj) return
-          const order = proj.rosterGroups.map((g) => g.id).filter((id) => id !== d.sourceGroupId)
-          const at = order.indexOf(groupHeaderId)
-          order.splice(at, 0, d.sourceGroupId)
+          const order = proj.rosterGroups.map((g) => g.id).filter((id) => id !== activeData.groupId)
+          const at = order.indexOf(targetGroupId)
+          order.splice(at, 0, activeData.groupId)
           sidecar.setRosterGroups(order.map((id) => proj.rosterGroups.find((g) => g.id === id)!))
-          return
         }
-        moveDroppedIds(d.ids, groupHeaderId, null)
         return
       }
-      if (target.dataset.dropUngrouped) {
-        moveDroppedIds(d.ids, null, null)
-        return
-      }
-      const pointId = target.dataset.dropPoint
-      if (pointId && !d.ids.includes(pointId)) {
-        const rawGroup = target.dataset.dropGroup
-        const targetGroupId = rawGroup === UNGROUPED_MARKER ? null : (rawGroup ?? null)
-        moveDroppedIds(d.ids, targetGroupId, pointId)
-      }
+      moveDroppedIds(ids, targetGroupId, null)
       return
     }
-    // Pas dans le roster : tenter un dépôt dans la scène 3D (placement
-    // d'acteur, ou attache de zone backstage avec Alt) — no-op silencieux
-    // si le point tombe hors du canvas.
-    sceneRef.current?.placeActorsAt(d.ids, clientX, clientY, altKey)
+    if (overId.startsWith('point:')) {
+      const targetPointId = overId.slice('point:'.length)
+      const proj = rosterProjectRef.current
+      const targetPoint = proj?.points.find((p) => p.id === targetPointId)
+      if (activeData.type === 'point') {
+        if (!ids.includes(targetPointId)) moveDroppedIds(ids, targetPoint?.rosterGroupId ?? null, targetPointId)
+      } else {
+        // Un dossier déposé sur une ligne précise : rejoint le groupe de
+        // cette ligne (comme sur son en-tête), sans viser une position
+        // exacte — les dossiers eux-mêmes n'ont pas d'ordre au sein d'un
+        // acteur.
+        moveDroppedIds(ids, targetPoint?.rosterGroupId ?? null, null)
+      }
+    }
   }, [moveDroppedIds])
 
-  const beginRosterDrag = useCallback((e: React.PointerEvent, ids: string[], kind: 'points' | 'group', sourceGroupId: string | null, label: string) => {
-    // ids vide accepté pour un dossier (kind 'group') : un dossier sans
-    // membre doit quand même pouvoir être réordonné parmi les autres.
-    if (e.button !== 0 || (kind === 'points' && ids.length === 0)) return
-    const el = e.currentTarget as HTMLElement
-    const pointerId = e.pointerId
-    el.setPointerCapture(pointerId)
-    rosterDragRef.current = { ids, kind, sourceGroupId, startX: e.clientX, startY: e.clientY, moved: false }
-    const onMove = (ev: PointerEvent) => {
-      const d = rosterDragRef.current
-      if (!d) return
-      if (!d.moved && Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY) > 4) d.moved = true
-      if (d.moved) setRosterDragGhost({ x: ev.clientX, y: ev.clientY, label })
-    }
-    const onUp = (ev: PointerEvent) => {
-      if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId)
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      const d = rosterDragRef.current
-      rosterDragRef.current = null
-      setRosterDragGhost(null)
-      if (d && d.moved) handleRosterDrop(ev.clientX, ev.clientY, ev.altKey)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }, [handleRosterDrop])
+  // La scène 3D est une simple zone de dépôt dnd-kit — le point d'impact
+  // exact (raycasting) est recalculé dans handleDragEnd via placeActorsAt,
+  // ce hook ne sert qu'à faire reconnaître le canvas comme cible valide.
+  const { setNodeRef: setSceneDropRef } = useDroppable({ id: 'scene' })
 
   const tMs = tick?.tMs ?? 0
   const playing = tick?.playing ?? false
@@ -532,6 +686,7 @@ function App() {
         gridTemplateRows: `26px 1fr 6px ${timelineHeight}px`,
       }}
     >
+      <DndContext sensors={dndSensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <MenuBar menus={menus} />
 
       <aside className="roster">
@@ -561,12 +716,12 @@ function App() {
         <ul>
           {(() => {
             // Explorateur de fichiers (mission "roster explorateur",
-            // 2026-07-31, remplace le popup de gestion en lot) : dossiers =
-            // sous-groupes organisationnels, glisser-déposer pour ranger ET
-            // réordonner (pointer-events, voir beginRosterDrag/
-            // handleRosterDrop plus haut). Un acteur porte au plus un
-            // dossier (`rosterGroupId`), l'ordre à l'intérieur d'un dossier
-            // suit l'ordre relatif dans `project.points` (reorderPoints).
+            // 2026-07-31) : dossiers = sous-groupes organisationnels,
+            // dnd-kit gère le glisser-déposer pour ranger ET réordonner
+            // (voir DndContext/handleDragStart/handleDragEnd plus haut). Un
+            // acteur porte au plus un dossier (`rosterGroupId`), l'ordre à
+            // l'intérieur d'un dossier suit l'ordre relatif dans
+            // `project.points` (reorderPoints).
             const byId = new Map(project.points.map((p, i) => [p.id, i] as const))
             const selectRange = (point: Point) => (e: React.MouseEvent) => {
               const index = byId.get(point.id) ?? -1
@@ -588,36 +743,6 @@ function App() {
               }
             }
 
-            const pointRow = (point: Point) => (
-              <li
-                key={point.id}
-                className={selectedPointIds.includes(point.id) ? 'selected' : ''}
-                data-drop-point={point.id}
-                data-drop-group={point.rosterGroupId ?? UNGROUPED_MARKER}
-                onPointerDown={(e) => {
-                  if (e.button !== 0) return
-                  // Glisser un acteur qui fait déjà partie de la sélection
-                  // courante embarque toute la sélection (comme dans un
-                  // explorateur de fichiers) — lu AVANT selectRange, qui
-                  // modifie la sélection pour le clic lui-même.
-                  const alreadySelected = selectedPointIds.includes(point.id)
-                  const dragIds = alreadySelected && selectedPointIds.length > 1 ? selectedPointIds : [point.id]
-                  selectRange(point)(e)
-                  beginRosterDrag(e, dragIds, 'points', null,
-                    dragIds.length > 1 ? `${dragIds.length} acteurs` : point.name)
-                }}
-              >
-                <span
-                  className={`status-dot ${movingPointIds.has(point.id) ? 'moving' : 'idle'}`}
-                  title={movingPointIds.has(point.id) ? 'En mouvement' : 'Immobile'}
-                />
-                <span className="swatch" style={{ background: point.color }} />
-                {point.number !== null && <span className="point-number">{point.number}</span>}
-                <span className="point-name">{point.name}</span>
-                {!positions[point.id] && <span className="offstage" title="Hors scène">•</span>}
-              </li>
-            )
-
             // Groupes (dans leur ordre défini) d'abord, acteurs sans groupe
             // ensuite — purement pour ordonner la vue.
             const grouped = project.rosterGroups.map((g) => ({
@@ -628,93 +753,81 @@ function App() {
               !project.rosterGroups.some((g) => g.id === p.rosterGroupId))
 
             return (
-              <>
+              <SortableContext
+                items={project.rosterGroups.map((g) => `group:${g.id}`)}
+                strategy={verticalListSortingStrategy}
+              >
                 {grouped.map(({ group, members }) => {
                   const collapsed = collapsedGroups.has(group.id)
                   return (
                     <li key={group.id} className="roster-group">
-                      <div
-                        className="roster-group-head"
-                        data-drop-group-header={group.id}
-                        onPointerDown={(e) => {
-                          if (e.button !== 0) return
-                          // Glisser le dossier : batch vers la scène (mêmes
-                          // acteurs, un seul dépôt) ET réordonnancement des
-                          // dossiers entre eux (branche 'group' de handleRosterDrop).
-                          beginRosterDrag(e, members.map((m) => m.id), 'group', group.id, group.name)
+                      <RosterGroupHead
+                        group={group}
+                        memberCount={members.length}
+                        collapsed={collapsed}
+                        renaming={renamingGroupId === group.id}
+                        onToggleCollapse={() => setCollapsedGroups((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(group.id)) next.delete(group.id)
+                          else next.add(group.id)
+                          return next
+                        })}
+                        onStartRename={() => setRenamingGroupId(group.id)}
+                        onCommitRename={(name) => {
+                          const trimmed = name.trim()
+                          if (trimmed) {
+                            sidecar.setRosterGroups(project.rosterGroups.map((g) =>
+                              g.id === group.id ? { ...g, name: trimmed } : g))
+                          }
+                          setRenamingGroupId(null)
                         }}
-                        onClick={() => {
-                          // Sélectionne tout le groupe d'un clic (§demande
-                          // Florian "faciliter la sélection d'un groupe").
-                          setSelectedPointIds(members.map((m) => m.id))
+                        onCancelRename={() => setRenamingGroupId(null)}
+                        onDelete={() => {
+                          if (window.confirm('Supprimer ce sous-groupe ? Les acteurs qu’il contient redeviennent « sans groupe ».')) {
+                            sidecar.setRosterGroups(project.rosterGroups.filter((g) => g.id !== group.id))
+                          }
                         }}
-                      >
-                        <span
-                          className={`roster-group-caret ${collapsed ? 'collapsed' : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setCollapsedGroups((prev) => {
-                              const next = new Set(prev)
-                              if (next.has(group.id)) next.delete(group.id)
-                              else next.add(group.id)
-                              return next
-                            })
-                          }}
-                        >▾</span>
-                        {renamingGroupId === group.id ? (
-                          <input
-                            className="roster-group-rename"
-                            autoFocus
-                            defaultValue={group.name}
-                            onClick={(e) => e.stopPropagation()}
-                            onBlur={(e) => {
-                              const name = e.target.value.trim()
-                              if (name) sidecar.setRosterGroups(project.rosterGroups.map((g) => g.id === group.id ? { ...g, name } : g))
-                              setRenamingGroupId(null)
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                              if (e.key === 'Escape') setRenamingGroupId(null)
-                            }}
-                          />
-                        ) : (
-                          <span
-                            className="roster-group-name"
-                            onDoubleClick={(e) => { e.stopPropagation(); setRenamingGroupId(group.id) }}
-                            title="Double-clic pour renommer"
-                          >
-                            {group.name}
-                          </span>
-                        )}
-                        <span className="roster-group-count">{members.length}</span>
-                        <button
-                          className="roster-group-delete"
-                          title="Supprimer ce sous-groupe (les acteurs deviennent sans groupe)"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (window.confirm('Supprimer ce sous-groupe ? Les acteurs qu’il contient redeviennent « sans groupe ».')) {
-                              sidecar.setRosterGroups(project.rosterGroups.filter((g) => g.id !== group.id))
-                            }
-                          }}
-                        >
-                          ✕
-                        </button>
-                      </div>
+                        onSelectAll={() => setSelectedPointIds(members.map((m) => m.id))}
+                      />
                       {!collapsed && (
-                        <ul className="roster-group-members">
-                          {members.map((p) => pointRow(p))}
-                        </ul>
+                        <SortableContext
+                          items={members.map((m) => `point:${m.id}`)}
+                          strategy={verticalListSortingStrategy}
+                        >
+                          <ul className="roster-group-members">
+                            {members.map((p) => (
+                              <RosterPointRow
+                                key={p.id}
+                                point={p}
+                                selected={selectedPointIds.includes(p.id)}
+                                moving={movingPointIds.has(p.id)}
+                                offstage={!positions[p.id]}
+                                onSelect={selectRange(p)}
+                              />
+                            ))}
+                          </ul>
+                        </SortableContext>
                       )}
                     </li>
                   )
                 })}
-                {project.rosterGroups.length > 0 && (
-                  <li className="roster-ungrouped-zone" data-drop-ungrouped="1">
-                    Sans groupe
-                  </li>
-                )}
-                {ungrouped.map((p) => pointRow(p))}
-              </>
+                {project.rosterGroups.length > 0 && <RosterUngroupedZone />}
+                <SortableContext
+                  items={ungrouped.map((p) => `point:${p.id}`)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {ungrouped.map((p) => (
+                    <RosterPointRow
+                      key={p.id}
+                      point={p}
+                      selected={selectedPointIds.includes(p.id)}
+                      moving={movingPointIds.has(p.id)}
+                      offstage={!positions[p.id]}
+                      onSelect={selectRange(p)}
+                    />
+                  ))}
+                </SortableContext>
+              </SortableContext>
             )
           })()}
         </ul>
@@ -722,7 +835,7 @@ function App() {
 
       <VerticalResizer area="vhandle1" onDeltaX={(dx) => setRosterWidth((w) => clamp(w + dx, ROSTER_MIN, ROSTER_MAX))} />
 
-      <main className="scene-view">
+      <main className="scene-view" ref={setSceneDropRef}>
         <Scene
           ref={sceneRef}
           project={project}
@@ -823,19 +936,6 @@ function App() {
       {showBundleHistory && bundlePath && (
         <BundleHistoryPanel path={bundlePath} onClose={() => setShowBundleHistory(false)} />
       )}
-      {rosterDragGhost && (
-        // Le drag-and-drop HTML5 fournit normalement une image de glisser
-        // native — remplacé ici par pointer-events (voir beginRosterDrag),
-        // donc ce petit badge qui suit le curseur est le seul retour visuel
-        // pendant le geste.
-        <div
-          className="roster-drag-ghost"
-          style={{ left: rosterDragGhost.x, top: rosterDragGhost.y }}
-        >
-          {rosterDragGhost.label}
-        </div>
-      )}
-
       <footer className="timeline-dock">
         <CueTimeline
           project={project}
@@ -848,6 +948,11 @@ function App() {
           onSelectCue={setSelectedCueId}
         />
       </footer>
+
+      <DragOverlay>
+        {activeDragLabel && <div className="roster-drag-ghost">{activeDragLabel}</div>}
+      </DragOverlay>
+      </DndContext>
     </div>
   )
 }
