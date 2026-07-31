@@ -25,10 +25,14 @@ class SidecarClient {
   bundleArchive: BundleArchiveMessage | null = null
   /** Chemin du fichier .lumitrack courant (format 2026-07-31), une fois
    * ouvert ou sauvegardé une première fois — pilote "Enregistrer" (pas de
-   * dialogue) vs "Enregistrer sous…" (dialogue toujours). Optimiste : posé
-   * dès l'envoi de la commande, pas seulement à la confirmation (save_bundle
-   * répond "saved", mais load_bundle ne fait que rediffuser le projet, sans
-   * signal distinct confirmant le chemin d'origine). */
+   * dialogue) vs "Enregistrer sous…" (dialogue toujours). Posé de façon
+   * optimiste dès l'envoi de saveBundle/loadBundle (retour instantané dans
+   * l'UI), puis CORRIGÉ à la confirmation "saved" — save_bundle peut
+   * rediriger vers un dossier dédié créé automatiquement (voir
+   * core/project.py::_ensure_own_folder), le chemin optimiste n'est donc
+   * pas garanti être le chemin final. load_bundle, lui, n'a pas de signal
+   * de confirmation distinct (juste une rediffusion du projet) : son
+   * chemin reste optimiste sans correction ultérieure. */
   bundlePath: string | null = null
 
   private ws: WebSocket | null = null
@@ -70,11 +74,17 @@ class SidecarClient {
         this.psnPreview = msg
       } else if (msg.type === 'bundle_archive') {
         this.bundleArchive = msg
+      } else if (msg.type === 'saved') {
+        // save_bundle peut CORRIGER le chemin demandé (dossier dédié
+        // inséré si l'utilisateur n'avait pas déjà navigué dans un dossier
+        // à ce nom) — le chemin "courant" retenu doit être celui réellement
+        // écrit, pas l'écho optimiste posé au moment de l'appel.
+        this.bundlePath = msg.path
       } else if (msg.type === 'error') {
         this.lastError = msg.message
         console.error('[sidecar]', msg.message)
       } else {
-        // 'ack' / 'saved': no exposed state changed, skip the re-render.
+        // 'ack': no exposed state changed, skip the re-render.
         return
       }
       this.emit()

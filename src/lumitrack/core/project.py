@@ -674,12 +674,36 @@ def _ensure_folder_icon(bundle_dir: str):
         pass
 
 
+def _ensure_own_folder(file_path: str) -> str:
+    """-> chemin de fichier éventuellement corrigé pour vivre dans SON
+    PROPRE dossier (dossier/dossier.lumitrack), jamais mélangé avec
+    d'autres projets. Le dialogue "Enregistrer sous" ne fait que choisir un
+    chemin de fichier : si l'utilisateur navigue dans un dossier existant
+    ("Sauvegarde/") et tape juste un nom ("Demo.lumitrack"), le dossier
+    parent immédiat ne porte pas déjà ce nom — media/archive/icône y
+    seraient alors posés directement dans "Sauvegarde/", partagés (et donc
+    mélangés) avec n'importe quel AUTRE projet qui s'y sauvegarderait aussi
+    (constaté 2026-07-31 : "il n'a pas créé de dossier, il a juste tout mis
+    là où j'étais"). Idempotent : si le dossier parent porte déjà le nom du
+    fichier (un re-save normal), rien ne change."""
+    stem = os.path.splitext(os.path.basename(file_path))[0]
+    parent_dir = os.path.dirname(file_path) or "."
+    if os.path.basename(os.path.normpath(parent_dir)) == stem:
+        return file_path
+    own_dir = os.path.join(parent_dir, stem)
+    return os.path.join(own_dir, os.path.basename(file_path))
+
+
 def save_bundle(project: Project, file_path: str) -> str:
-    """Write `project` to `file_path` (a .lumitrack file). If a file already
-    exists there, it is archived first (timestamped copy in archive/,
-    pruned to ARCHIVE_MAX_VERSIONS) — never overwritten without a copy.
-    Media is deduped by content hash into media/, alongside file_path's own
-    directory. Returns `file_path`."""
+    """Write `project` to `file_path` (a .lumitrack file) — or to a
+    dedicated subfolder next to it sharing the file's own name, if
+    `file_path` doesn't already live in one (see `_ensure_own_folder`).
+    If a file already exists at the resolved path, it is archived first
+    (timestamped copy in archive/, pruned to ARCHIVE_MAX_VERSIONS) — never
+    overwritten without a copy. Media is deduped by content hash into
+    media/, alongside the resolved directory. Returns the resolved
+    `file_path` actually written (may differ from the argument)."""
+    file_path = _ensure_own_folder(file_path)
     bundle_dir = os.path.dirname(file_path) or "."
     os.makedirs(bundle_dir, exist_ok=True)
     _ensure_folder_icon(bundle_dir)

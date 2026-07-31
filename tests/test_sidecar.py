@@ -55,6 +55,18 @@ def test_unknown_transport_action_is_reported_as_error():
     assert reply is not None and reply["type"] == "error"
 
 
+def test_save_bundle_reply_reflects_the_auto_created_folder(tmp_path):
+    """save_bundle peut rediriger vers un dossier dédié (core/project.py::
+    _ensure_own_folder) — le sidecar doit répondre avec le chemin RÉEL, pas
+    un écho brut de la demande, sinon le frontend retiendrait un "chemin
+    courant" qui n'existe pas."""
+    session = Session()
+    naive_path = str(tmp_path / "Sauvegarde" / "Demo.lumitrack")
+    reply = _run(_handle_message(session, {"type": "save_bundle", "path": naive_path}))
+    expected = str(tmp_path / "Sauvegarde" / "Demo" / "Demo.lumitrack")
+    assert reply == {"type": "saved", "path": expected}
+
+
 def test_save_bundle_list_archive_and_load_bundle_wire_protocol(tmp_path):
     """Format de bundle 2026-07-31 (fichier .lumitrack, pas dossier) : la
     commande save_bundle prend le chemin du FICHIER, list_bundle_archive

@@ -440,6 +440,37 @@ def _bundled_project(tmp_path, audio_bytes=b"fake-audio-bytes"):
     return project
 
 
+def test_save_bundle_creates_its_own_dedicated_folder(tmp_path):
+    """Bug réel (2026-07-31) : "Enregistrer sous" ne fait que choisir un
+    chemin de fichier — naviguer dans un dossier existant ("Sauvegarde/")
+    et taper juste "Demo.lumitrack" mettait media/archive DIRECTEMENT dans
+    "Sauvegarde/", partagés avec n'importe quel autre projet qui s'y
+    sauvegarderait. Chaque projet doit vivre dans son propre dossier."""
+    project = _bundled_project(tmp_path)
+    naive_path = str(tmp_path / "Sauvegarde" / "Demo.lumitrack")
+
+    real_path = save_bundle(project, naive_path)
+
+    assert real_path == str(tmp_path / "Sauvegarde" / "Demo" / "Demo.lumitrack")
+    assert os.path.isfile(real_path)
+    assert not os.path.isfile(naive_path)  # jamais écrit au chemin naïf
+    assert (tmp_path / "Sauvegarde" / "Demo" / "media").is_dir()
+    assert not (tmp_path / "Sauvegarde" / "media").exists()  # pas mélangé au parent
+
+    back = load_bundle(real_path)
+    assert back.name == "Bundled"
+
+
+def test_save_bundle_does_not_double_nest_when_already_in_own_folder(tmp_path):
+    project = _bundled_project(tmp_path)
+    already_own = str(tmp_path / "Demo" / "Demo.lumitrack")
+
+    real_path = save_bundle(project, already_own)
+
+    assert real_path == already_own
+    assert not (tmp_path / "Demo" / "Demo").exists()
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="icône de dossier = convention Windows Explorer uniquement")
 def test_save_bundle_sets_a_windows_folder_icon(tmp_path):
     project = _bundled_project(tmp_path)
@@ -649,8 +680,7 @@ def test_curves_survive_bundle_roundtrip(tmp_path):
     curve = _curve_ease_in_out()
     p.cues.append(Cue(id="c1", name="A", start_ms=0, duration_ms=500, activations={
         "p1": Activation(target_x_cm=10.0, curves={"x": curve, "yaw": _curve_linear()})}))
-    path = str(tmp_path / "rt.lumitrack")
-    save_bundle(p, path)
+    path = save_bundle(p, str(tmp_path / "rt.lumitrack"))
     p2 = load_bundle(path)
     act = p2.cues[0].activations["p1"]
     assert act.curves is not None and set(act.curves.keys()) == {"x", "yaw"}
@@ -735,8 +765,7 @@ def test_spatial_path_handles_and_roundtrip(tmp_path):
     act = p.cues[1].activations["p1"]
     act.start_handle = {"dxCm": 0.0, "dyCm": 300.0}
     act.target_handle = {"dxCm": 0.0, "dyCm": 300.0}
-    path = str(tmp_path / "p.lumitrack")
-    save_bundle(p, path)
+    path = save_bundle(p, str(tmp_path / "p.lumitrack"))
     p2 = load_bundle(path)
     act2 = p2.cues[1].activations["p1"]
     assert act2.start_handle == {"dxCm": 0.0, "dyCm": 300.0}

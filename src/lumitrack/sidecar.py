@@ -595,9 +595,12 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         # msg["path"] est le chemin complet du FICHIER .lumitrack (format
         # 2026-07-31 : le fichier porte l'extension, pas le dossier —
         # l'ancien contenu à ce chemin, s'il existe, est archivé avant
-        # d'être écrasé, voir core/project.py::save_bundle).
-        save_bundle(session.project, msg["path"])
-        return {"type": "saved", "path": msg["path"]}
+        # d'être écrasé, voir core/project.py::save_bundle). save_bundle
+        # peut CORRIGER le chemin (dossier dédié inséré si besoin) : on
+        # renvoie le chemin RÉEL, pas l'écho brut de la demande, sinon le
+        # frontend retiendrait un "chemin courant" qui n'existe pas.
+        real_path = save_bundle(session.project, msg["path"])
+        return {"type": "saved", "path": real_path}
 
     if msg_type == "list_bundle_archive":
         # Lecture seule pour le panneau "Historique des versions" : répond
