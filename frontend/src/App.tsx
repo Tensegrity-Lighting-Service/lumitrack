@@ -411,6 +411,7 @@ function App() {
                 title={movingPointIds.has(point.id) ? 'En mouvement' : 'Immobile'}
               />
               <span className="swatch" style={{ background: point.color }} />
+              {point.number !== null && <span className="point-number">{point.number}</span>}
               <span className="point-name">{point.name}</span>
               {!positions[point.id] && <span className="offstage" title="Hors scène">•</span>}
             </li>

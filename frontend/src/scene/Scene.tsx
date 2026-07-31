@@ -32,7 +32,7 @@ import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
-import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, PathPoint, Project, Pose } from '../types'
+import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, PathPoint, Point, Project, Pose } from '../types'
 import { boundsOf, rotationArc } from './transformBox'
 import type { Bounds } from './transformBox'
 
@@ -52,6 +52,11 @@ const SNAP_RADIUS_M = 0.6
 // world-sized marker would be unreadable at zoom-to-fit scale, defeating
 // the whole "every edit has visible feedback" point of block-edit mode.
 const GHOST_PX = 15
+// Badge numéro/abrégé sur chaque acteur, comme Stancz (le numéro affiché
+// dans son UI, cf. CONCEPTION.md §1.3 — "candidat naturel pour l'ID de
+// tracker"). Taille écran constante : doit rester lisible même au zoom-to-
+// fit d'un stade entier, là où la sphère elle-même ne fait que quelques px.
+const ACTOR_LABEL_PX = 18
 // Waypoints/poignées du tracé spatial : mêmes règles d'échelle écran.
 const WAYPOINT_PX = 9
 const BOX_PAD_PX = 14
@@ -220,6 +225,59 @@ function Actor({ pose, color, selected, draggable, opacity, onPointerDown }: {
         <sphereGeometry args={[ACTOR_RADIUS_M * 1.8, 8, 8]} />
       </mesh>
     </group>
+  )
+}
+
+/** Numéro Stancz si défini, sinon initiales/abrégé du nom (jamais vide —
+ * un acteur sans numéro ni nom reste identifiable). */
+function actorLabelText(point: Point): string {
+  if (point.number !== null && point.number !== undefined) return String(point.number)
+  const trimmed = point.name.trim()
+  if (!trimmed) return '?'
+  const words = trimmed.split(/\s+/).filter(Boolean)
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase()
+  return trimmed.slice(0, 2).toUpperCase()
+}
+
+/** Badge numéro/abrégé au-dessus de l'acteur : plan à taille écran
+ * constante (même technique que ScreenSizedHandle/TargetGhost), texte
+ * rendu dans un CanvasTexture avec contour sombre pour rester lisible sur
+ * n'importe quelle couleur d'acteur. Positionné à la hauteur réelle de
+ * l'acteur mais hors de son groupe pivoté : le numéro ne doit jamais
+ * tourner avec le lacet (yaw), contrairement au cône directionnel. */
+function ActorLabel({ text, xCm, yCm, zCm, opacity }: {
+  text: string; xCm: number; yCm: number; zCm: number; opacity: number
+}) {
+  const ref = useRef<THREE.Mesh>(null)
+  const texture = useMemo(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 64
+    canvas.height = 64
+    const ctx = canvas.getContext('2d')!
+    ctx.font = '700 38px system-ui, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.lineWidth = 7
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+    ctx.strokeText(text, 32, 34)
+    ctx.fillStyle = '#ffffff'
+    ctx.fillText(text, 32, 34)
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.anisotropy = 4
+    return tex
+  }, [text])
+  useFrame(({ camera }) => {
+    if (!ref.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const s = ACTOR_LABEL_PX / zoom
+    ref.current.scale.set(s, s, s)
+  })
+  const [x, y, z] = stageToLocal(xCm, yCm, zCm)
+  return (
+    <mesh ref={ref} position={[x, y + 0.05, z]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={1037}>
+      <planeGeometry args={[1, 1]} />
+      <meshBasicMaterial map={texture} transparent opacity={opacity} depthTest={false} depthWrite={false} />
+    </mesh>
   )
 }
 
@@ -2149,17 +2207,20 @@ function SceneContent({
         {project.points.map((point) => {
           const pose = positions[point.id]
           if (!pose) return null
+          const opacity = editEntries === null ? 1
+            : editEntries[point.id] ? EDIT_ACTIVATED_OPACITY : EDIT_BYSTANDER_OPACITY
           return (
-            <Actor
-              key={point.id}
-              pose={pose}
-              color={point.color}
-              selected={selectedPointIds.includes(point.id)}
-              draggable={Boolean(selectedCueId)}
-              opacity={editEntries === null ? 1
-                : editEntries[point.id] ? EDIT_ACTIVATED_OPACITY : EDIT_BYSTANDER_OPACITY}
-              onPointerDown={(e) => handleActorPointerDown(e, point.id)}
-            />
+            <group key={point.id}>
+              <Actor
+                pose={pose}
+                color={point.color}
+                selected={selectedPointIds.includes(point.id)}
+                draggable={Boolean(selectedCueId)}
+                opacity={opacity}
+                onPointerDown={(e) => handleActorPointerDown(e, point.id)}
+              />
+              <ActorLabel text={actorLabelText(point)} xCm={pose[0]} yCm={pose[1]} zCm={pose[2]} opacity={opacity} />
+            </group>
           )
         })}
 
