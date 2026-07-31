@@ -384,12 +384,31 @@ function App() {
         dropEffect: e.dataTransfer?.dropEffect,
       })
     }
+    // DIAGNOSTIC TEMPORAIRE (suite) : dragover/dragenter n'atteignaient
+    // même pas ce conteneur — on vérifie ici si ÇA ATTEINT NE SERAIT-CE
+    // QUE LA FENÊTRE, n'importe où, à un seul endroit du document.
+    let loggedWindowDragOver = false
+    const onWindowDragOver = () => {
+      if (!loggedWindowDragOver) {
+        loggedWindowDragOver = true
+        // eslint-disable-next-line no-console
+        console.log('[roster-dnd] dragover vu AU NIVEAU WINDOW (capture) — premier de ce geste')
+      }
+    }
+    const onWindowDragEnter = (e: DragEvent) => {
+      // eslint-disable-next-line no-console
+      console.log('[roster-dnd] dragenter vu au niveau window (capture)', { target: (e.target as HTMLElement)?.tagName })
+    }
+    window.addEventListener('dragover', onWindowDragOver, true)
+    window.addEventListener('dragenter', onWindowDragEnter, true)
     window.addEventListener('drop', onWindowDrop, true)
     window.addEventListener('dragend', onWindowDragEnd, true)
     return () => {
       el.removeEventListener('dragover', onDragOver)
       el.removeEventListener('dragenter', onDragEnter)
       el.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragover', onWindowDragOver, true)
+      window.removeEventListener('dragenter', onWindowDragEnter, true)
       window.removeEventListener('drop', onWindowDrop, true)
       window.removeEventListener('dragend', onWindowDragEnd, true)
     }
