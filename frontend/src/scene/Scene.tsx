@@ -1304,12 +1304,20 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     const thetaDeg = (drag.lastTheta * 180) / Math.PI
     for (const m of drag.members) {
       const arc = rotationArc(m.baseX, m.baseY, drag.centerX, drag.centerY, drag.lastTheta)
+      // Un acteur seul (ou exactement sur le pivot) ne suit aucun arc —
+      // rotationArc renvoie alors pathPoints/startHandle/targetHandle à
+      // null, et les envoyer quand même EFFAÇAIT silencieusement toute
+      // courbe personnalisée déjà posée sur cet acteur à chaque simple
+      // rotation du lacet (signalé 2026-08-01 : "tourner le lacet
+      // réinitialise la courbe de l'acteur") — ces champs ne doivent être
+      // touchés que quand un arc réel a été calculé (groupe, rayon non nul).
+      const r = Math.hypot(m.baseX - drag.centerX, m.baseY - drag.centerY)
       sidecar.setActivation(selectedCueId, m.pointId, {
         targetXCm: arc.targetXCm,
         targetYCm: arc.targetYCm,
-        pathPoints: arc.pathPoints,
-        startHandle: arc.startHandle,
-        targetHandle: arc.targetHandle,
+        ...(r >= 1e-6
+          ? { pathPoints: arc.pathPoints, startHandle: arc.startHandle, targetHandle: arc.targetHandle }
+          : {}),
         ...(m.baseYaw !== null && m.yawIsManual ? { targetYawDeg: m.baseYaw + thetaDeg } : {}),
       })
     }
