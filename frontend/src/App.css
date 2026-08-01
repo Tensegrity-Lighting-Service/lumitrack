@@ -307,6 +307,21 @@
   width: 22px; height: 22px; padding: 0; border: none; border-radius: 4px;
   background: none; cursor: pointer;
 }
+.cue-inspector-timing-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 10px; font-size: 11px; color: #8a92a6;
+}
+.cue-auto-duration {
+  display: flex; align-items: center; gap: 5px; cursor: pointer;
+}
+.cue-auto-duration input { margin: 0; }
+.speed-thermometer {
+  padding: 2px 8px; border-radius: 10px;
+  background: color-mix(in srgb, var(--speed-color) 22%, transparent);
+  border: 1px solid var(--speed-color);
+  color: var(--speed-color);
+  font-weight: 600;
+}
 
 .stage-placement {
   padding-bottom: 10px;

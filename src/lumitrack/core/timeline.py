@@ -628,6 +628,29 @@ def resolve_block_context(project: Project, cue_id: str,
     return {"cueId": cue_id, "entries": entries}
 
 
+MIN_AUTO_DURATION_MS = 200.0
+
+
+def required_duration_ms(project: Project, cue: Cue) -> float:
+    """Mission "refonte AE/Reaper" (2026-08-01) : durée nécessaire pour que
+    l'acteur le plus lent de ce bloc parcoure sa distance à la vitesse de
+    référence du projet — c'est la durée qu'écrit `Cue.auto_duration`. Prend
+    le départ/la cible EXACTS déjà calculés par `resolve_block_context` (même
+    logique de "première apparition"/zone backstage/téléportation, aucune
+    duplication) ; seule la distance x/y compte, pas la hauteur ni le lacet.
+    Un bloc sans déplacement réel (cible = départ, ou aucun point encore
+    positionnable) garde le plancher MIN_AUTO_DURATION_MS plutôt que 0."""
+    speed_cms_per_s = max(1.0, project.reference_speed_cms)
+    duration_ms = MIN_AUTO_DURATION_MS
+    for entry in resolve_block_context(project, cue.id)["entries"].values():
+        start, target = entry["startPose"], entry["targetPose"]
+        if start is None or target is None:
+            continue
+        distance_cm = math.hypot(target[0] - start[0], target[1] - start[1])
+        duration_ms = max(duration_ms, (distance_cm / speed_cms_per_s) * 1000.0)
+    return duration_ms
+
+
 class Timeline:
     """Thin, cheap-to-recreate wrapper: `resolve_positions` does the actual
     work and is what `apply_group_transform` calls directly to avoid needing

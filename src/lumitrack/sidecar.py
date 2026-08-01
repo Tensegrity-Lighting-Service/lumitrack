@@ -24,7 +24,7 @@ import websockets
 from .core.project import (
     Project, Point, Cue, Activation, import_stancz, save_bundle, load_bundle, list_archive,
 )
-from .core.timeline import Timeline, OutputTransform, resolve_block_context
+from .core.timeline import Timeline, OutputTransform, resolve_block_context, required_duration_ms
 from .core.engine import Transport, PsnBroadcaster
 
 logger = logging.getLogger("lumitrack.sidecar")
@@ -55,6 +55,9 @@ MUTATING_COMMANDS = {
     "set_audio", "update_point", "update_stage_map", "set_backstage_zones",
     "add_point", "add_cue", "update_cue", "delete_cue", "set_activation",
     "apply_group_transform", "delete_point", "reorder_points", "set_roster_groups",
+    # Contrairement à update_psn_config (réseau/sortie) : la vitesse de
+    # référence recalcule la durée de vrais blocs (contenu créatif).
+    "update_project_settings",
 }
 # Remplacement intégral du projet : l'historique d'un AUTRE projet n'a plus
 # de sens une fois chargé un nouveau, donc on le vide plutôt que de le
@@ -355,6 +358,21 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         session._apply_psn_config()
         return None
 
+    if msg_type == "update_project_settings":
+        # Réglages projet transverses (mission "refonte AE/Reaper") : pour
+        # l'instant seule la vitesse de référence, qui pilote la durée des
+        # blocs en "durée automatique" — sa mise à jour doit recalculer TOUS
+        # les blocs concernés (elle change leur distance-par-seconde à tous),
+        # contrairement à set_activation qui ne touche que le bloc édité.
+        if "referenceSpeedCms" in msg and msg["referenceSpeedCms"] is not None:
+            session.project.reference_speed_cms = max(1.0, float(msg["referenceSpeedCms"]))
+            for cue in session.project.cues:
+                if cue.auto_duration:
+                    cue.duration_ms = required_duration_ms(session.project, cue)
+            session.timeline.rebuild()
+            session.transport.set_duration(session.timeline.duration_ms)
+        return None
+
     if msg_type == "list_ifaces":
         # Adresses IPv4 locales candidates pour IP_MULTICAST_IF.
         import socket as _socket
@@ -528,6 +546,13 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             cue.color = msg["color"]
         if "lane" in msg:
             cue.lane = max(0, int(msg["lane"]))
+        if "autoDuration" in msg:
+            cue.auto_duration = bool(msg["autoDuration"])
+            # Activer la case recalcule tout de suite (sinon la durée reste
+            # celle réglée à la main jusqu'à la prochaine activation touchée
+            # — trompeur, la case semblerait ne rien faire).
+            if cue.auto_duration:
+                cue.duration_ms = required_duration_ms(session.project, cue)
         session.project.sort_cues()
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
@@ -587,6 +612,11 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
                         merged.pop(axis, None)
                 act.curves = merged or None
         cue.activations[point_id] = act
+        # Durée automatique (mission "refonte AE/Reaper") : seul ce bloc peut
+        # avoir changé de distance à parcourir, jamais ses voisins — recalcul
+        # ciblé, pas un balayage de tout le projet à chaque frappe.
+        if cue.auto_duration:
+            cue.duration_ms = required_duration_ms(session.project, cue)
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
         return None

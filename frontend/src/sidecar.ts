@@ -160,6 +160,11 @@ class SidecarClient {
   updateStageMap(patch: { originXM?: number; originZM?: number; rotationDeg?: number; widthCm?: number; heightCm?: number; gridSizeCm?: number; terrainRotationDeg?: number }) {
     this.send({ type: 'update_stage_map', ...patch })
   }
+  /** Réglages projet transverses (pour l'instant : vitesse de référence des
+   * blocs en "durée automatique", cm/s). */
+  updateProjectSettings(patch: { referenceSpeedCms?: number }) {
+    this.send({ type: 'update_project_settings', ...patch })
+  }
   addCue(name: string, startMs: number, durationMs: number, color?: string, lane?: number, id?: string) {
     this.send({ type: 'add_cue', name, startMs, durationMs, color, lane, id })
   }
@@ -167,7 +172,7 @@ class SidecarClient {
   setBackstageZones(zones: BackstageZone[]) {
     this.send({ type: 'set_backstage_zones', zones })
   }
-  updateCue(cueId: string, patch: { name?: string; startMs?: number; durationMs?: number; color?: string; lane?: number }) {
+  updateCue(cueId: string, patch: { name?: string; startMs?: number; durationMs?: number; color?: string; lane?: number; autoDuration?: boolean }) {
     this.send({ type: 'update_cue', cueId, ...patch })
   }
   deleteCue(cueId: string) {

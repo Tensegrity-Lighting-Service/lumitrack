@@ -49,7 +49,7 @@ async function pickSaveAsPath(projectName: string): Promise<string | null> {
   })
   return typeof path === 'string' ? path : null
 }
-import type { Activation, BackstageZone, Cue, Point, Project, RosterGroup } from './types'
+import type { Activation, BackstageZone, BlockContextMessage, Cue, Point, Project, RosterGroup } from './types'
 
 // Payload porté par chaque item dnd-kit du roster (acteur ou dossier) —
 // lu dans App.handleDragStart/handleDragEnd pour savoir quoi déplacer et
@@ -945,6 +945,13 @@ function App() {
                     onCommit={(v) => { if (v !== null && v >= 0.01) sidecar.updateStageMap({ gridSizeCm: v * 100 }) }}
                   />
                 </label>
+                <label title="Vitesse utilisée pour calculer la durée des blocs en « durée automatique » — marche ~1,3 m/s, jogging ~2,2 m/s, course ~2,8 m/s">
+                  Vitesse de référence (m/s)
+                  <NumericInput
+                    value={project.referenceSpeedCms / 100} step={0.1}
+                    onCommit={(v) => { if (v !== null && v >= 0.1) sidecar.updateProjectSettings({ referenceSpeedCms: v * 100 }) }}
+                  />
+                </label>
               </div>
             )}
           </div>
@@ -973,6 +980,7 @@ function App() {
             projectPoints={project.points}
             selectedPointId={selectedPointId}
             onSelectPoint={setSelectedPointId}
+            blockContext={blockContext}
           />
         ) : (
           !editingZone && selectedPointIds.length === 0 && (
@@ -1175,14 +1183,52 @@ function StagePlacementPanel({ project }: { project: Project }) {
   )
 }
 
-function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint }: {
+// Seuils du thermomètre de vitesse (m/s) — indicateur visuel seul, jamais
+// une contrainte (tranché explicitement par Florian) : marche ~1,3 m/s,
+// jogging ~2,2 m/s, course soutenue ~2,2-2,8 m/s (pointe ~3,6-4), sprint
+// tenable 5-10s ~4,5-5,8 m/s (recherche vitesses humaines, pas de donnée
+// spécifique à la danse trouvée — cf. DIRECTIVES.md).
+const SPEED_THRESHOLDS: [number, string, string][] = [
+  [1.6, 'marche', '#4FB6F5'],
+  [2.5, 'jogging', '#4FF58C'],
+  [4.0, 'course', '#F5C84F'],
+  [Infinity, 'sprint', '#F5734F'],
+]
+
+function speedCategory(ms: number): [string, string] {
+  for (const [max, label, color] of SPEED_THRESHOLDS) {
+    if (ms < max) return [label, color]
+  }
+  return ['sprint', '#F5734F']
+}
+
+/** Vitesse (m/s) du point le plus rapide de ce bloc, résolue depuis le
+ * blockContext déjà calculé par le backend (départ/cible réels, pas une
+ * approximation frontend) — null si le contexte ne correspond pas encore à
+ * ce bloc (bascule de sélection) ou si rien ne s'y déplace. */
+function maxSpeedMs(cue: Cue, blockContext: BlockContextMessage | null): number | null {
+  if (!blockContext || blockContext.cueId !== cue.id) return null
+  let max: number | null = null
+  for (const entry of Object.values(blockContext.entries)) {
+    const { startPose, targetPose, timing } = entry
+    if (!startPose || !targetPose || timing.fadeMs <= 0) continue
+    const distCm = Math.hypot(targetPose[0] - startPose[0], targetPose[1] - startPose[1])
+    const speed = (distCm / 100) / (timing.fadeMs / 1000)
+    if (max === null || speed > max) max = speed
+  }
+  return max
+}
+
+function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, blockContext }: {
   cue: Cue
   projectPoints: Point[]
   selectedPointId: string | null
   onSelectPoint: (id: string | null) => void
+  blockContext: BlockContextMessage | null
 }) {
   const activatedIds = new Set(Object.keys(cue.activations))
   const availablePoints = projectPoints.filter((p) => !activatedIds.has(p.id))
+  const speed = maxSpeedMs(cue, blockContext)
 
   return (
     <div className="cue-inspector">
@@ -1194,6 +1240,25 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint }: {
           title="Couleur du bloc"
         />
         <h3>{cue.name}</h3>
+      </div>
+      <div className="cue-inspector-timing-row">
+        <label className="cue-auto-duration" title="La durée du bloc suit la distance parcourue / la vitesse de référence du projet">
+          <input
+            type="checkbox"
+            checked={cue.autoDuration}
+            onChange={(e) => sidecar.updateCue(cue.id, { autoDuration: e.target.checked })}
+          />
+          Durée automatique
+        </label>
+        {speed !== null && (() => {
+          const [label, color] = speedCategory(speed)
+          return (
+            <span className="speed-thermometer" style={{ '--speed-color': color } as React.CSSProperties}
+              title={`Vitesse du déplacement le plus rapide de ce bloc : ${speed.toFixed(1)} m/s (${label})`}>
+              {speed.toFixed(1)} m/s · {label}
+            </span>
+          )
+        })()}
       </div>
       <div className="activation-list">
         {Object.entries(cue.activations).map(([pointId, act]) => {

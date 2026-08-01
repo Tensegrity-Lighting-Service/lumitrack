@@ -183,6 +183,13 @@ class Cue:
     duration_ms: float
     activations: dict = field(default_factory=dict)  # point_id -> Activation
     color: str = "#4F6DF5"
+    # Mission "refonte AE/Reaper" (2026-08-01) : quand actif, duration_ms
+    # suit automatiquement la distance/vitesse de référence du projet (voir
+    # timeline.required_duration_ms) au lieu d'être réglé à la main — recalculé
+    # par le sidecar à chaque activation touchée ou changement de la vitesse
+    # de référence. Défaut False : n'affecte aucun projet existant tant que
+    # personne n'a coché la case.
+    auto_duration: bool = False
     # Piste de la timeline (mission multi-pistes 2026-07-29) : les blocs se
     # placent LIBREMENT sur une piste choisie, ils ne sont plus empilés
     # automatiquement. Migration : projets sans "lane" -> empaquetage
@@ -253,6 +260,12 @@ class Project:
     # Rotation du MODÈLE 3D (terrain glTF) autour de son origine, en degrés
     # — indépendante de la rotation de la zone de jeu (mission 2026-07-29).
     terrain_rotation_deg: float = 0.0
+    # Mission "refonte AE/Reaper" (2026-08-01) : vitesse (cm/s) utilisée pour
+    # calculer la durée des blocs en "durée automatique" (Cue.auto_duration)
+    # à partir de la distance parcourue. Réglage PROJET, pas une constante
+    # (demandé explicitement) — 220 cm/s = 2,2 m/s par défaut (jogging léger,
+    # cf. recherche vitesses humaines : marche ~1,3 m/s, jogging ~2,2 m/s).
+    reference_speed_cms: float = 220.0
 
     # ---------- helpers ----------
 
@@ -401,6 +414,7 @@ class Project:
             "stageMapOriginZM": self.stage_map_origin_z_m,
             "stageMapRotationDeg": self.stage_map_rotation_deg,
             "terrainRotationDeg": self.terrain_rotation_deg,
+            "referenceSpeedCms": self.reference_speed_cms,
             "backstageZones": self.backstage_zones,
             "rosterGroups": self.roster_groups,
             "points": [p.to_dict() for p in self.points],
@@ -408,7 +422,7 @@ class Project:
                 {
                     "id": c.id, "name": c.name, "color": c.color,
                     "startMs": c.start_ms, "durationMs": c.duration_ms,
-                    "lane": c.lane,
+                    "lane": c.lane, "autoDuration": c.auto_duration,
                     "activations": {
                         pid: a.to_dict() for pid, a in c.activations.items()
                     },
@@ -451,6 +465,7 @@ class Project:
             stage_map_origin_z_m=float(d.get("stageMapOriginZM", 0.0)),
             stage_map_rotation_deg=float(d.get("stageMapRotationDeg", 0.0)),
             terrain_rotation_deg=float(d.get("terrainRotationDeg", 0.0)),
+            reference_speed_cms=float(d.get("referenceSpeedCms", 220.0)),
         )
         proj.backstage_zones = list(d.get("backstageZones") or [])
         proj.roster_groups = list(d.get("rosterGroups") or [])
@@ -466,6 +481,7 @@ class Project:
                 activations=activations,
                 color=c.get("color", "#4F6DF5"),
                 lane=int(c["lane"]) if c.get("lane") is not None else -1,
+                auto_duration=bool(c.get("autoDuration", False)),
             ))
         proj.ensure_backstage()
         proj.sort_cues()

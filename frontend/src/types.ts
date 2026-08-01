@@ -89,6 +89,9 @@ export interface Cue {
   durationMs: number
   /** Piste de la timeline (placement libre des blocs). */
   lane: number
+  /** Quand actif, durationMs suit la distance/vitesse de référence du
+   * projet au lieu d'être réglé à la main (recalculé par le backend). */
+  autoDuration: boolean
   activations: Record<string, Activation>
 }
 
@@ -120,6 +123,8 @@ export interface Project {
   stageMapOriginZM: number
   stageMapRotationDeg: number
   terrainRotationDeg: number
+  /** cm/s — durée des blocs en "durée automatique" (distance / vitesse). */
+  referenceSpeedCms: number
   backstageZones: BackstageZone[]
   rosterGroups: RosterGroup[]
   points: Point[]

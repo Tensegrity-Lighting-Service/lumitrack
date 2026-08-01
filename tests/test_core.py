@@ -342,6 +342,77 @@ def test_orientation_mode_focus_tracks_actor_as_it_moves():
     assert end.yaw_deg == pytest.approx(-45.0, abs=1.0)
 
 
+# ------------------------------------------- duree automatique (2026-08-01) --
+#
+# "Bloc 'duree automatique' ... recalcule la duree par defaut selon
+# distance/vitesse" (DIRECTIVES.md) : required_duration_ms est la fonction
+# pure derriere Cue.auto_duration, branchee au sidecar (set_activation,
+# update_cue, update_project_settings) mais testee ici independamment.
+
+def test_required_duration_matches_distance_over_reference_speed():
+    from lumitrack.core.timeline import required_duration_ms
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.reference_speed_cms = 200.0  # 2 m/s
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1,
+            activations={"a": Activation(target_x_cm=400, target_y_cm=0, fade_ms=1)}),
+    ]
+    # 400 cm a 200 cm/s = 2 s pile.
+    assert required_duration_ms(project, project.cues[1]) == pytest.approx(2000.0)
+
+
+def test_required_duration_is_the_slowest_actor_in_the_block():
+    from lumitrack.core.timeline import required_duration_ms
+    project = Project()
+    project.points = [Point(id="near", name="near"), Point(id="far", name="far")]
+    project.reference_speed_cms = 100.0
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={
+                "near": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0),
+                "far": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0),
+            }),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1,
+            activations={
+                "near": Activation(target_x_cm=100, target_y_cm=0, fade_ms=1),
+                "far": Activation(target_x_cm=500, target_y_cm=0, fade_ms=1),
+            }),
+    ]
+    # "far" parcourt 500cm (5s), "near" 100cm (1s) : le bloc suit le plus lent.
+    assert required_duration_ms(project, project.cues[1]) == pytest.approx(5000.0)
+
+
+def test_required_duration_has_a_floor_when_nothing_moves():
+    from lumitrack.core.timeline import required_duration_ms, MIN_AUTO_DURATION_MS
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=1,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=1)}),
+    ]
+    assert required_duration_ms(project, project.cues[0]) == pytest.approx(MIN_AUTO_DURATION_MS)
+
+
+def test_auto_duration_cue_serializes_and_roundtrips(tmp_path):
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [Cue(id="c0", name="c0", start_ms=0, duration_ms=1000,
+                         auto_duration=True,
+                         activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=1)})]
+    back = Project.from_dict(project.to_dict())
+    assert back.cues[0].auto_duration is True
+
+
+def test_reference_speed_roundtrips():
+    project = Project()
+    project.reference_speed_cms = 175.0
+    back = Project.from_dict(project.to_dict())
+    assert back.reference_speed_cms == pytest.approx(175.0)
+
+
 @pytest.mark.parametrize("name", ["linear", "smooth", "bounce", "spring",
                                   "exponential", "ease-in", "ease-out",
                                   "linéaire", "doux", "rebond", "unknown-name"])
