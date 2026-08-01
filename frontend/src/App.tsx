@@ -9,7 +9,7 @@ import {
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
-import { maxSpeedMs, requiredDurationMsFromContext, speedCategory, SPEED_PRESETS } from './timeline/speed'
+import { maxSpeedMs, msToKmh, requiredDurationMsFromContext, speedCategory, SPEED_PRESETS } from './timeline/speed'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
 import { AddActorsPanel } from './ui/AddActorsPanel'
@@ -977,11 +977,11 @@ function App() {
                     onCommit={(v) => { if (v !== null && v >= 0.01) sidecar.updateStageMap({ gridSizeCm: v * 100 }) }}
                   />
                 </label>
-                <label title="Vitesse utilisée pour calculer la durée des blocs en « durée automatique » — marche ~1,3 m/s, jogging ~2,2 m/s, course ~2,8 m/s">
-                  Vitesse de référence (m/s)
+                <label title="Vitesse utilisée pour calculer la durée des blocs en « durée automatique » — marche ~4,7 km/h, jogging ~7,9 km/h, course ~10 km/h">
+                  Vitesse de référence (km/h)
                   <NumericInput
-                    value={project.referenceSpeedCms / 100} step={0.1}
-                    onCommit={(v) => { if (v !== null && v >= 0.1) sidecar.updateProjectSettings({ referenceSpeedCms: v * 100 }) }}
+                    value={project.referenceSpeedCms * 0.036} step={0.5}
+                    onCommit={(v) => { if (v !== null && v >= 0.5) sidecar.updateProjectSettings({ referenceSpeedCms: v / 0.036 }) }}
                   />
                 </label>
               </div>
@@ -1251,10 +1251,11 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
         </label>
         {speed !== null && (() => {
           const [label, color] = speedCategory(speed)
+          const kmh = msToKmh(speed)
           return (
             <span className="speed-thermometer" style={{ '--speed-color': color } as React.CSSProperties}
-              title={`Vitesse du déplacement le plus rapide de ce bloc : ${speed.toFixed(1)} m/s (${label})`}>
-              {speed.toFixed(1)} m/s · {label}
+              title={`Vitesse du déplacement le plus rapide de ce bloc : ${kmh.toFixed(1)} km/h (${label})`}>
+              {kmh.toFixed(1)} km/h · {label}
             </span>
           )
         })()}
@@ -1271,7 +1272,7 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
               if (durationMs !== null) sidecar.updateCue(cue.id, { durationMs, autoDuration: false })
             }}
           >
-            {preset.label} ({preset.ms.toFixed(1)} m/s)
+            {preset.label} ({msToKmh(preset.ms).toFixed(0)} km/h)
           </button>
         ))}
       </div>

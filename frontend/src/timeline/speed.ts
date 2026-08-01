@@ -23,6 +23,12 @@ export const SPEED_PRESETS: { label: string; ms: number; color: string }[] = [
   { label: 'Sprint', ms: 5.0, color: '#F5734F' },
 ]
 
+/** Affichage seulement (km/h, "plus humain à comprendre" — Florian) : tous
+ * les calculs internes restent en m/s / cm/s, cohérents avec le backend. */
+export function msToKmh(ms: number): number {
+  return ms * 3.6
+}
+
 export function speedCategory(ms: number): [string, string] {
   for (const [max, label, color] of SPEED_THRESHOLDS) {
     if (ms < max) return [label, color]

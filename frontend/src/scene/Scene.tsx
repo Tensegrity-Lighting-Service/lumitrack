@@ -1806,7 +1806,14 @@ function SceneContent({
       if (!l) return
       const w = Math.abs(l.x1 - l.x0)
       const h = Math.abs(l.y1 - l.y0)
-      if (w < 6 && h < 6) return // simple clic sur le vide : géré ailleurs
+      if (w < 6 && h < 6) {
+        // Simple clic sur le vide (pas un vrai lasso) : désélectionne, sauf
+        // en ajout (Ctrl/Cmd) où l'intention est de garder la sélection en
+        // cours. N'a jamais été câblé (signalé 2026-08-01 : "clic sur le
+        // vide ne sort pas d'une sélection").
+        if (!l.additive) onSelectPoints([])
+        return
+      }
       if (!stageGroupRef.current) return
       const rect = dom.getBoundingClientRect()
       const [minX, maxX] = [Math.min(l.x0, l.x1), Math.max(l.x0, l.x1)]

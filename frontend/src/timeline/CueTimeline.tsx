@@ -21,7 +21,7 @@ import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
 import { BlockAutomation } from './BlockAutomation'
 import { TrajectoryOverlay, TRAJECTORY_ROW_H } from './TrajectoryOverlay'
-import { maxSpeedMs, speedCategory } from './speed'
+import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 
 const MS_PER_S = 1000
 const RULER_H = 26
@@ -655,8 +655,8 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                         const [label, color] = speedCategory(speed)
                         return (
                           <span className="tl-block-speed" style={{ '--speed-color': color } as React.CSSProperties}
-                            title={`Vitesse du déplacement le plus rapide de ce bloc : ${speed.toFixed(1)} m/s (${label})`}>
-                            {speed.toFixed(1)} m/s
+                            title={`Vitesse du déplacement le plus rapide de ce bloc : ${msToKmh(speed).toFixed(1)} km/h (${label})`}>
+                            {msToKmh(speed).toFixed(0)} km/h
                           </span>
                         )
                       })()}
