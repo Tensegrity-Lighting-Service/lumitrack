@@ -6,7 +6,7 @@
 // re-renders from them — every edit is sent as a command and only takes
 // effect once the sidecar echoes back a fresh `project` snapshot.
 import { useSyncExternalStore } from 'react'
-import type { BackstageZone, BlockContextMessage, BundleArchiveMessage, IfacesMessage, Project, PsnPreviewMessage, RosterGroup, ServerMessage, TickMessage } from './types'
+import type { BackstageZone, BlockContextMessage, BundleArchiveMessage, IfacesMessage, Project, PsnPreviewMessage, RosterGroup, ServerMessage, TickMessage, TrajectoriesMessage } from './types'
 
 const SIDECAR_PORT = 17845
 const RECONNECT_DELAY_MS = 1000
@@ -15,6 +15,7 @@ class SidecarClient {
   project: Project | null = null
   tick: TickMessage | null = null
   blockContext: BlockContextMessage | null = null
+  trajectories: TrajectoriesMessage | null = null
   connected = false
   psnRunning = false
   undoAvailable = false
@@ -68,6 +69,8 @@ class SidecarClient {
         this.tick = msg
       } else if (msg.type === 'block_context') {
         this.blockContext = msg
+      } else if (msg.type === 'trajectories') {
+        this.trajectories = msg
       } else if (msg.type === 'ifaces') {
         this.ifaces = msg
       } else if (msg.type === 'psn_preview') {
@@ -213,6 +216,17 @@ class SidecarClient {
     this.blockContext = null
     this.emit()
   }
+  // Overlay de trajectoire à la sélection — même principe que
+  // resolveBlockContext : redemandé à chaque changement de sélection ET de
+  // snapshot projet (voir App.tsx).
+  resolveTrajectories(pointIds: string[]) {
+    this.send({ type: 'resolve_trajectories', pointIds })
+  }
+  clearTrajectories() {
+    if (this.trajectories === null) return
+    this.trajectories = null
+    this.emit()
+  }
   applyGroupTransform(cueId: string, pointIds: string[], opts: {
     pivot?: [number, number]; translate?: [number, number]; rotateDeg?: number
     fadeMs?: number; easing?: string
@@ -263,6 +277,10 @@ export function useTick(): TickMessage | null {
 
 export function useBlockContext(): BlockContextMessage | null {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.blockContext)
+}
+
+export function useTrajectories(): TrajectoriesMessage | null {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.trajectories)
 }
 
 export function useConnected(): boolean {

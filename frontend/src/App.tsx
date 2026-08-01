@@ -4,7 +4,7 @@ import { Scene, type SceneHandle } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import {
   sidecar, useBlockContext, useBundlePath, useConnected, useProject, usePsnRunning,
-  useRedoAvailable, useTick, useUndoAvailable,
+  useRedoAvailable, useTick, useTrajectories, useUndoAvailable,
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -334,6 +334,7 @@ function App() {
   const connected = useConnected()
   const psnRunning = usePsnRunning()
   const blockContext = useBlockContext()
+  const trajectories = useTrajectories()
   const undoAvailable = useUndoAvailable()
   const redoAvailable = useRedoAvailable()
 
@@ -601,6 +602,15 @@ function App() {
     if (selectedCue) sidecar.resolveBlockContext(selectedCue.id)
     else sidecar.clearBlockContext()
   }, [selectedCue, project])
+
+  // Overlay de trajectoire à la sélection (mission "refonte AE/Reaper") :
+  // même principe que le blockContext ci-dessus, mais suit la sélection
+  // d'ACTEURS plutôt que de bloc — indépendant l'un de l'autre, les deux
+  // peuvent être actifs en même temps.
+  useEffect(() => {
+    if (selectedPointIds.length > 0) sidecar.resolveTrajectories(selectedPointIds)
+    else sidecar.clearTrajectories()
+  }, [selectedPointIds, project])
 
   // Global shortcuts. Skipped while typing in an input/select/color-picker
   // so Space/Delete keep their normal text-editing meaning there.
@@ -1006,6 +1016,8 @@ function App() {
           selectedCueId={selectedCueId}
           selectedPointId={selectedPointId}
           onSelectCue={setSelectedCueId}
+          selectedPointIds={selectedPointIds}
+          trajectories={trajectories}
         />
       </footer>
 

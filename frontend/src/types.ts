@@ -182,6 +182,17 @@ export interface BlockContextMessage {
   entries: Record<string, BlockContextEntry>
 }
 
+// Overlay de trajectoire à la sélection (remplace la ligne d'automation
+// x/y/z retirée du bloc) : la courbe de déplacement de chaque acteur
+// sélectionné sur toute la durée du projet, échantillonnée régulièrement.
+// `null` à un index = le point n'a pas de position connue à cet instant
+// (jamais un repli (0,0), §13.1.7).
+export interface TrajectoriesMessage {
+  type: 'trajectories'
+  timesMs: number[]
+  trajectories: Record<string, (Pose | null)[]>
+}
+
 export interface ErrorMessage {
   type: 'error'
   message: string
@@ -241,6 +252,6 @@ export interface PsnPreviewMessage {
 }
 
 export type ServerMessage =
-  | ProjectMessage | TickMessage | BlockContextMessage
+  | ProjectMessage | TickMessage | BlockContextMessage | TrajectoriesMessage
   | ErrorMessage | SavedMessage | AckMessage
   | IfacesMessage | PsnPreviewMessage | BundleArchiveMessage

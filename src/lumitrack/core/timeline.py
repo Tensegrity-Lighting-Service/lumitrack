@@ -628,6 +628,31 @@ def resolve_block_context(project: Project, cue_id: str,
     return {"cueId": cue_id, "entries": entries}
 
 
+TRAJECTORY_OVERLAY_SAMPLES = 120
+
+
+def resolve_trajectories(project: Project, point_ids, samples: int = TRAJECTORY_OVERLAY_SAMPLES) -> dict:
+    """Mission "refonte AE/Reaper" (2026-08-01) : la courbe de déplacement
+    d'un ou plusieurs acteurs sur toute la durée du projet, échantillonnée
+    uniformément — l'overlay de trajectoire à la sélection qui remplace la
+    ligne d'automation x/y/z retirée du bloc (redondante avec la scène ;
+    voir BlockAutomation côté frontend). Aucune nouvelle résolution : rejoue
+    `resolve_positions` à chaque instant échantillonné, seule source de
+    vérité — un point absent à un instant donné (pas encore en scène, sans
+    zone backstage) donne None à cet index plutôt qu'un repli (0,0)."""
+    duration = project.duration_ms
+    times = [0.0] if duration <= 0 or samples < 1 else [
+        duration * i / samples for i in range(samples + 1)]
+    trajectories: dict = {pid: [] for pid in point_ids}
+    for t in times:
+        poses = resolve_positions(project, t)
+        for pid in point_ids:
+            pose = poses.get(pid)
+            trajectories[pid].append(
+                [pose.x_cm, pose.y_cm, pose.z_cm, pose.yaw_deg] if pose else None)
+    return {"timesMs": times, "trajectories": trajectories}
+
+
 MIN_AUTO_DURATION_MS = 200.0
 
 

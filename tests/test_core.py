@@ -413,6 +413,53 @@ def test_reference_speed_roundtrips():
     assert back.reference_speed_cms == pytest.approx(175.0)
 
 
+# ------------------------------------ overlay de trajectoire (2026-08-01) --
+#
+# "sélectionner un ou plusieurs acteurs ... affiche leur courbe de
+# déplacement en overlay sur la timeline" (Florian) : resolve_trajectories
+# rejoue resolve_positions à un échantillonnage régulier — jamais une
+# nouvelle logique de résolution.
+
+def test_resolve_trajectories_matches_resolve_positions_at_each_sample():
+    from lumitrack.core.timeline import resolve_trajectories
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=2000,
+            activations={"a": Activation(target_x_cm=500, target_y_cm=200, fade_ms=2000)}),
+    ]
+    result = resolve_trajectories(project, ["a"], samples=8)
+    assert len(result["timesMs"]) == 9
+    for t, pose in zip(result["timesMs"], result["trajectories"]["a"]):
+        expected = resolve_positions(project, t)["a"]
+        assert pose == pytest.approx([expected.x_cm, expected.y_cm, expected.z_cm, expected.yaw_deg])
+
+
+def test_resolve_trajectories_is_none_when_point_has_no_known_position():
+    from lumitrack.core.timeline import resolve_trajectories
+    project = Project()
+    project.points = [Point(id="a", name="A")]  # aucune activation, aucune zone backstage
+    result = resolve_trajectories(project, ["a"], samples=4)
+    assert all(pose is None for pose in result["trajectories"]["a"])
+
+
+def test_resolve_trajectories_handles_multiple_points_in_one_call():
+    from lumitrack.core.timeline import resolve_trajectories
+    project = Project()
+    project.points = [Point(id="a", name="A"), Point(id="b", name="B")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0, activations={
+            "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0),
+            "b": Activation(target_x_cm=100, target_y_cm=100, fade_ms=0),
+        }),
+    ]
+    result = resolve_trajectories(project, ["a", "b"], samples=2)
+    assert set(result["trajectories"].keys()) == {"a", "b"}
+    assert result["trajectories"]["b"][0][:2] == pytest.approx([100.0, 100.0])
+
+
 @pytest.mark.parametrize("name", ["linear", "smooth", "bounce", "spring",
                                   "exponential", "ease-in", "ease-out",
                                   "linéaire", "doux", "rebond", "unknown-name"])

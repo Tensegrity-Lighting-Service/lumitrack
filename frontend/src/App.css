@@ -397,6 +397,30 @@
 }
 .tl-audio-canvas { position: sticky; left: 0; display: block; }
 .tl-lanes { position: relative; }
+
+.tl-header-trajectories { font-size: 10px; color: #8a92a6; font-weight: 500; }
+.trajectory-overlay {
+  position: relative; border-bottom: 1px solid #22252e;
+  background: #14161c; overflow: hidden;
+}
+.trajectory-row {
+  position: absolute; left: 0; right: 0;
+  border-bottom: 1px solid #1c1f27;
+}
+.trajectory-line { fill: none; stroke-width: 1.4; opacity: 0.9; }
+.trajectory-line-x { stroke: #4F6DF5; }
+.trajectory-line-y { stroke: #F5734F; }
+.trajectory-row-label {
+  position: sticky; left: 4px; top: 2px;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; color: #d5d9e4;
+  background: rgba(20, 22, 28, 0.85); padding: 1px 5px; border-radius: 3px;
+  pointer-events: none;
+}
+.trajectory-row-label::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dot-color); flex-shrink: 0;
+}
 .tl-playhead {
   position: absolute; top: 0; bottom: 0; width: 1px;
   background: #e8e8ec; pointer-events: none; z-index: 5;

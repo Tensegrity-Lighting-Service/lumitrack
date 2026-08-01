@@ -24,7 +24,10 @@ import websockets
 from .core.project import (
     Project, Point, Cue, Activation, import_stancz, save_bundle, load_bundle, list_archive,
 )
-from .core.timeline import Timeline, OutputTransform, resolve_block_context, required_duration_ms
+from .core.timeline import (
+    Timeline, OutputTransform, resolve_block_context, required_duration_ms,
+    resolve_trajectories,
+)
 from .core.engine import Transport, PsnBroadcaster
 
 logger = logging.getLogger("lumitrack.sidecar")
@@ -319,6 +322,14 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         except ValueError as exc:
             return {"type": "error", "message": str(exc)}
         return {"type": "block_context", **context}
+
+    if msg_type == "resolve_trajectories":
+        # Read-only, même principe que resolve_block_context : le frontend
+        # re-demande à chaque nouvelle sélection ET à chaque nouveau
+        # snapshot projet (overlay de trajectoire, mission "refonte
+        # AE/Reaper" — remplace la ligne d'automation x/y/z retirée du bloc).
+        result = resolve_trajectories(session.project, msg.get("pointIds", []))
+        return {"type": "trajectories", **result}
 
     if msg_type == "set_audio":
         # Piste audio du projet (mission timeline+son). `path` charge/retire
