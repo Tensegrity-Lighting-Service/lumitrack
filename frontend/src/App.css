@@ -322,6 +322,28 @@
   color: var(--speed-color);
   font-weight: 600;
 }
+.speed-presets {
+  display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.speed-preset-btn {
+  font-size: 10.5px; padding: 3px 8px; border-radius: 6px;
+  border: 1px solid var(--speed-color);
+  color: var(--speed-color);
+  background: color-mix(in srgb, var(--speed-color) 12%, transparent);
+  cursor: pointer;
+}
+.speed-preset-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--speed-color) 24%, transparent);
+}
+.speed-preset-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.tl-block-speed {
+  padding: 0 4px; border-radius: 6px; font-size: 9px; font-weight: 700;
+  background: color-mix(in srgb, var(--speed-color) 28%, transparent);
+  border: 1px solid var(--speed-color);
+  color: var(--speed-color);
+  white-space: nowrap;
+  margin-left: auto;
+}
 
 .stage-placement {
   padding-bottom: 10px;

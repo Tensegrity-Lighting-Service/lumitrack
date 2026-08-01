@@ -15,12 +15,13 @@
 // broadcasts pendant le geste.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import type { Cue, Project, TrajectoriesMessage } from '../types'
+import type { BlockContextMessage, Cue, Project, TrajectoriesMessage } from '../types'
 import { sidecar } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
 import { BlockAutomation } from './BlockAutomation'
 import { TrajectoryOverlay, TRAJECTORY_ROW_H } from './TrajectoryOverlay'
+import { maxSpeedMs, speedCategory } from './speed'
 
 const MS_PER_S = 1000
 const RULER_H = 26
@@ -90,7 +91,7 @@ function formatTimecodeMs(ms: number): string {
   return `${pad(h)}:${pad(m)}:${sec.toFixed(3).padStart(6, '0')}`
 }
 
-export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, selectedPointIds, trajectories }: {
+export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, selectedPointIds, trajectories, blockContext }: {
   project: Project
   tMs: number
   playing: boolean
@@ -103,6 +104,10 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
    * trajectoire (une ligne par acteur, dans cet ordre). */
   selectedPointIds: string[]
   trajectories: TrajectoriesMessage | null
+  /** Contexte du bloc sélectionné (départ/cible résolus) — pilote le badge
+   * de vitesse affiché directement sur le bloc, pas seulement dans
+   * l'inspecteur ("la vitesse peut pas s'afficher dans le bloc même ?"). */
+  blockContext: BlockContextMessage | null
 }) {
   const cues = project.cues
   // Pistes persistantes (mission multi-pistes) : chaque bloc porte sa
@@ -628,6 +633,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                 const dur = isDragging ? drag.durationMs : cue.durationMs
                 const laneIndex = isDragging ? drag.lane : (cue.lane ?? 0)
                 const count = Object.keys(cue.activations).length
+                const speed = cue.id === selectedCueId ? maxSpeedMs(cue, blockContext) : null
                 return (
                   <div
                     key={cue.id}
@@ -645,6 +651,15 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                   >
                     <div className="cue-block-header">
                       <span className="cue-block-name">{cue.name}</span>
+                      {speed !== null && (() => {
+                        const [label, color] = speedCategory(speed)
+                        return (
+                          <span className="tl-block-speed" style={{ '--speed-color': color } as React.CSSProperties}
+                            title={`Vitesse du déplacement le plus rapide de ce bloc : ${speed.toFixed(1)} m/s (${label})`}>
+                            {speed.toFixed(1)} m/s
+                          </span>
+                        )
+                      })()}
                       <span className="cue-block-count">{count}</span>
                     </div>
                     <div className="cue-block-body" />
