@@ -694,6 +694,10 @@ sur la timeline, plutôt qu'une ligne permanente par bloc pour tout le
 monde (le "foutoir" que craignait Florian avec un modèle façon calques
 AE — un bloc reste un bloc partagé entre acteurs, pas une ligne par
 acteur).
+**✅ Partiellement livré (2026-08-01)** : ligne d'automation retirée pour
+x/y/z, gardée pour le seul lacet (exclut aussi path/focus, dont le lacet
+est dérivé). L'overlay de trajectoire à la sélection (le remplacement
+pour x/y/z) reste à construire.
 
 **3. Geste libre de déplacement dans la scène** — plus besoin de
 sélectionner un bloc avant de bouger un acteur ; sélectionner l'acteur
@@ -719,11 +723,28 @@ geste :
      par défaut selon distance/vitesse — mais seulement pour les acteurs
      NON personnalisés (voir point 6) ; un acteur personnalisé sort du
      recalcul automatique tant qu'il reste personnalisé.
+     **✅ LIVRÉ (2026-08-01)**, hors exclusion des acteurs personnalisés
+     (point 6 n'existe pas encore, donc `auto_duration` recalcule pour
+     TOUS les acteurs du bloc pour l'instant) : `Cue.auto_duration` +
+     `Project.reference_speed_cms` (réglage projet, cf. ci-dessous) +
+     `core/timeline.required_duration_ms`, recalcul câblé sur
+     `set_activation`/`update_cue`/`update_project_settings`, case à
+     cocher dans l'inspecteur de bloc.
    - **Thermomètre de vitesse** : indicateur visuel seul (jauge colorée
      marche/jogging/course/sprint), jamais une contrainte bloquante —
      tranché explicitement par Florian.
+     **✅ LIVRÉ (2026-08-01)** dans l'inspecteur de bloc (vitesse du
+     déplacement le plus rapide du bloc sélectionné, depuis le
+     blockContext déjà résolu) — reste à faire : la version "pendant le
+     geste" ci-dessous, qui n'existe pas tant que le geste lui-même n'est
+     pas câblé.
    - **Aperçu pendant le geste** : bloc fantôme qui se dessine en temps
      réel dans la timeline (position + durée) pendant le glisser.
+   - **⏳ Pas commencé** : le geste de glisser libre lui-même (créer/
+     étendre/insérer un nœud selon le cas du playhead) — la pièce la plus
+     grosse et la plus risquée de cette mission (change le modèle
+     d'interaction de la scène), volontairement laissée pour une session
+     avec retour visuel possible plutôt que construite à l'aveugle.
 
 **4. Diviser un bloc au playhead** (nouvelle action, menu contextuel du
 bloc) — fige la position de CHAQUE acteur activé à l'instant précis du
@@ -751,6 +772,12 @@ maintien/LTP existant, aucune logique spéciale à écrire pour ça.
    - Réglage définitif par activation (bloc) ; un réglage par défaut au
      niveau Point préremplit simplement les nouvelles activations de cet
      acteur, sans autorité sur celles déjà réglées.
+   - **✅ LIVRÉ (2026-08-01)** : les 3 modes tournent en Python
+     (`resolve_positions` + `resolve_block_context`) ET en miroir Rust,
+     sélecteur + champs focus dans l'inspecteur, garde anti-écrasement dans
+     `SelectionTransform` lors d'une rotation de groupe. Reste hors
+     périmètre : le réglage par défaut au niveau Point (préremplissage des
+     nouvelles activations) n'est pas encore câblé.
 
 **6. Timing global (bloc) vs sélectif (acteur)** — analogie validée par
 Florian. Le bloc fournit une valeur par défaut (fade, et nouveau champ
@@ -812,7 +839,14 @@ panneau de propriétés suit la sélection du calque). Nouvelle version :
 **10. Petites finitions** : le seul vrai spinner natif (`<input
 type="number">`, flèches minuscules) trouvé dans tout le frontend est le
 champ "Nombre à ajouter" d'`AddActorsPanel` — à uniformiser vers
-`NumericInput` comme partout ailleurs.
+`NumericInput` comme partout ailleurs. **✅ LIVRÉ (2026-08-01)**.
+
+**État au 2026-08-01 (fin de session)** : points 1, 5, 10 livrés ;
+point 2 moitié livré (automation line) et point 3 moitié livré (durée
+auto + thermomètre) — le reste de ces deux points (overlay de
+trajectoire, geste de glisser libre lui-même) est le plus gros morceau
+qui reste, volontairement pas attaqué sans retour visuel possible.
+Points 4, 6, 7, 8, 9 pas commencés.
 
 **Périmètre volontairement pas encore tranché / à des sessions futures** :
 un système de points de focus RÉUTILISABLES et nommés (comme les zones
