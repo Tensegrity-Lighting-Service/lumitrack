@@ -694,10 +694,11 @@ sur la timeline, plutôt qu'une ligne permanente par bloc pour tout le
 monde (le "foutoir" que craignait Florian avec un modèle façon calques
 AE — un bloc reste un bloc partagé entre acteurs, pas une ligne par
 acteur).
-**✅ Partiellement livré (2026-08-01)** : ligne d'automation retirée pour
-x/y/z, gardée pour le seul lacet (exclut aussi path/focus, dont le lacet
-est dérivé). L'overlay de trajectoire à la sélection (le remplacement
-pour x/y/z) reste à construire.
+**✅ LIVRÉ (2026-08-01)** : ligne d'automation retirée pour x/y/z, gardée
+pour le seul lacet (exclut aussi path/focus, dont le lacet est dérivé).
+Overlay de trajectoire à la sélection livré séparément
+(`resolve_trajectories` + `TrajectoryOverlay.tsx`) : une ligne X/Y par
+acteur sélectionné, dans l'ordre de sélection, alignée sur la timeline.
 
 **3. Geste libre de déplacement dans la scène** — plus besoin de
 sélectionner un bloc avant de bouger un acteur ; sélectionner l'acteur
@@ -841,12 +842,12 @@ type="number">`, flèches minuscules) trouvé dans tout le frontend est le
 champ "Nombre à ajouter" d'`AddActorsPanel` — à uniformiser vers
 `NumericInput` comme partout ailleurs. **✅ LIVRÉ (2026-08-01)**.
 
-**État au 2026-08-01 (fin de session)** : points 1, 5, 10 livrés ;
-point 2 moitié livré (automation line) et point 3 moitié livré (durée
-auto + thermomètre) — le reste de ces deux points (overlay de
-trajectoire, geste de glisser libre lui-même) est le plus gros morceau
-qui reste, volontairement pas attaqué sans retour visuel possible.
-Points 4, 6, 7, 8, 9 pas commencés.
+**État au 2026-08-01 (fin de session)** : points 1, 2, 5, 10 livrés ;
+point 3 moitié livré (durée auto + vitesse de référence + thermomètre) —
+il ne manque plus que le geste de glisser libre lui-même, le plus gros
+morceau qui reste, volontairement pas attaqué sans retour visuel
+possible (change le modèle d'interaction de la scène). Points 4, 6, 7,
+8, 9 pas commencés.
 
 **Périmètre volontairement pas encore tranché / à des sessions futures** :
 un système de points de focus RÉUTILISABLES et nommés (comme les zones
