@@ -9,6 +9,7 @@ import {
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
+import { maxSpeedMs, requiredDurationMsFromContext, speedCategory, SPEED_PRESETS } from './timeline/speed'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
 import { AddActorsPanel } from './ui/AddActorsPanel'
@@ -612,6 +613,27 @@ function App() {
     else sidecar.clearTrajectories()
   }, [selectedPointIds, project])
 
+  // "ouvre automatiquement le bloc dans lequel il se trouve" (Florian,
+  // 2026-08-01) : sélectionner UN acteur ouvre directement le bloc qui
+  // couvre l'instant courant du playhead pour cet acteur, sans étape
+  // manuelle en plus — seulement au moment où la sélection change (pas à
+  // chaque tick pendant que l'acteur reste sélectionné, ça ferait sauter
+  // l'inspecteur pendant la lecture). Pas de généralisation en multi-
+  // sélection : des acteurs différents peuvent être dans des blocs
+  // différents, ambigu.
+  useEffect(() => {
+    if (selectedPointIds.length !== 1 || !project) return
+    const pointId = selectedPointIds[0]
+    let match: Cue | null = null
+    for (const cue of project.cues) {
+      if (tMs < cue.startMs || tMs >= cue.startMs + cue.durationMs) continue
+      if (!cue.activations[pointId]) continue
+      if (!match || cue.startMs > match.startMs) match = cue
+    }
+    if (match) setSelectedCueId(match.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPointIds])
+
   // Global shortcuts. Skipped while typing in an input/select/color-picker
   // so Space/Delete keep their normal text-editing meaning there.
   useEffect(() => {
@@ -1018,6 +1040,7 @@ function App() {
           onSelectCue={setSelectedCueId}
           selectedPointIds={selectedPointIds}
           trajectories={trajectories}
+          blockContext={blockContext}
         />
       </footer>
 
@@ -1195,42 +1218,6 @@ function StagePlacementPanel({ project }: { project: Project }) {
   )
 }
 
-// Seuils du thermomètre de vitesse (m/s) — indicateur visuel seul, jamais
-// une contrainte (tranché explicitement par Florian) : marche ~1,3 m/s,
-// jogging ~2,2 m/s, course soutenue ~2,2-2,8 m/s (pointe ~3,6-4), sprint
-// tenable 5-10s ~4,5-5,8 m/s (recherche vitesses humaines, pas de donnée
-// spécifique à la danse trouvée — cf. DIRECTIVES.md).
-const SPEED_THRESHOLDS: [number, string, string][] = [
-  [1.6, 'marche', '#4FB6F5'],
-  [2.5, 'jogging', '#4FF58C'],
-  [4.0, 'course', '#F5C84F'],
-  [Infinity, 'sprint', '#F5734F'],
-]
-
-function speedCategory(ms: number): [string, string] {
-  for (const [max, label, color] of SPEED_THRESHOLDS) {
-    if (ms < max) return [label, color]
-  }
-  return ['sprint', '#F5734F']
-}
-
-/** Vitesse (m/s) du point le plus rapide de ce bloc, résolue depuis le
- * blockContext déjà calculé par le backend (départ/cible réels, pas une
- * approximation frontend) — null si le contexte ne correspond pas encore à
- * ce bloc (bascule de sélection) ou si rien ne s'y déplace. */
-function maxSpeedMs(cue: Cue, blockContext: BlockContextMessage | null): number | null {
-  if (!blockContext || blockContext.cueId !== cue.id) return null
-  let max: number | null = null
-  for (const entry of Object.values(blockContext.entries)) {
-    const { startPose, targetPose, timing } = entry
-    if (!startPose || !targetPose || timing.fadeMs <= 0) continue
-    const distCm = Math.hypot(targetPose[0] - startPose[0], targetPose[1] - startPose[1])
-    const speed = (distCm / 100) / (timing.fadeMs / 1000)
-    if (max === null || speed > max) max = speed
-  }
-  return max
-}
-
 function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, blockContext }: {
   cue: Cue
   projectPoints: Point[]
@@ -1271,6 +1258,22 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
             </span>
           )
         })()}
+      </div>
+      <div className="speed-presets" title="Fixe la durée du bloc pour que l'acteur le plus lent se déplace à cette vitesse">
+        {SPEED_PRESETS.map((preset) => (
+          <button
+            key={preset.label}
+            className="speed-preset-btn"
+            style={{ '--speed-color': preset.color } as React.CSSProperties}
+            disabled={blockContext?.cueId !== cue.id}
+            onClick={() => {
+              const durationMs = requiredDurationMsFromContext(cue, blockContext, preset.ms)
+              if (durationMs !== null) sidecar.updateCue(cue.id, { durationMs, autoDuration: false })
+            }}
+          >
+            {preset.label} ({preset.ms.toFixed(1)} m/s)
+          </button>
+        ))}
       </div>
       <div className="activation-list">
         {Object.entries(cue.activations).map(([pointId, act]) => {
