@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import { sidecar } from '../sidecar'
 import type { Project } from '../types'
 import { NumericInput } from './NumericInput'
+import { useT } from '../i18n'
 
 const ACTOR_PALETTE = ['#4F6DF5', '#F5734F', '#B06FE0', '#4FF58C', '#4FF5E0', '#F5C84F']
 
@@ -32,6 +33,7 @@ export function AddActorsPanel({ project, onClose }: {
   project: Project
   onClose: () => void
 }) {
+  const t = useT()
   const [baseName, setBaseName] = useState(lastBaseName)
   const [count, setCount] = useState(lastCount)
 
@@ -41,7 +43,7 @@ export function AddActorsPanel({ project, onClose }: {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const trimmedName = baseName.trim() || 'Acteur'
+  const trimmedName = baseName.trim() || t('addActors.defaultName')
   const usedNumbers = new Set(
     project.points.map((p) => p.number).filter((n): n is number => n !== null))
   const numbers = firstFreeNumbers(usedNumbers, count)
@@ -61,12 +63,12 @@ export function AddActorsPanel({ project, onClose }: {
     <div className="psn-overlay" onClick={onClose}>
       <div className="psn-panel" onClick={(e) => e.stopPropagation()}>
         <div className="psn-head">
-          <h2>Ajouter des acteurs</h2>
+          <h2>{t('addActors.title')}</h2>
           <span className="psn-head-spacer" />
-          <button onClick={onClose} title="Fermer (Échap)">✕</button>
+          <button onClick={onClose} title={t('addActors.close')}>✕</button>
         </div>
         <div className="actor-grid">
-          <label>Nom de base
+          <label>{t('addActors.baseName')}
             <input
               value={baseName}
               autoFocus
@@ -75,7 +77,7 @@ export function AddActorsPanel({ project, onClose }: {
               onFocus={(e) => e.target.select()}
             />
           </label>
-          <label>Nombre à ajouter
+          <label>{t('addActors.count')}
             <NumericInput
               value={count} step={1}
               onCommit={(v) => setCount(Math.max(1, Math.min(99, Math.round(v ?? 1))))}
@@ -84,11 +86,14 @@ export function AddActorsPanel({ project, onClose }: {
         </div>
         <p className="psn-note">
           {numbers.length === 1
-            ? `Créera « ${trimmedName} ${numbers[0]} » (n° ${numbers[0]}), sans groupe.`
-            : `Créera « ${trimmedName} ${numbers[0]} » à « ${trimmedName} ${numbers[numbers.length - 1]} » (n° ${numbers[0]} à ${numbers[numbers.length - 1]}), sans groupe.`}
+            ? t('addActors.previewSingle', { name: `${trimmedName} ${numbers[0]}`, num: numbers[0] })
+            : t('addActors.previewRange', {
+              first: `${trimmedName} ${numbers[0]}`, last: `${trimmedName} ${numbers[numbers.length - 1]}`,
+              firstNum: numbers[0], lastNum: numbers[numbers.length - 1],
+            })}
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
-          <button onClick={add}>Ajouter</button>
+          <button onClick={add}>{t('addActors.add')}</button>
         </div>
       </div>
     </div>

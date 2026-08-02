@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react'
 import { sidecar, useIfaces, usePsnPreview, usePsnRunning } from '../sidecar'
 import type { Project } from '../types'
 import { NumericInput } from './NumericInput'
+import { useT } from '../i18n'
 
 const PREVIEW_POLL_MS = 500
 
@@ -20,6 +21,7 @@ export function PsnPanel({ project, onClose }: {
   project: Project
   onClose: () => void
 }) {
+  const t = useT()
   const running = usePsnRunning()
   const ifaces = useIfaces()
   const preview = usePsnPreview()
@@ -50,24 +52,24 @@ export function PsnPanel({ project, onClose }: {
     <div className="psn-overlay" onClick={onClose}>
       <div className="psn-panel" onClick={(e) => e.stopPropagation()}>
         <div className="psn-head">
-          <h2>Réglages PSN</h2>
+          <h2>{t('psn.title')}</h2>
           <span className={`conn-dot ${running ? 'conn-ok' : 'conn-bad'}`} />
           <span className="psn-status">
-            {running ? `émission vers ${preview?.dest ?? '…'}` : 'arrêté'}
-            {preview && running ? ` — ${preview.packetsSent} trames` : ''}
+            {running ? t('psn.statusEmitting', { dest: preview?.dest ?? '…' }) : t('psn.statusStopped')}
+            {preview && running ? t('psn.statusPacketCount', { count: preview.packetsSent }) : ''}
           </span>
           <span className="psn-head-spacer" />
           <button onClick={() => (running ? sidecar.psnStop() : sidecar.psnStart())}>
-            {running ? 'Arrêter' : 'Démarrer'}
+            {running ? t('psn.stop') : t('psn.start')}
           </button>
-          <button onClick={onClose} title="Fermer (Échap)">✕</button>
+          <button onClick={onClose} title={t('psn.close')}>✕</button>
         </div>
-        {preview?.lastError && <p className="psn-error">Erreur socket : {preview.lastError}</p>}
+        {preview?.lastError && <p className="psn-error">{t('psn.socketError', { error: preview.lastError })}</p>}
 
         <div className="psn-columns">
           <section>
-            <h3>Réseau</h3>
-            <label>Carte réseau (interface de sortie)
+            <h3>{t('psn.network')}</h3>
+            <label>{t('psn.networkInterface')}
               <select
                 value={project.psnIfaceIp ?? '0.0.0.0'}
                 onChange={(e) => sidecar.updatePsnConfig({ ifaceIp: e.target.value })}
@@ -76,11 +78,11 @@ export function PsnPanel({ project, onClose }: {
                   <option value={project.psnIfaceIp}>{project.psnIfaceIp}</option>
                 )}
                 {addresses.map((a) => (
-                  <option key={a} value={a}>{a === '0.0.0.0' ? 'Automatique (0.0.0.0)' : a}</option>
+                  <option key={a} value={a}>{a === '0.0.0.0' ? t('psn.networkAuto') : a}</option>
                 ))}
               </select>
             </label>
-            <label>Adresse multicast
+            <label>{t('psn.multicastAddress')}
               <input
                 value={mcastIp}
                 onChange={(e) => setMcastIp(e.target.value)}
@@ -88,11 +90,11 @@ export function PsnPanel({ project, onClose }: {
                 onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
               />
             </label>
-            <label>Port
+            <label>{t('psn.port')}
               <NumericInput value={project.psnPort} step={1}
                 onCommit={(v) => { if (v !== null && v > 0 && v < 65536) sidecar.updatePsnConfig({ port: v }) }} />
             </label>
-            <label>Nom du système
+            <label>{t('psn.systemName')}
               <input
                 value={systemName}
                 onChange={(e) => setSystemName(e.target.value)}
@@ -100,26 +102,21 @@ export function PsnPanel({ project, onClose }: {
                 onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
               />
             </label>
-            <label>Fréquence (Hz)
+            <label>{t('psn.rate')}
               <NumericInput value={project.psnRateHz ?? 30} step={1}
                 onCommit={(v) => { if (v !== null && v >= 1 && v <= 120) sidecar.updatePsnConfig({ rateHz: v }) }} />
             </label>
           </section>
 
           <section>
-            <h3>Repère de sortie</h3>
-            <p className="psn-note">
-              Convention : spec PSN 2.03 — « positive x is right, positive y
-              is up, positive z is depth ». La hauteur part en pos_y, le
-              lacet en ori_y (vecteur axe-angle). Capture et MA3 suivent la
-              spec.
-            </p>
+            <h3>{t('psn.outputFrame')}</h3>
+            <p className="psn-note">{t('psn.outputFrameNote')}</p>
             <div className="psn-grid2">
-              <label>Origine X (m)
+              <label>{t('psn.originX')}
                 <NumericInput value={project.transformOriginXCm / 100} step={0.1}
                   onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ originXCm: v * 100 }) }} />
               </label>
-              <label>Origine Y (m)
+              <label>{t('psn.originY')}
                 <NumericInput value={project.transformOriginYCm / 100} step={0.1}
                   onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ originYCm: v * 100 }) }} />
               </label>
@@ -128,27 +125,27 @@ export function PsnPanel({ project, onClose }: {
               <label className="psn-check">
                 <input type="checkbox" checked={project.transformInvertX}
                   onChange={(e) => sidecar.updatePsnConfig({ invertX: e.target.checked })} />
-                Inverser X
+                {t('psn.invertX')}
               </label>
               <label className="psn-check">
                 <input type="checkbox" checked={project.transformInvertY}
                   onChange={(e) => sidecar.updatePsnConfig({ invertY: e.target.checked })} />
-                Inverser Y (plan)
+                {t('psn.invertY')}
               </label>
               <label className="psn-check">
                 <input type="checkbox" checked={project.transformSwapXy}
                   onChange={(e) => sidecar.updatePsnConfig({ swapXy: e.target.checked })} />
-                Échanger X/Y (plan)
+                {t('psn.swapXy')}
               </label>
             </div>
           </section>
         </div>
 
         <section>
-          <h3>Trackers</h3>
+          <h3>{t('psn.trackers')}</h3>
           <table className="psn-table">
             <thead>
-              <tr><th>Acteur</th><th>N°</th><th>ID PSN</th><th>ID émis</th></tr>
+              <tr><th>{t('psn.tableActor')}</th><th>{t('psn.tableNumber')}</th><th>{t('psn.tablePsnId')}</th><th>{t('psn.tableEmittedId')}</th></tr>
             </thead>
             <tbody>
               {project.points.map((pt, index) => {
@@ -170,15 +167,15 @@ export function PsnPanel({ project, onClose }: {
               })}
             </tbody>
           </table>
-          <p className="psn-note">ID PSN vide → repli sur le n° de l’acteur, sinon sur son index.</p>
+          <p className="psn-note">{t('psn.trackersNote')}</p>
         </section>
 
         <section>
-          <h3>Moniteur — données émises {preview ? `(${preview.rateHz} Hz)` : ''}</h3>
+          <h3>{t('psn.monitor')} {preview ? t('psn.monitorRateSuffix', { rateHz: preview.rateHz }) : ''}</h3>
           <table className="psn-table psn-mono">
             <thead>
               <tr>
-                <th>ID</th><th>Nom</th>
+                <th>ID</th><th>{t('inspector.name')}</th>
                 <th>pos_x</th>
                 <th className="psn-up">pos_y ↑</th>
                 <th>pos_z</th>
@@ -186,18 +183,18 @@ export function PsnPanel({ project, onClose }: {
               </tr>
             </thead>
             <tbody>
-              {(preview?.trackers ?? []).map((t) => (
-                <tr key={t.id}>
-                  <td>{t.id}</td>
-                  <td>{t.name}</td>
-                  <td>{fmt(t.posX)}</td>
-                  <td className="psn-up">{fmt(t.posY)}</td>
-                  <td>{fmt(t.posZ)}</td>
-                  <td>{fmt(t.oriX)}, {fmt(t.oriY)}, {fmt(t.oriZ)}</td>
+              {(preview?.trackers ?? []).map((trk) => (
+                <tr key={trk.id}>
+                  <td>{trk.id}</td>
+                  <td>{trk.name}</td>
+                  <td>{fmt(trk.posX)}</td>
+                  <td className="psn-up">{fmt(trk.posY)}</td>
+                  <td>{fmt(trk.posZ)}</td>
+                  <td>{fmt(trk.oriX)}, {fmt(trk.oriY)}, {fmt(trk.oriZ)}</td>
                 </tr>
               ))}
               {preview && preview.trackers.length === 0 && (
-                <tr><td colSpan={6} className="psn-note">Aucun point positionné à cet instant (rien n’est émis).</td></tr>
+                <tr><td colSpan={6} className="psn-note">{t('psn.monitorEmpty')}</td></tr>
               )}
             </tbody>
           </table>
