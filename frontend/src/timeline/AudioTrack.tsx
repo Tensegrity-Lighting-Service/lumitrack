@@ -18,6 +18,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
+import { useT } from '../i18n'
 
 const DRIFT_THRESHOLD_S = 0.2
 const PEAK_BUCKETS_PER_S = 100 // résolution des pics précalculés
@@ -123,6 +124,7 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
   scrollElRef: React.RefObject<HTMLDivElement | null>
   height: number
 }) {
+  const t = useT()
   const hiddenRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WaveSurfer | null>(null)
   const [peaks, setPeaks] = useState<Peaks | null>(null)
@@ -283,7 +285,7 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
       {/* Conteneur des tuiles : dans le CONTENU scrollé — les tuiles
           défilent nativement avec la règle et les blocs. */}
       <div ref={containerRef} className="tl-audio-tiles" style={{ height }}>
-        {!peaks && <span className="tl-audio-loading">Décodage de l’audio…</span>}
+        {!peaks && <span className="tl-audio-loading">{t('timeline.audioDecoding')}</span>}
       </div>
       <div ref={hiddenRef} style={{ display: 'none' }} />
     </>

@@ -497,9 +497,9 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   const renameCue = useCallback((cue: Cue) => {
     // window.prompt temporaire — remplacé par un vrai édit inline/dialogue
     // natif en Mission 3.
-    const name = window.prompt('Nom du bloc :', cue.name)
+    const name = window.prompt(t('timeline.renameCuePrompt'), cue.name)
     if (name && name !== cue.name) sidecar.updateCue(cue.id, { name })
-  }, [])
+  }, [t])
 
   const lanesHeight = laneCount * LANE_H
   const playheadPx = tMs * effPxPerMs
@@ -510,56 +510,56 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
         {/* Transport : déplacé de l'ancienne barre du haut (supprimée) —
             près de la timeline, sous le roster, comme demandé. Le scrub
             redondant a disparu : la règle fait déjà le seek. */}
-        <span className={`conn-dot ${connected ? 'conn-ok' : 'conn-bad'}`} title={connected ? 'Sidecar connecté' : 'Sidecar déconnecté'} />
+        <span className={`conn-dot ${connected ? 'conn-ok' : 'conn-bad'}`} title={connected ? t('timeline.sidecarConnected') : t('timeline.sidecarDisconnected')} />
         <button
           className="tl-play"
-          title={playing ? 'Pause (Espace)' : 'Lecture (Espace)'}
+          title={playing ? t('timeline.pause') : t('timeline.play')}
           onClick={() => (playing ? sidecar.pause() : sidecar.play())}
         >
           {playing ? '⏸' : '⏵'}
         </button>
         <span className="tl-timecode">{formatTimecodeMs(tMs)}</span>
         <span className="tl-toolbar-sep" />
-        <button onClick={addCue}>+ Cue</button>
-        {selectedCueId && <button onClick={deleteSelected}>Supprimer</button>}
+        <button onClick={addCue}>{t('timeline.addCue')}</button>
+        {selectedCueId && <button onClick={deleteSelected}>{t('timeline.deleteCue')}</button>}
         {selectedCueId && (
           <button
             className={showGraph ? 'tl-btn-active' : ''}
-            title="Éditeur de courbes du bloc sélectionné"
+            title={t('timeline.curveEditorHint')}
             onClick={() => setShowGraph((v) => !v)}
           >
-            Courbes
+            {t('timeline.curves')}
           </button>
         )}
         <span className="tl-toolbar-spacer" />
-        <button title="Zoom arrière (Ctrl+molette)" onClick={() => zoomAt(0.8)}>−</button>
-        <button title="Zoom avant (Ctrl+molette)" onClick={() => zoomAt(1.25)}>+</button>
-        <button title="Ajuster à la fenêtre" onClick={fit}>Ajuster</button>
+        <button title={t('timeline.zoomOutHint')} onClick={() => zoomAt(0.8)}>−</button>
+        <button title={t('timeline.zoomInHint')} onClick={() => zoomAt(1.25)}>+</button>
+        <button title={t('timeline.fit')} onClick={fit}>{t('timeline.fitBtn')}</button>
       </div>
       <div className="tl-main">
         <div className="tl-headers">
           <div className="tl-header-spacer" style={{ height: RULER_H }} />
           {selectedPointIds.length > 0 && (
             <div className="tl-header tl-header-trajectories" style={{ height: selectedPointIds.length * TRAJECTORY_ROW_H }}>
-              Trajectoires
+              {t('timeline.trajectories')}
             </div>
           )}
           {project.audioPath && (
             <div className="tl-header tl-header-audio" style={{ height: AUDIO_H }}>
               <span className="tl-header-chip" style={{ background: '#4f6df5' }} />
-              Audio
+              {t('timeline.audio')}
             </div>
           )}
           {Array.from({ length: laneCount }, (_, i) => (
             <div key={i} className="tl-header tl-header-lane" style={{ height: LANE_H }}>
               <span className="tl-header-chip" style={{ background: i === 0 ? '#f5734f' : '#3a3f4a' }} />
-              Piste {i + 1}
+              {t('timeline.track', { n: i + 1 })}
             </div>
           ))}
           {graphVisible && (
             <div className="tl-header tl-header-graph" style={{ height: GRAPH_H }}>
               <span className="tl-header-chip" style={{ background: '#4ff5e0' }} />
-              Courbes
+              {t('timeline.curves')}
             </div>
           )}
         </div>

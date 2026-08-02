@@ -11,10 +11,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Activation, Cue } from '../types'
 import { sidecar } from '../sidecar'
 import {
-  AXES, AXIS_COLORS, AXIS_LABELS, bakeEasing, insertNode, linearNodes,
+  AXES, AXIS_COLORS, AXIS_LABEL_KEYS, bakeEasing, insertNode, linearNodes,
   segmentControls, smoothNodes, sortNodes,
 } from './curves'
 import type { Axis, CurveNode, HandleMode } from './curves'
+import { useT } from '../i18n'
 
 const PAD_V = 14
 const NODE_R = 4.5
@@ -44,6 +45,7 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
   contentWidth: number
   scrollLeft: number
 }) {
+  const t = useT()
   // Courbes en cours d'édition : état local initialisé depuis l'activation,
   // réinitialisé quand le backend renvoie un nouveau snapshot (identité de
   // `act` change) SAUF pendant un drag.
@@ -328,8 +330,8 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
       <div className="graph-track" style={{ height }}>
         <div className="graph-hint" style={{ left: Math.max(8, scrollLeft + 8) }}>
           {Object.keys(cue.activations).length === 0
-            ? 'Ce bloc n’a aucune activation — ajoutez un point au bloc pour éditer ses courbes.'
-            : 'Sélectionnez un point (roster ou scène) pour éditer ses courbes dans ce bloc.'}
+            ? t('graph.emptyNoActivation')
+            : t('graph.emptySelectPoint')}
         </div>
       </div>
     )
@@ -348,7 +350,7 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
             key={axis}
             className={`graph-chip${axis === activeAxis ? ' graph-chip-active' : ''}${hiddenAxes.has(axis) ? ' graph-chip-hidden' : ''}`}
             style={{ '--axis-color': AXIS_COLORS[axis] } as React.CSSProperties}
-            title={`${AXIS_LABELS[axis]} — clic : éditer ; Alt+clic : afficher/masquer`}
+            title={t('graph.axisHint', { label: t(AXIS_LABEL_KEYS[axis]) })}
             onClick={(e) => {
               if (e.altKey) {
                 setHiddenAxes((prev) => {
@@ -367,37 +369,37 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
               }
             }}
           >
-            {AXIS_LABELS[axis]}
+            {t(AXIS_LABEL_KEYS[axis])}
           </button>
         ))}
         <span className="graph-sep" />
         <select
           className="graph-select"
           value=""
-          title="Appliquer un easing à l’axe actif (devient une courbe éditable)"
+          title={t('graph.easingApplyHint')}
           onChange={(e) => { if (e.target.value) applyPreset(e.target.value) }}
         >
-          <option value="">easing…</option>
+          <option value="">{t('graph.easingPlaceholder')}</option>
           {['linear', 'smooth', 'ease-in', 'ease-out', 'bounce', 'spring', 'exponential'].map((n) => (
             <option key={n} value={n}>{n}</option>
           ))}
         </select>
-        <button title="Segments linéaires" onClick={() => applyTransform(linearNodes)}>Linéaire</button>
-        <button title="Poignées auto (Catmull-Rom)" onClick={() => applyTransform((n) => smoothNodes(n))}>Lisser</button>
+        <button title={t('graph.linearHint')} onClick={() => applyTransform(linearNodes)}>{t('graph.linear')}</button>
+        <button title={t('graph.smoothHint')} onClick={() => applyTransform((n) => smoothNodes(n))}>{t('graph.smooth')}</button>
         {selection && (
           <>
             <span className="graph-sep" />
-            <button title="Poignées libres" onClick={() => setSelectedMode('corner')}>Coin</button>
-            <button title="Tangentes alignées" onClick={() => setSelectedMode('smooth')}>Lisse</button>
-            <button title="Poignées miroir" onClick={() => setSelectedMode('symmetric')}>Sym.</button>
+            <button title={t('graph.cornerHint')} onClick={() => setSelectedMode('corner')}>{t('graph.corner')}</button>
+            <button title={t('graph.tangentHint')} onClick={() => setSelectedMode('smooth')}>{t('graph.tangent')}</button>
+            <button title={t('graph.mirrorHint')} onClick={() => setSelectedMode('symmetric')}>{t('graph.mirror')}</button>
           </>
         )}
         <span className="graph-sep" />
-        <button onClick={copyCurve} title="Copier la courbe active">Copier</button>
-        <button onClick={pasteCurve} disabled={!curveClipboard} title="Coller sur l’axe actif">Coller</button>
-        <button onClick={resetAxis} title="Revenir à l’easing nommé">Réinit.</button>
+        <button onClick={copyCurve} title={t('graph.copyHint')}>{t('graph.copy')}</button>
+        <button onClick={pasteCurve} disabled={!curveClipboard} title={t('graph.pasteHint')}>{t('graph.paste')}</button>
+        <button onClick={resetAxis} title={t('graph.resetHint')}>{t('graph.reset')}</button>
         {Object.keys(cue.activations).length > 1 && (
-          <button onClick={applyToAllPoints} title="Copier ces courbes sur tous les points du bloc">→ tout le bloc</button>
+          <button onClick={applyToAllPoints} title={t('graph.applyAllHint')}>{t('graph.applyAll')}</button>
         )}
         <span className="graph-pointname">{pointName}</span>
       </div>
@@ -409,8 +411,8 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
         {/* Lignes de référence progrès 0 (départ) et 1 (cible). */}
         <line x1={x0} x2={x0 + fadeW} y1={y1} y2={y1} className="graph-ref-line" />
         <line x1={x0} x2={x0 + fadeW} y1={y0} y2={y0} className="graph-ref-line" />
-        <text x={x0 + fadeW + 4} y={y1 + 3.5} className="graph-ref-label">cible</text>
-        <text x={x0 + fadeW + 4} y={y0 + 3.5} className="graph-ref-label">départ</text>
+        <text x={x0 + fadeW + 4} y={y1 + 3.5} className="graph-ref-label">{t('graph.target')}</text>
+        <text x={x0 + fadeW + 4} y={y0 + 3.5} className="graph-ref-label">{t('graph.start')}</text>
 
         {availableAxes.filter((a) => !hiddenAxes.has(a)).map((axis) => {
           const { nodes, custom } = curveFor(axis)

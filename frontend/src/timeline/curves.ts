@@ -25,6 +25,11 @@ export const AXIS_COLORS: Record<Axis, string> = {
   x: '#f5734f', y: '#4ff58c', z: '#4fa8f5', yaw: '#b06fe0',
 }
 export const AXIS_LABELS: Record<Axis, string> = { x: 'X', y: 'Y', z: 'Z', yaw: 'Lacet' }
+/** Clés i18n (t()) pour l'affichage — AXIS_LABELS ci-dessus reste utilisé
+ * tel quel où le FR en dur suffit encore (pas de composant React). */
+export const AXIS_LABEL_KEYS: Record<Axis, string> = {
+  x: 'graph.axisX', y: 'graph.axisY', z: 'graph.axisZ', yaw: 'graph.axisYaw',
+}
 
 export function node(t: number, v: number, partial?: Partial<CurveNode>): CurveNode {
   return { t, v, inT: null, inV: null, outT: null, outV: null, mode: 'smooth', ...partial }
