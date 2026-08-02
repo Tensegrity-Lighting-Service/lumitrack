@@ -243,8 +243,13 @@ function actorLabelText(point: Point): string {
  * n'importe quelle couleur d'acteur. Positionné à la hauteur réelle de
  * l'acteur mais hors de son groupe pivoté : le numéro ne doit jamais
  * tourner avec le lacet (yaw), contrairement au cône directionnel. */
-function ActorLabel({ text, xCm, yCm, zCm, opacity }: {
+function ActorLabel({ text, xCm, yCm, zCm, opacity, scale = 1 }: {
   text: string; xCm: number; yCm: number; zCm: number; opacity: number
+  /** Réduit la taille écran fixe du badge — les acteurs entassés en
+   * backstage (nombreux, espacement réel serré) faisaient se chevaucher les
+   * badges en un jumble illisible (signalé 2026-08-02, capture d'écran de
+   * Florian) : la zone appelante réduit ce facteur pour ses points. */
+  scale?: number
 }) {
   const ref = useRef<THREE.Mesh>(null)
   const texture = useMemo(() => {
@@ -267,7 +272,7 @@ function ActorLabel({ text, xCm, yCm, zCm, opacity }: {
   useFrame(({ camera }) => {
     if (!ref.current) return
     const zoom = (camera as THREE.OrthographicCamera).zoom || 1
-    const s = ACTOR_LABEL_PX / zoom
+    const s = (ACTOR_LABEL_PX * scale) / zoom
     ref.current.scale.set(s, s, s)
   })
   const [x, y, z] = stageToLocal(xCm, yCm, zCm)
@@ -2154,6 +2159,14 @@ function SceneContent({
           if (!pose) return null
           const opacity = editEntries === null ? 1
             : editEntries[point.id] ? EDIT_ACTIVATED_OPACITY : EDIT_BYSTANDER_OPACITY
+          // Un acteur "au repos" dans sa zone backstage rend son badge tout
+          // petit (nombreux acteurs, espacement réel serré — voir le
+          // commentaire de ActorLabel) : réduit pour limiter le
+          // chevauchement, sans le supprimer (rester identifiable au survol
+          // du roster reste possible même très serré).
+          const inBackstage = (project.backstageZones ?? []).some((z) =>
+            pose[0] >= z.xCm && pose[0] <= z.xCm + z.widthCm
+            && pose[1] >= z.yCm && pose[1] <= z.yCm + z.heightCm)
           return (
             <group key={point.id}>
               <Actor
@@ -2164,7 +2177,8 @@ function SceneContent({
                 opacity={opacity}
                 onPointerDown={(e) => handleActorPointerDown(e, point.id)}
               />
-              <ActorLabel text={actorLabelText(point)} xCm={pose[0]} yCm={pose[1]} zCm={pose[2]} opacity={opacity} />
+              <ActorLabel text={actorLabelText(point)} xCm={pose[0]} yCm={pose[1]} zCm={pose[2]} opacity={opacity}
+                scale={inBackstage ? 0.55 : 1} />
             </group>
           )
         })}
