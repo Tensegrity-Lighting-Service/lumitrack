@@ -22,6 +22,7 @@ import { GraphEditor } from './GraphEditor'
 import { BlockAutomation } from './BlockAutomation'
 import { TrajectoryOverlay, TRAJECTORY_ROW_H } from './TrajectoryOverlay'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
+import { useT } from '../i18n'
 
 const MS_PER_S = 1000
 const RULER_H = 26
@@ -109,6 +110,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
    * l'inspecteur ("la vitesse peut pas s'afficher dans le bloc même ?"). */
   blockContext: BlockContextMessage | null
 }) {
+  const t = useT()
   const cues = project.cues
   // Pistes persistantes (mission multi-pistes) : chaque bloc porte sa
   // `lane`, plus d'empilement automatique. Toujours au moins 3 pistes et
@@ -652,11 +654,12 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                     <div className="cue-block-header">
                       <span className="cue-block-name">{cue.name}</span>
                       {speed !== null && (() => {
-                        const [label, color] = speedCategory(speed)
+                        const [key, color] = speedCategory(speed)
+                        const kmh = msToKmh(speed)
                         return (
                           <span className="tl-block-speed" style={{ '--speed-color': color } as React.CSSProperties}
-                            title={`Vitesse du déplacement le plus rapide de ce bloc : ${msToKmh(speed).toFixed(1)} km/h (${label})`}>
-                            {msToKmh(speed).toFixed(0)} km/h
+                            title={t('cue.speedHint', { kmh: kmh.toFixed(1), label: t(`speed.${key}`) })}>
+                            {kmh.toFixed(0)} km/h
                           </span>
                         )
                       })()}

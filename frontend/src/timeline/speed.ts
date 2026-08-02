@@ -6,21 +6,25 @@
 // ~2,2-2,8 m/s (pointe ~3,6-4), sprint tenable 5-10s ~4,5-5,8 m/s.
 import type { BlockContextMessage, Cue } from '../types'
 
-export const SPEED_THRESHOLDS: [number, string, string][] = [
-  [1.6, 'marche', '#4FB6F5'],
-  [2.5, 'jogging', '#4FF58C'],
-  [4.0, 'course', '#F5C84F'],
+/** Clé stable (traduite via t('speed.'+key) à l'affichage, voir i18n/) —
+ * jamais le texte affiché directement, pour rester bilingue FR/EN. */
+export type SpeedKey = 'walk' | 'jog' | 'run' | 'sprint'
+
+export const SPEED_THRESHOLDS: [number, SpeedKey, string][] = [
+  [1.6, 'walk', '#4FB6F5'],
+  [2.5, 'jog', '#4FF58C'],
+  [4.0, 'run', '#F5C84F'],
   [Infinity, 'sprint', '#F5734F'],
 ]
 
 /** Valeurs représentatives par catégorie, pour les boutons preset de
  * l'inspecteur — demandés par Florian ("il n'y a aucun endroit pour donner
  * la vitesse qu'on veut... des presets avec les termes que tu as trouvé"). */
-export const SPEED_PRESETS: { label: string; ms: number; color: string }[] = [
-  { label: 'Marche', ms: 1.3, color: '#4FB6F5' },
-  { label: 'Jogging', ms: 2.2, color: '#4FF58C' },
-  { label: 'Course', ms: 2.8, color: '#F5C84F' },
-  { label: 'Sprint', ms: 5.0, color: '#F5734F' },
+export const SPEED_PRESETS: { key: SpeedKey; ms: number; color: string }[] = [
+  { key: 'walk', ms: 1.3, color: '#4FB6F5' },
+  { key: 'jog', ms: 2.2, color: '#4FF58C' },
+  { key: 'run', ms: 2.8, color: '#F5C84F' },
+  { key: 'sprint', ms: 5.0, color: '#F5734F' },
 ]
 
 /** Affichage seulement (km/h, "plus humain à comprendre" — Florian) : tous
@@ -29,9 +33,9 @@ export function msToKmh(ms: number): number {
   return ms * 3.6
 }
 
-export function speedCategory(ms: number): [string, string] {
-  for (const [max, label, color] of SPEED_THRESHOLDS) {
-    if (ms < max) return [label, color]
+export function speedCategory(ms: number): [SpeedKey, string] {
+  for (const [max, key, color] of SPEED_THRESHOLDS) {
+    if (ms < max) return [key, color]
   }
   return ['sprint', '#F5734F']
 }

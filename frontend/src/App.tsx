@@ -19,8 +19,11 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { setLocale, t, useLocale, useT } from './i18n'
 
-const LUMITRACK_FILTER = [{ name: 'Projet Lumitrack', extensions: ['lumitrack'] }]
+function lumitrackFilter() {
+  return [{ name: t('common.lumitrackProjectFilter'), extensions: ['lumitrack'] }]
+}
 
 /** Le curseur au-dessus de la moitié basse d'une ligne = insertion APRÈS
  * elle, moitié haute = AVANT — même convention que la plupart des listes
@@ -44,9 +47,9 @@ function isInsertingAfter(event: DragOverEvent | DragEndEvent): boolean {
  * .lumitrack au chemin choisi (dossier créé si besoin côté backend). */
 async function pickSaveAsPath(projectName: string): Promise<string | null> {
   const path = await saveDialog({
-    title: 'Enregistrer sous…',
-    defaultPath: `${projectName || 'Projet'}.lumitrack`,
-    filters: LUMITRACK_FILTER,
+    title: t('menu.file.saveAsDialogTitle'),
+    defaultPath: `${projectName || t('common.defaultProjectName')}.lumitrack`,
+    filters: lumitrackFilter(),
   })
   return typeof path === 'string' ? path : null
 }
@@ -217,6 +220,7 @@ function RosterPointRow({ point, selected, moving, offstage, onSelect, dropLine 
     transition: transition ?? undefined,
     opacity: isDragging ? 0.4 : undefined,
   }
+  const t = useT()
   const dropLineClass = dropLine ? ` roster-drop-line-${dropLine}` : ''
   return (
     <li
@@ -229,12 +233,12 @@ function RosterPointRow({ point, selected, moving, offstage, onSelect, dropLine 
     >
       <span
         className={`status-dot ${moving ? 'moving' : 'idle'}`}
-        title={moving ? 'En mouvement' : 'Immobile'}
+        title={moving ? t('roster.statusMoving') : t('roster.statusIdle')}
       />
       <span className="swatch" style={{ background: point.color }} />
       {point.number !== null && <span className="point-number">{point.number}</span>}
       <span className="point-name">{point.name}</span>
-      {offstage && <span className="offstage" title="Hors scène">•</span>}
+      {offstage && <span className="offstage" title={t('roster.offstage')}>•</span>}
     </li>
   )
 }
@@ -267,6 +271,7 @@ function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleColl
     transition: transition ?? undefined,
     opacity: isDragging ? 0.4 : undefined,
   }
+  const t = useT()
   const dropLineClass = dropLine ? ` roster-drop-line-${dropLine}` : ''
   return (
     <div
@@ -300,7 +305,7 @@ function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleColl
           className="roster-group-name"
           onPointerDown={(e) => e.stopPropagation()}
           onDoubleClick={(e) => { e.stopPropagation(); onStartRename() }}
-          title="Double-clic pour renommer"
+          title={t('roster.renameFolderHint')}
         >
           {group.name}
         </span>
@@ -308,7 +313,7 @@ function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleColl
       <span className="roster-group-count">{memberCount}</span>
       <button
         className="roster-group-delete"
-        title="Supprimer ce sous-groupe (les acteurs deviennent sans groupe)"
+        title={t('roster.deleteFolder')}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => { e.stopPropagation(); onDelete() }}
       >
@@ -322,14 +327,17 @@ function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleColl
  * sortir un acteur d'un dossier. */
 function RosterUngroupedZone() {
   const { setNodeRef, isOver } = useDroppable({ id: 'ungrouped' })
+  const t = useT()
   return (
     <li ref={setNodeRef} className={`roster-ungrouped-zone${isOver ? ' roster-drop-over' : ''}`}>
-      Sans groupe
+      {t('roster.ungrouped')}
     </li>
   )
 }
 
 function App() {
+  const t = useT()
+  const locale = useLocale()
   const project = useProject()
   const tick = useTick()
   const connected = useConnected()
@@ -493,7 +501,7 @@ function App() {
       const ids = alreadySelected && selectedPointIds.length > 1 ? selectedPointIds : [data.pointId]
       activeDragIdsRef.current = ids
       const point = proj.points.find((p) => p.id === data.pointId)
-      setActiveDragLabel(ids.length > 1 ? `${ids.length} acteurs` : (point?.name ?? ''))
+      setActiveDragLabel(ids.length > 1 ? t('roster.dragMultiple', { count: ids.length }) : (point?.name ?? ''))
     } else {
       const members = proj.points.filter((p) => p.rosterGroupId === data.groupId)
       activeDragIdsRef.current = members.map((m) => m.id)
@@ -667,7 +675,7 @@ function App() {
           // explorateur", remplace l'ancien popup de gestion en lot).
           e.preventDefault()
           const count = selectedPointIds.length
-          if (window.confirm(`Supprimer ${count} acteur${count > 1 ? 's' : ''} ? Leurs activations dans tous les blocs partent aussi.`)) {
+          if (window.confirm(t('roster.deleteActorsConfirm', { count, plural: count > 1 ? 's' : '' }))) {
             for (const id of selectedPointIds) sidecar.deletePoint(id)
             setSelectedPointIds([])
           }
@@ -684,79 +692,86 @@ function App() {
   if (!project) {
     return (
       <div className="app-loading">
-        {connected ? 'Connexion au sidecar…' : 'En attente du sidecar Python (ws://127.0.0.1:17845)…'}
+        {connected ? t('common.loadingConnecting') : t('common.loadingWaiting')}
       </div>
     )
   }
 
   const menus = [
     {
-      label: 'Fichier',
+      label: t('menu.file'),
       items: [
-        { label: 'Nouveau', onClick: () => {
-          const name = window.prompt('Nom du nouveau projet ?', 'Untitled')
+        { label: t('menu.file.new'), onClick: () => {
+          const name = window.prompt(t('menu.file.newProjectPrompt'), t('menu.file.newProjectDefault'))
           if (name) sidecar.newProject(name)
         } },
-        { label: 'Importer .stancz…', onClick: async () => {
+        { label: t('menu.file.importStancz'), onClick: async () => {
           const path = await openDialog({
-            title: 'Importer un projet Stancz',
-            filters: [{ name: 'Projet Stancz', extensions: ['stancz'] }],
+            title: t('menu.file.importStanczDialogTitle'),
+            filters: [{ name: 'Stancz', extensions: ['stancz'] }],
           })
           if (typeof path === 'string') sidecar.importStancz(path)
         } },
         { separator: true } as const,
-        { label: 'Importer un audio…', onClick: async () => {
+        { label: t('menu.file.importAudio'), onClick: async () => {
           const path = await openDialog({
-            title: 'Importer un fichier audio',
+            title: t('menu.file.importAudioDialogTitle'),
             filters: [{ name: 'Audio', extensions: ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac'] }],
           })
           if (typeof path === 'string') sidecar.setAudio({ path })
         } },
-        { label: 'Retirer l’audio', disabled: !project.audioPath, onClick: () => {
+        { label: t('menu.file.removeAudio'), disabled: !project.audioPath, onClick: () => {
           sidecar.setAudio({ path: null })
         } },
         { separator: true } as const,
-        { label: 'Enregistrer (Ctrl+S)', onClick: () => saveOrSaveAs(project.name) },
-        { label: 'Enregistrer sous…', onClick: async () => {
+        { label: t('menu.file.save'), onClick: () => saveOrSaveAs(project.name) },
+        { label: t('menu.file.saveAs'), onClick: async () => {
           const path = await pickSaveAsPath(project.name)
           if (path) sidecar.saveBundle(path)
         } },
-        { label: 'Ouvrir…', onClick: async () => {
+        { label: t('menu.file.open'), onClick: async () => {
           const path = await openDialog({
-            title: 'Ouvrir un projet',
-            filters: LUMITRACK_FILTER,
+            title: t('menu.file.openDialogTitle'),
+            filters: lumitrackFilter(),
           })
           if (typeof path === 'string') sidecar.loadBundle(path)
         } },
-        { label: 'Historique des versions…', disabled: !bundlePath, onClick: () => setShowBundleHistory(true) },
+        { label: t('menu.file.bundleHistory'), disabled: !bundlePath, onClick: () => setShowBundleHistory(true) },
       ],
     },
     {
-      label: 'Édition',
+      label: t('menu.edit'),
       items: [
-        { label: 'Annuler (Ctrl+Z)', disabled: !undoAvailable, onClick: () => sidecar.undo() },
-        { label: 'Rétablir (Ctrl+Maj+Z)', disabled: !redoAvailable, onClick: () => sidecar.redo() },
+        { label: t('menu.edit.undo'), disabled: !undoAvailable, onClick: () => sidecar.undo() },
+        { label: t('menu.edit.redo'), disabled: !redoAvailable, onClick: () => sidecar.redo() },
       ],
     },
     {
-      label: 'Affichage',
+      label: t('menu.view'),
       items: [
-        { label: 'Ajuster la vue 3D à la fenêtre', onClick: () => setFitToken((t) => t + 1) },
+        { label: t('menu.view.fit3d'), onClick: () => setFitToken((prev) => prev + 1) },
         { separator: true } as const,
-        { label: 'Verrouiller la caméra 3D', checked: cameraLocked, onClick: () => setCameraLocked((v) => !v) },
-        { label: 'Éditer la zone de jeu', checked: editingZone, onClick: () => setEditingZone((v) => !v) },
+        { label: t('menu.view.lockCamera'), checked: cameraLocked, onClick: () => setCameraLocked((v) => !v) },
+        { label: t('menu.view.editZone'), checked: editingZone, onClick: () => setEditingZone((v) => !v) },
       ],
     },
     {
-      label: 'Sortie',
+      label: t('menu.output'),
       items: [
         {
-          label: psnRunning ? 'Arrêter PSN' : 'Démarrer PSN',
+          label: psnRunning ? t('menu.output.stopPsn') : t('menu.output.startPsn'),
           checked: psnRunning,
           onClick: () => (psnRunning ? sidecar.psnStop() : sidecar.psnStart()),
         },
         { separator: true } as const,
-        { label: 'Réglages PSN…', onClick: () => setShowPsnPanel(true) },
+        { label: t('menu.output.psnSettings'), onClick: () => setShowPsnPanel(true) },
+      ],
+    },
+    {
+      label: t('menu.settings'),
+      items: [
+        { label: t('menu.settings.language.fr'), checked: locale === 'fr', onClick: () => setLocale('fr') },
+        { label: t('menu.settings.language.en'), checked: locale === 'en', onClick: () => setLocale('en') },
       ],
     },
   ]
@@ -774,23 +789,23 @@ function App() {
 
       <aside className="roster">
         <div className="roster-head">
-          <h2>Roster</h2>
+          <h2>{t('roster.title')}</h2>
           <span className="roster-spacer" />
           <button
-            title="Nouveau sous-dossier"
+            title={t('roster.newFolder')}
             onClick={() => {
               const id = crypto.randomUUID()
-              sidecar.setRosterGroups([...project.rosterGroups, { id, name: 'Nouveau groupe' }])
+              sidecar.setRosterGroups([...project.rosterGroups, { id, name: t('roster.newFolderDefaultName') }])
               setRenamingGroupId(id)
             }}
           >
-            + Dossier
+            {t('roster.newFolderBtn')}
           </button>
           <button
-            title="Ajouter un ou plusieurs acteurs"
+            title={t('roster.addActor')}
             onClick={() => setShowAddActors(true)}
           >
-            + Acteur
+            {t('roster.addActorBtn')}
           </button>
         </div>
         <ul>
@@ -939,24 +954,24 @@ function App() {
         />
 
         <div className="viewport-toolbar">
-          <button title="Zoom avant" onClick={zoomIn}>+</button>
-          <button title="Zoom arrière" onClick={zoomOut}>−</button>
-          <button title="Ajuster à la fenêtre" onClick={() => setFitToken((t) => t + 1)}>
+          <button title={t('viewport.zoomIn')} onClick={zoomIn}>+</button>
+          <button title={t('viewport.zoomOut')} onClick={zoomOut}>−</button>
+          <button title={t('viewport.fit')} onClick={() => setFitToken((prev) => prev + 1)}>
             <FitIcon />
           </button>
           <button
-            title="Aligner sur la grille"
+            title={t('viewport.snapToGrid')}
             className={snapToGrid ? 'active' : ''}
             onClick={() => setSnapToGrid((v) => !v)}
           >
             #
           </button>
           <div className="viewport-toolbar-settings" ref={gridSettingsRef}>
-            <button title="Réglages de la grille" onClick={() => setShowGridSettings((v) => !v)}>⚙</button>
+            <button title={t('viewport.gridSettings')} onClick={() => setShowGridSettings((v) => !v)}>⚙</button>
             {showGridSettings && (
               <div className="viewport-popover" onClick={(e) => e.stopPropagation()}>
                 <label>
-                  Opacité de la grille
+                  {t('viewport.gridOpacity')}
                   <input
                     type="range" min={0} max={1} step={0.05}
                     value={gridOpacity}
@@ -964,21 +979,21 @@ function App() {
                   />
                 </label>
                 <label>
-                  Rotation du modèle 3D (°)
+                  {t('viewport.terrainRotation')}
                   <NumericInput
                     value={project.terrainRotationDeg ?? 0} step={15}
                     onCommit={(v) => { if (v !== null) sidecar.updateStageMap({ terrainRotationDeg: v }) }}
                   />
                 </label>
                 <label>
-                  Taille de la grille (m)
+                  {t('viewport.gridSize')}
                   <NumericInput
                     value={project.gridSizeCm / 100} step={0.1}
                     onCommit={(v) => { if (v !== null && v >= 0.01) sidecar.updateStageMap({ gridSizeCm: v * 100 }) }}
                   />
                 </label>
-                <label title="Vitesse utilisée pour calculer la durée des blocs en « durée automatique » — marche ~4,7 km/h, jogging ~7,9 km/h, course ~10 km/h">
-                  Vitesse de référence (km/h)
+                <label title={t('viewport.referenceSpeedHint')}>
+                  {t('viewport.referenceSpeed')}
                   <NumericInput
                     value={project.referenceSpeedCms * 0.036} step={0.5}
                     onCommit={(v) => { if (v !== null && v >= 0.5) sidecar.updateProjectSettings({ referenceSpeedCms: v / 0.036 }) }}
@@ -993,7 +1008,7 @@ function App() {
       <VerticalResizer area="vhandle2" onDeltaX={(dx) => setInspectorWidth((w) => clamp(w - dx, INSPECTOR_MIN, INSPECTOR_MAX))} />
 
       <aside className="inspector">
-        <h2>Inspecteur</h2>
+        <h2>{t('inspector.title')}</h2>
         {editingZone && <StagePlacementPanel project={project} />}
         {editingZone && <BackstagePanel project={project} />}
         {!editingZone && (
@@ -1016,7 +1031,7 @@ function App() {
           />
         ) : (
           !editingZone && selectedPointIds.length === 0 && (
-            <p className="hint">Sélectionne un acteur ou un bloc.</p>
+            <p className="hint">{t('inspector.emptyHint')}</p>
           )
         )}
       </aside>
@@ -1063,6 +1078,7 @@ function ActorInspector({ project, selectedPointIds }: {
   project: Project
   selectedPointIds: string[]
 }) {
+  const t = useT()
   const zones = project.backstageZones ?? []
   if (selectedPointIds.length === 0) return null
   if (selectedPointIds.length > 1) {
@@ -1070,9 +1086,9 @@ function ActorInspector({ project, selectedPointIds }: {
       .map((id) => project.points.find((p) => p.id === id)?.name ?? id)
     return (
       <div className="actor-inspector">
-        <h3>{selectedPointIds.length} acteurs sélectionnés</h3>
+        <h3>{t('inspector.actorsSelected', { count: selectedPointIds.length })}</h3>
         <p className="group-timing-names" title={names.join(', ')}>{names.join(', ')}</p>
-        <p className="hint">Boîte de transformation dans la scène · timing groupé ci-dessous avec un bloc actif.</p>
+        <p className="hint">{t('inspector.multiSelectHint')}</p>
       </div>
     )
   }
@@ -1082,10 +1098,10 @@ function ActorInspector({ project, selectedPointIds }: {
     <div className="actor-inspector">
       <h3>
         <span className="swatch" style={{ background: point.color }} />
-        Acteur
+        {t('inspector.actor')}
       </h3>
       <div className="actor-grid">
-        <label>Nom
+        <label>{t('inspector.name')}
           <input
             key={point.id + point.name}
             defaultValue={point.name}
@@ -1093,26 +1109,26 @@ function ActorInspector({ project, selectedPointIds }: {
             onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
           />
         </label>
-        <label>Couleur
+        <label>{t('inspector.color')}
           <input
             type="color"
             value={point.color}
             onChange={(e) => sidecar.updatePoint(point.id, { color: e.target.value })}
           />
         </label>
-        <label>Numéro
+        <label>{t('inspector.number')}
           <NumericInput value={point.number} step={1} nullable
             onCommit={(v) => sidecar.updatePoint(point.id, { number: v })} />
         </label>
-        <label>ID PSN
+        <label>{t('inspector.psnId')}
           <NumericInput value={point.psnTrackerId} step={1} nullable
             onCommit={(v) => sidecar.updatePoint(point.id, { psnTrackerId: v })} />
         </label>
-        <label>Hauteur (m)
+        <label>{t('inspector.height')}
           <NumericInput value={point.defaultHeightCm / 100} step={0.1}
             onCommit={(v) => { if (v !== null && v >= 0) sidecar.updatePoint(point.id, { defaultHeightCm: v * 100 }) }} />
         </label>
-        <label>Coulisse d’attache
+        <label>{t('inspector.homeZone')}
           <select
             value={point.homeZoneId ?? zones[0]?.id ?? ''}
             onChange={(e) => sidecar.updatePoint(point.id, { homeZoneId: e.target.value })}
@@ -1126,23 +1142,24 @@ function ActorInspector({ project, selectedPointIds }: {
 }
 
 function BackstagePanel({ project }: { project: Project }) {
+  const t = useT()
   const zones = project.backstageZones ?? []
   const update = (id: string, patch: Partial<BackstageZone>) => {
     sidecar.setBackstageZones(zones.map((z) => (z.id === id ? { ...z, ...patch } : z)))
   }
   return (
     <div className="stage-placement">
-      <h3>Zones backstage</h3>
+      <h3>{t('backstage.title')}</h3>
       {zones.map((zone) => (
         <div key={zone.id} className="backstage-block">
           <div className="backstage-row">
             <input
               value={zone.name}
               onChange={(e) => update(zone.id, { name: e.target.value })}
-              title="Nom de la zone"
+              title={t('backstage.zoneName')}
             />
             <button
-              title="Supprimer la zone"
+              title={t('backstage.deleteZone')}
               disabled={zones.length <= 1}
               onClick={() => sidecar.setBackstageZones(zones.filter((z) => z.id !== zone.id))}
             >
@@ -1150,19 +1167,19 @@ function BackstagePanel({ project }: { project: Project }) {
             </button>
           </div>
           <div className="backstage-grid">
-            <label>X (m)
+            <label>{t('backstage.x')}
               <NumericInput value={zone.xCm / 100} step={0.5}
                 onCommit={(v) => { if (v !== null) update(zone.id, { xCm: v * 100 }) }} />
             </label>
-            <label>Y (m)
+            <label>{t('backstage.y')}
               <NumericInput value={zone.yCm / 100} step={0.5}
                 onCommit={(v) => { if (v !== null) update(zone.id, { yCm: v * 100 }) }} />
             </label>
-            <label>L (m)
+            <label>{t('backstage.width')}
               <NumericInput value={zone.widthCm / 100} step={0.5}
                 onCommit={(v) => { if (v !== null && v >= 0.6) update(zone.id, { widthCm: v * 100 }) }} />
             </label>
-            <label>P (m)
+            <label>{t('backstage.height')}
               <NumericInput value={zone.heightCm / 100} step={0.5}
                 onCommit={(v) => { if (v !== null && v >= 0.6) update(zone.id, { heightCm: v * 100 }) }} />
             </label>
@@ -1173,47 +1190,48 @@ function BackstagePanel({ project }: { project: Project }) {
         className="backstage-add"
         onClick={() => sidecar.setBackstageZones([...zones, {
           id: `backstage-${Date.now()}`,
-          name: `Backstage ${zones.length + 1}`,
+          name: t('backstage.addZoneDefaultName', { n: zones.length + 1 }),
           xCm: project.stageWidthCm + 100,
           yCm: 0,
           widthCm: 400,
           heightCm: Math.min(1200, project.stageHeightCm),
         }])}
       >
-        + Zone backstage
+        {t('backstage.addZone')}
       </button>
-      <p className="hint">Glisse un acteur du roster sur une zone avec Alt pour l’y attacher. Les zones se déplacent/redimensionnent dans la scène.</p>
+      <p className="hint">{t('backstage.hint')}</p>
     </div>
   )
 }
 
 function StagePlacementPanel({ project }: { project: Project }) {
+  const t = useT()
   return (
     <div className="stage-placement">
-      <h3>Zone de jeu</h3>
+      <h3>{t('stagePlacement.title')}</h3>
       <div className="stage-placement-grid">
-        <label>Origine X (m)
+        <label>{t('stagePlacement.originX')}
           <NumericInput value={project.stageMapOriginXM} step={0.1}
             onCommit={(v) => { if (v !== null) sidecar.updateStageMap({ originXM: v }) }} />
         </label>
-        <label>Origine Z (m)
+        <label>{t('stagePlacement.originZ')}
           <NumericInput value={project.stageMapOriginZM} step={0.1}
             onCommit={(v) => { if (v !== null) sidecar.updateStageMap({ originZM: v }) }} />
         </label>
-        <label>Rotation (°)
+        <label>{t('stagePlacement.rotation')}
           <NumericInput value={project.stageMapRotationDeg} step={1}
             onCommit={(v) => { if (v !== null) sidecar.updateStageMap({ rotationDeg: v }) }} />
         </label>
-        <label>Largeur (m)
+        <label>{t('stagePlacement.width')}
           <NumericInput value={project.stageWidthCm / 100} step={0.5}
             onCommit={(v) => { if (v !== null && v >= 0.01) sidecar.updateStageMap({ widthCm: v * 100 }) }} />
         </label>
-        <label>Profondeur (m)
+        <label>{t('stagePlacement.height')}
           <NumericInput value={project.stageHeightCm / 100} step={0.5}
             onCommit={(v) => { if (v !== null && v >= 0.01) sidecar.updateStageMap({ heightCm: v * 100 }) }} />
         </label>
       </div>
-      <p className="hint">Ou fais glisser directement dans la vue 3D : centre = déplacer, coin orange = redimensionner, poignée verte = pivoter.</p>
+      <p className="hint">{t('stagePlacement.hint')}</p>
     </div>
   )
 }
@@ -1225,6 +1243,7 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
   onSelectPoint: (id: string | null) => void
   blockContext: BlockContextMessage | null
 }) {
+  const t = useT()
   const activatedIds = new Set(Object.keys(cue.activations))
   const availablePoints = projectPoints.filter((p) => !activatedIds.has(p.id))
   const speed = maxSpeedMs(cue, blockContext)
@@ -1236,34 +1255,35 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
           type="color"
           value={cue.color}
           onChange={(e) => sidecar.updateCue(cue.id, { color: e.target.value })}
-          title="Couleur du bloc"
+          title={t('cue.color')}
         />
         <h3>{cue.name}</h3>
       </div>
       <div className="cue-inspector-timing-row">
-        <label className="cue-auto-duration" title="La durée du bloc suit la distance parcourue / la vitesse de référence du projet">
+        <label className="cue-auto-duration" title={t('cue.autoDurationHint')}>
           <input
             type="checkbox"
             checked={cue.autoDuration}
             onChange={(e) => sidecar.updateCue(cue.id, { autoDuration: e.target.checked })}
           />
-          Durée automatique
+          {t('cue.autoDuration')}
         </label>
         {speed !== null && (() => {
-          const [label, color] = speedCategory(speed)
+          const [key, color] = speedCategory(speed)
           const kmh = msToKmh(speed)
+          const label = t(`speed.${key}`)
           return (
             <span className="speed-thermometer" style={{ '--speed-color': color } as React.CSSProperties}
-              title={`Vitesse du déplacement le plus rapide de ce bloc : ${kmh.toFixed(1)} km/h (${label})`}>
+              title={t('cue.speedHint', { kmh: kmh.toFixed(1), label })}>
               {kmh.toFixed(1)} km/h · {label}
             </span>
           )
         })()}
       </div>
-      <div className="speed-presets" title="Fixe la durée du bloc pour que l'acteur le plus lent se déplace à cette vitesse">
+      <div className="speed-presets" title={t('cue.speedPresetsHint')}>
         {SPEED_PRESETS.map((preset) => (
           <button
-            key={preset.label}
+            key={preset.key}
             className="speed-preset-btn"
             style={{ '--speed-color': preset.color } as React.CSSProperties}
             disabled={blockContext?.cueId !== cue.id}
@@ -1272,7 +1292,7 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
               if (durationMs !== null) sidecar.updateCue(cue.id, { durationMs, autoDuration: false })
             }}
           >
-            {preset.label} ({msToKmh(preset.ms).toFixed(0)} km/h)
+            {t(`speed.${preset.key}`)} ({msToKmh(preset.ms).toFixed(0)} km/h)
           </button>
         ))}
       </div>
@@ -1301,7 +1321,7 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
             e.target.value = ''
           }}
         >
-          <option value="" disabled>+ Activer un point…</option>
+          <option value="" disabled>{t('cue.activatePoint')}</option>
           {availablePoints.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       )}
@@ -1328,6 +1348,7 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   selectedPointIds: string[]
   projectPoints: Point[]
 }) {
+  const t = useT()
   const activated = selectedPointIds.filter((id) => cue.activations[id])
   const acts = activated.map((id) => cue.activations[id])
   const shared = <T,>(get: (a: Activation) => T): T | null =>
@@ -1344,28 +1365,31 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
 
   return (
     <div className="group-timing">
-      <h3>Timing groupé — {selectedPointIds.length} acteurs</h3>
+      <h3>{t('cue.groupTimingTitle', { count: selectedPointIds.length })}</h3>
       <p className="group-timing-names" title={names.join(', ')}>{names.join(', ')}</p>
       {activated.length === 0 ? (
-        <p className="hint">Aucun des acteurs sélectionnés n’est activé dans ce bloc.</p>
+        <p className="hint">{t('cue.groupTimingNone')}</p>
       ) : (
         <>
           {activated.length < selectedPointIds.length && (
-            <p className="hint">{activated.length} activé{activated.length > 1 ? 's' : ''} sur {selectedPointIds.length} — les autres ne sont pas touchés.</p>
+            <p className="hint">{t('cue.groupTimingPartial', {
+              activated: activated.length, activatedPlural: activated.length > 1 ? 's' : '',
+              total: selectedPointIds.length,
+            })}</p>
           )}
           <div className="group-timing-grid">
-            <label>Fade (s)
+            <label>{t('cue.fade')}
               <NumericInput
                 value={sharedFade === null ? null : sharedFade / 1000} step={0.1} nullable
                 onCommit={(v) => { if (v !== null && v >= 0) applyAll({ fadeMs: v * 1000 }) }}
               />
             </label>
-            <label>Courbe
+            <label>{t('cue.curve')}
               <select
                 value={sharedEasing ?? ''}
                 onChange={(e) => { if (e.target.value) applyAll({ easing: e.target.value }) }}
               >
-                {sharedEasing === null && <option value="">(mixte)</option>}
+                {sharedEasing === null && <option value="">{t('cue.curveMixed')}</option>}
                 {['linear', 'smooth', 'ease-in', 'ease-out', 'bounce', 'spring', 'exponential'].map((n) => (
                   <option key={n} value={n}>{n}</option>
                 ))}
@@ -1386,6 +1410,7 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
   selected: boolean
   onSelect: () => void
 }) {
+  const t = useT()
   const set = (patch: Partial<{
     targetXCm: number | null; targetYCm: number | null; targetZCm: number | null
     targetYawDeg: number | null; fadeMs: number; easing: string
@@ -1403,56 +1428,56 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
       {/* stopPropagation : cliquer dans un champ ne doit pas basculer la
           sélection de l'acteur portée par la carte entière. */}
       <div className="activation-grid" onClick={(e) => e.stopPropagation()}>
-        <label>X (m)
+        <label>{t('cue.x')}
           <NumericInput value={activation.targetXCm === null ? null : activation.targetXCm / 100} step={0.1} nullable
             onCommit={(v) => set({ targetXCm: v === null ? null : v * 100 })} />
         </label>
-        <label>Y (m)
+        <label>{t('cue.y')}
           <NumericInput value={activation.targetYCm === null ? null : activation.targetYCm / 100} step={0.1} nullable
             onCommit={(v) => set({ targetYCm: v === null ? null : v * 100 })} />
         </label>
-        <label>Z (m)
+        <label>{t('cue.z')}
           <NumericInput value={activation.targetZCm === null ? null : activation.targetZCm / 100} step={0.1} nullable
             onCommit={(v) => set({ targetZCm: v === null ? null : v * 100 })} />
         </label>
-        <label>Rotation
+        <label>{t('cue.rotation')}
           <select value={mode} onChange={(e) => set({ orientationMode: e.target.value as 'manual' | 'path' | 'focus' })}
-            title="Suivre courbe de trajectoire : le lacet suit la tangente du déplacement. Focus : le lacet pointe vers un point fixe du terrain.">
-            <option value="manual">Manuel</option>
-            <option value="path">Suivre la trajectoire</option>
-            <option value="focus">Focus</option>
+            title={t('cue.rotationHint')}>
+            <option value="manual">{t('cue.rotationManual')}</option>
+            <option value="path">{t('cue.rotationPath')}</option>
+            <option value="focus">{t('cue.rotationFocus')}</option>
           </select>
         </label>
         {mode === 'manual' && (
-          <label>Lacet (°)
+          <label>{t('cue.yaw')}
             <NumericInput value={activation.targetYawDeg} step={5} nullable
               onCommit={(v) => set({ targetYawDeg: v })} />
           </label>
         )}
         {mode === 'focus' && (
           <>
-            <label>Focus X (m)
+            <label>{t('cue.focusX')}
               <NumericInput value={activation.focusXCm == null ? null : activation.focusXCm / 100} step={0.1} nullable
                 onCommit={(v) => set({ focusXCm: v === null ? null : v * 100 })} />
             </label>
-            <label>Focus Y (m)
+            <label>{t('cue.focusY')}
               <NumericInput value={activation.focusYCm == null ? null : activation.focusYCm / 100} step={0.1} nullable
                 onCommit={(v) => set({ focusYCm: v === null ? null : v * 100 })} />
             </label>
           </>
         )}
-        <label>Fade (s)
+        <label>{t('cue.fade')}
           <NumericInput value={activation.fadeMs / 1000} step={0.1}
             onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v * 1000 }) }} />
         </label>
-        <label>Courbe
+        <label>{t('cue.curve')}
           {(activation.pathPoints?.length || activation.startHandle || activation.targetHandle) ? (
             <button
               className="inspector-clear-path"
-              title="Supprimer les waypoints et poignées : retour à la ligne droite"
+              title={t('cue.clearPath')}
               onClick={() => sidecar.setActivation(cueId, pointId, { pathPoints: null, startHandle: null, targetHandle: null })}
             >
-              Tracé droit
+              {t('cue.straightPath')}
             </button>
           ) : null}
           <select value={activation.easing} onChange={(e) => set({ easing: e.target.value })}>
