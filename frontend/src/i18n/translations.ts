@@ -41,7 +41,6 @@ export const translations: Record<Locale, Record<string, string>> = {
     'menu.output.startPsn': 'Démarrer PSN',
     'menu.output.psnSettings': 'Réglages PSN…',
     'menu.settings': 'Réglages',
-    'menu.settings.language': 'Langue',
     'menu.settings.language.fr': 'Français',
     'menu.settings.language.en': 'English',
 
@@ -277,7 +276,6 @@ export const translations: Record<Locale, Record<string, string>> = {
     'menu.output.startPsn': 'Start PSN',
     'menu.output.psnSettings': 'PSN settings…',
     'menu.settings': 'Settings',
-    'menu.settings.language': 'Language',
     'menu.settings.language.fr': 'Français',
     'menu.settings.language.en': 'English',
 

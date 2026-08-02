@@ -878,7 +878,7 @@ function App() {
                         }}
                         onCancelRename={() => setRenamingGroupId(null)}
                         onDelete={() => {
-                          if (window.confirm('Supprimer ce sous-groupe ? Les acteurs qu’il contient redeviennent « sans groupe ».')) {
+                          if (window.confirm(t('roster.deleteFolderConfirm'))) {
                             sidecar.setRosterGroups(project.rosterGroups.filter((g) => g.id !== group.id))
                           }
                         }}
