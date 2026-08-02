@@ -1234,6 +1234,9 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     component === 'Rotator' ? 'rotate' : component === 'Sphere' ? 'resize' : 'move'
 
   const handleDragStart: NonNullable<React.ComponentProps<typeof PivotControls>['onDragStart']> = (props) => {
+    // La boîte reste visible sans bloc actif (repère visuel), mais il n'y a
+    // alors nulle part où écrire un geste — pas de bloc, pas de drag.
+    if (!selectedCueId) return
     const members = membersNow()
     if (members.length === 0) return
     dragRef.current = { kind: kindFor(props.component), members, centerX, centerY, lastTheta: 0, lastSent: 0 }
@@ -2170,11 +2173,18 @@ function SceneContent({
             block shows its target ghost and static trajectory. By default
             all of them; selecting an actor highlights its own and dims the
             rest (context stays visible). */}
-        {selectedCueId && selectedPointIds.length >= 1 && (
+        {/* La boîte s'affiche dès qu'un acteur est sélectionné, MÊME sans
+            bloc actif (signalé 2026-08-02 : "4 acteurs sélectionnés" dans
+            l'inspecteur mais aucune boîte visible après un lasso, tant
+            qu'aucun bloc n'était déjà ouvert) — membersNow() retombe déjà
+            sur la position vivante sans cue ; seul le geste d'écriture reste
+            gardé par selectedCueId (voir handleDragStart) pour ne jamais
+            écrire sur un id de bloc vide. */}
+        {selectedPointIds.length >= 1 && (
           <SelectionTransform
             project={project}
             positions={positions}
-            selectedCueId={selectedCueId}
+            selectedCueId={selectedCueId ?? ''}
             selectedPointIds={selectedPointIds}
             controlsRef={controlsRef}
             snapToGrid={snapToGrid}
