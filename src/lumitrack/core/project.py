@@ -64,6 +64,13 @@ class Point:
     # appartenance multiple) : un acteur appartient à AU PLUS UN sous-groupe,
     # comme un dossier de fichiers. None = pas de sous-groupe.
     roster_group_id: Optional[str] = None
+    # Préremplissage des NOUVELLES activations de cet acteur (menu contextuel
+    # roster/scène, DIRECTIVES.md point 5) — n'a aucune autorité sur les
+    # activations déjà réglées, purement une commodité de saisie. Ne touche
+    # jamais la résolution de lecture (Activation.orientation_mode reste la
+    # seule valeur qui compte une fois l'activation créée) : pas de miroir
+    # Rust nécessaire.
+    default_orientation_mode: str = "manual"
 
     def resolved_tracker_id(self, fallback_index: int) -> int:
         if self.psn_tracker_id is not None:
@@ -81,6 +88,7 @@ class Point:
             "defaultHeightCm": self.default_height_cm,
             "homeZoneId": self.home_zone_id,
             "rosterGroupId": self.roster_group_id,
+            "defaultOrientationMode": self.default_orientation_mode,
         }
 
     @classmethod
@@ -91,6 +99,7 @@ class Point:
             default_height_cm=float(d.get("defaultHeightCm", DEFAULT_HEIGHT_CM)),
             home_zone_id=d.get("homeZoneId"),
             roster_group_id=d.get("rosterGroupId"),
+            default_orientation_mode=d.get("defaultOrientationMode", "manual"),
         )
 
 

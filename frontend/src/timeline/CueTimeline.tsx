@@ -15,6 +15,7 @@
 // broadcasts pendant le geste.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import type { BlockContextMessage, Cue, Project } from '../types'
 import { sidecar } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
@@ -22,6 +23,9 @@ import { GraphEditor } from './GraphEditor'
 import { BlockAutomation } from './BlockAutomation'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
+import { showContextMenu } from '../ui/contextMenuStore'
+import { pickColor } from '../ui/colorPicker'
+import { copyCueToClipboard, copyTimingToOtherActors, duplicateCue, hasCueClipboard, pasteCueFromClipboard } from './blockOps'
 
 const MS_PER_S = 1000
 const RULER_H = 26
@@ -496,6 +500,90 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     if (name && name !== cue.name) sidecar.updateCue(cue.id, { name })
   }, [t])
 
+  // ---- Menu contextuel (clic droit, DIRECTIVES.md point 8) ----
+  const handleBlockContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>, cue: Cue) => {
+    onSelectCue(cue.id)
+    const anchorActivated = selectedPointId !== null && !!cue.activations[selectedPointId]
+    const otherActivatedCount = Object.keys(cue.activations).length - (anchorActivated ? 1 : 0)
+    showContextMenu(e, [
+      [
+        { label: t('contextMenu.rename'), onClick: () => renameCue(cue) },
+        { label: t('contextMenu.duplicate'), onClick: () => duplicateCue(cue) },
+        { label: t('contextMenu.copy'), onClick: () => copyCueToClipboard(cue) },
+      ],
+      [
+        { label: t('contextMenu.color'), onClick: () => pickColor(cue.color, (hex) => sidecar.updateCue(cue.id, { color: hex })) },
+        {
+          label: cue.autoDuration ? t('contextMenu.autoDurationOff') : t('contextMenu.autoDurationOn'),
+          onClick: () => sidecar.updateCue(cue.id, { autoDuration: !cue.autoDuration }),
+        },
+        {
+          label: t('contextMenu.copyTimingToOthers'),
+          disabled: !anchorActivated || otherActivatedCount === 0,
+          onClick: () => { if (selectedPointId) copyTimingToOtherActors(cue, selectedPointId) },
+        },
+      ],
+      [
+        { label: t('contextMenu.delete'), danger: true, onClick: () => { sidecar.deleteCue(cue.id); onSelectCue(null) } },
+      ],
+    ])
+  }, [onSelectCue, renameCue, selectedPointId, t])
+
+  const handleLanesContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Laissé au bloc lui-même (son propre onContextMenu, avec sa propre
+    // stopPropagation) si le clic droit tombe dessus.
+    if (e.target !== e.currentTarget) return
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+    const contentX = e.clientX - scrollEl.getBoundingClientRect().left + scrollEl.scrollLeft
+    const ms = snap(Math.max(0, contentX / effPxPerMs), '', false)
+    const rect = e.currentTarget.getBoundingClientRect()
+    const lane = Math.max(0, Math.floor((e.clientY - rect.top) / LANE_H))
+    showContextMenu(e, [
+      [
+        {
+          label: t('contextMenu.newBlockHere'),
+          onClick: () => {
+            const color = CUE_PALETTE[cues.length % CUE_PALETTE.length]
+            sidecar.addCue('Cue', ms, 2000, color, lane)
+          },
+        },
+        {
+          label: t('contextMenu.pasteBlock'),
+          disabled: !hasCueClipboard(),
+          onClick: () => pasteCueFromClipboard(ms, lane),
+        },
+      ],
+    ])
+  }, [cues.length, effPxPerMs, snap, t])
+
+  const handleRulerContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    showContextMenu(e, [
+      [
+        { label: t('contextMenu.goToStart'), onClick: () => sidecar.seek(0) },
+        { label: t('contextMenu.goToEnd'), onClick: () => sidecar.seek(durationMs) },
+      ],
+    ])
+  }, [durationMs, t])
+
+  const handleAudioContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    showContextMenu(e, [
+      [
+        {
+          label: t('contextMenu.importAudio'),
+          onClick: async () => {
+            const path = await openDialog({
+              title: t('menu.file.importAudioDialogTitle'),
+              filters: [{ name: 'Audio', extensions: ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac'] }],
+            })
+            if (typeof path === 'string') sidecar.setAudio({ path })
+          },
+        },
+        { label: t('contextMenu.removeAudio'), onClick: () => sidecar.setAudio({ path: null }) },
+      ],
+    ])
+  }, [t])
+
   const lanesHeight = laneCount * LANE_H
   const playheadPx = tMs * effPxPerMs
 
@@ -559,7 +647,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
           onScroll={(e) => setScrollLeft(e.currentTarget.scrollLeft)}
         >
           <div className="tl-content" style={{ width: contentWidth }}>
-            <div className="tl-ruler" style={{ height: RULER_H }} onPointerDown={onRulerPointerDown}>
+            <div className="tl-ruler" style={{ height: RULER_H }} onPointerDown={onRulerPointerDown} onContextMenu={handleRulerContextMenu}>
               {ticks.map((tick) => (
                 <div
                   key={tick.ms}
@@ -572,7 +660,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
             </div>
 
             {project.audioPath && (
-              <div className="tl-track-audio" style={{ height: AUDIO_H }}>
+              <div className="tl-track-audio" style={{ height: AUDIO_H }} onContextMenu={handleAudioContextMenu}>
                 <AudioTrack
                   audioPath={project.audioPath}
                   knownDurationS={project.audioDurationS}
@@ -592,6 +680,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                 // Clic sur le fond (pas sur un bloc) : désélection.
                 if (e.target === e.currentTarget) onSelectCue(null)
               }}
+              onContextMenu={handleLanesContextMenu}
             >
               {/* Bandes de pistes alternées + séparateurs (sous les blocs). */}
               {Array.from({ length: laneCount }, (_, i) => (
@@ -632,6 +721,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                     } as React.CSSProperties}
                     onPointerDown={(e) => beginBlockDrag(e, cue, 'move')}
                     onDoubleClick={() => renameCue(cue)}
+                    onContextMenu={(e) => handleBlockContextMenu(e, cue)}
                   >
                     <div className="cue-block-header">
                       <span className="cue-block-name">{cue.name}</span>

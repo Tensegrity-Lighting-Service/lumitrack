@@ -841,6 +841,31 @@ panneau de propriétés suit la sélection du calque). Nouvelle version :
 | Piste audio | Importer, retirer |
 | Règle/playhead | Aller au début/fin |
 
+**✅ LIVRÉ (2026-08-03)**, à l'exception de deux actions volontairement
+reportées (détail plus bas) : bus générique `contextMenuStore.ts` +
+`<ContextMenu>` (rendu une fois dans App.tsx, se ferme sur clic ailleurs/
+Échap/molette/redimensionnement) — n'importe quel composant appelle
+`showContextMenu`/`openContextMenu` directement, sans prop-drilling, même
+principe que `sidecar.ts`/`i18n`. Terrain vide capté via `onPointerMissed`
+du Canvas (mécanisme r3f prévu pour "aucun objet interactif sous le
+clic" — pas de nouveau câblage pointerdown natif, pour ne pas toucher à
+l'ordre déjà fragile documenté autour de `hitObjectRef`). "Dupliquer"/
+"Copier-coller" un bloc composent uniquement des commandes déjà
+existantes (`addCue` avec un id fourni par le client + N `set_activation`,
+`blockOps.ts`) — aucune nouvelle route backend. Nouveau champ
+`Point.defaultOrientationMode` (backend + tests) pour le sous-menu
+"orientation par défaut" du menu Acteur, qui ne réécrit jamais une
+activation déjà réglée.
+Deux actions **reportées** (non construites, pas seulement désactivées) :
+- "Aller à sa zone backstage" (menu Acteur) : demande un nouveau mécanisme
+  de caméra (cadrer un rectangle de zone précis, pas le terrain entier) —
+  pas construit, même prudence que le point 3 (code caméra risqué sans
+  retour visuel possible).
+- "Diviser au playhead" (menu Bloc) : dépend du point 4 ci-dessous, lui
+  aussi pas commencé — geler chaque acteur activé à l'instant du playhead
+  demande une résolution de position à un instant arbitraire que le
+  backend n'expose pas encore comme commande isolée.
+
 **9. Polish visuel de la timeline, inspiré Reaper** :
    - **Grille du temps** : contraste actuel bien trop faible (vérifié —
      sous-graduation à 2,8% d'opacité, majeure à 7% seulement) ; refonte
@@ -874,13 +899,17 @@ possible (change le modèle d'interaction de la scène). Points 4, 6, 7,
 8, 9 pas commencés.
 
 **Mise à jour 2026-08-03** : point 6 entièrement livré (fix "timing
-acteur/bloc désynchronisé par défaut" + décalage de départ/escalier) ;
-overlay de trajectoire à la sélection livré le 08-01 puis RETIRÉ le
-08-03 ("pas très utile tel quel" — Florian) — point 2 repasse donc en
-pratique à "lacet seulement", sans overlay de remplacement pour x/y
-pour l'instant. Toujours pas commencés : point 3 (geste de glisser
-libre), point 4 (diviser un bloc au playhead), point 7 (refonte
-inspecteur), 8 (menus contextuels), 9 (polish timeline façon Reaper).
+acteur/bloc désynchronisé par défaut" + décalage de départ/escalier +
+`BlockDetailPanel.tsx`, une mini-timeline par acteur pour le rendre
+visible/éditable à la souris) ; point 8 livré (menus contextuels, table
+complète sauf "aller à sa zone backstage" et "diviser au playhead",
+reportées — voir le détail à la section du point 8) ; overlay de
+trajectoire à la sélection livré le 08-01 puis RETIRÉ le 08-03 ("pas très
+utile tel quel" — Florian) — point 2 repasse donc en pratique à "lacet
+seulement", sans overlay de remplacement pour x/y pour l'instant.
+Toujours pas commencés : point 3 (geste de glisser libre), point 4
+(diviser un bloc au playhead), point 7 (refonte inspecteur), 9 (polish
+timeline façon Reaper).
 
 **Périmètre volontairement pas encore tranché / à des sessions futures** :
 un système de points de focus RÉUTILISABLES et nommés (comme les zones

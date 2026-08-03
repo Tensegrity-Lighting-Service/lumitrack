@@ -811,6 +811,18 @@ def test_point_and_roster_groups_roundtrip_through_dict():
     assert back.point_by_id("a").roster_group_id == "g1"
 
 
+def test_point_default_orientation_mode_defaults_and_roundtrips():
+    """Préremplissage des nouvelles activations (DIRECTIVES.md point 5, menu
+    contextuel "mode d'orientation par défaut") — un vieux projet sans ce
+    champ doit rester en "manual", comportement historique."""
+    assert Point(id="a", name="A").default_orientation_mode == "manual"
+    project = Project()
+    project.points = [Point(id="a", name="A", default_orientation_mode="focus")]
+    back = Project.from_dict(project.to_dict())
+    assert back.point_by_id("a").default_orientation_mode == "focus"
+    assert Point.from_dict({"id": "b", "name": "B"}).default_orientation_mode == "manual"
+
+
 def _bundled_project(tmp_path, audio_bytes=b"fake-audio-bytes"):
     audio = tmp_path / "audio.m4a"
     audio.write_bytes(audio_bytes)

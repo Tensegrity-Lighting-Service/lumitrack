@@ -377,6 +377,44 @@ def test_add_point_accepts_a_roster_group_id():
     assert session.project.point_by_id("new1").roster_group_id == "g1"
 
 
+def test_default_orientation_mode_prefills_new_activation_only():
+    """Menu contextuel "mode d'orientation par défaut" (DIRECTIVES.md point
+    5) : préremplit une activation TOUTE NEUVE, n'a plus aucun effet une
+    fois l'activation créée — même si le défaut change ensuite."""
+    session = Session()
+    session.project.points = [Point(id="p1", name="P1")]
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=2000.0, activations={})]
+
+    _run(_handle_message(session, {
+        "type": "update_point", "pointId": "p1", "defaultOrientationMode": "focus",
+    }))
+    assert session.project.point_by_id("p1").default_orientation_mode == "focus"
+
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 10.0,
+    }))
+    assert session.project.cue_by_id("c1").activations["p1"].orientation_mode == "focus"
+
+    _run(_handle_message(session, {
+        "type": "update_point", "pointId": "p1", "defaultOrientationMode": "manual",
+    }))
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 20.0,
+    }))
+    assert session.project.cue_by_id("c1").activations["p1"].orientation_mode == "focus"
+
+
+def test_set_activation_explicit_orientation_mode_wins_over_point_default():
+    session = Session()
+    session.project.points = [Point(id="p1", name="P1", default_orientation_mode="focus")]
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=2000.0, activations={})]
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1",
+        "targetXCm": 10.0, "orientationMode": "path",
+    }))
+    assert session.project.cue_by_id("c1").activations["p1"].orientation_mode == "path"
+
+
 def test_set_audio_updates_path_duration_and_transport():
     """Mission timeline+son : `set_audio` porte le chemin et/ou la durée
     décodée par le frontend ; la durée du transport doit suivre

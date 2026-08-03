@@ -34,6 +34,9 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
 import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, PathPoint, Point, Project, Pose } from '../types'
 import { boundsOf, rotationArc } from './transformBox'
+import { openContextMenu } from '../ui/contextMenuStore'
+import { buildActorContextMenuSections } from '../ui/actorContextMenu'
+import { t } from '../i18n'
 
 const CM_TO_M = 0.01
 const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
@@ -180,7 +183,7 @@ function GenericFloor({ widthM, heightM }: { widthM: number; heightM: number }) 
   )
 }
 
-function Actor({ pose, color, selected, draggable, opacity, onPointerDown }: {
+function Actor({ pose, color, selected, draggable, opacity, onPointerDown, onContextMenu }: {
   pose: Pose
   color: string
   selected: boolean
@@ -189,6 +192,7 @@ function Actor({ pose, color, selected, draggable, opacity, onPointerDown }: {
    * context and the targets/trajectories are the subject (§12.6). */
   opacity: number
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
+  onContextMenu?: (e: ThreeEvent<MouseEvent>) => void
 }) {
   const [x_cm, y_cm, z_cm, yaw_deg] = pose
   const [x, y, z] = stageToLocal(x_cm, y_cm, z_cm)
@@ -199,6 +203,7 @@ function Actor({ pose, color, selected, draggable, opacity, onPointerDown }: {
       position={[x, y, z]}
       rotation={[0, -yawRad, 0]}
       onPointerDown={onPointerDown}
+      onContextMenu={onContextMenu}
       onPointerOver={() => { document.body.style.cursor = draggable ? 'grab' : 'pointer' }}
       onPointerOut={() => { document.body.style.cursor = 'auto' }}
     >
@@ -1390,7 +1395,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
 function SceneContent({
   project, positions, tMs, selectedPointId, selectedPointIds, selectedCueId, blockContext, onSelectPoint, onSelectPoints,
   onLassoRect, cameraLocked, fitToken, editingZone,
-  gridOpacity, snapToGrid, zoomAction, dropHandleRef,
+  gridOpacity, snapToGrid, zoomAction, dropHandleRef, onToggleGrid, onFitToWindow,
 }: {
   project: Project
   positions: Record<string, Pose>
@@ -1409,6 +1414,8 @@ function SceneContent({
   snapToGrid: boolean
   zoomAction: { token: number; factor: number }
   dropHandleRef: React.RefObject<SceneHandle | null>
+  onToggleGrid: () => void
+  onFitToWindow: () => void
 }) {
   const widthM = project.stageWidthCm * CM_TO_M
   const heightM = project.stageHeightCm * CM_TO_M
@@ -1998,7 +2005,36 @@ function SceneContent({
       else onSelectPoints(pointIds)
       return true
     },
-  }), [gl, camera, raycaster, selectedCueId, onSelectPoint, onSelectPoints])
+    handleTerrainContextMenu: (e: MouseEvent) => {
+      // `onPointerMissed` du Canvas se déclenche pour TOUT clic qui ne
+      // touche aucun objet interactif, gauche compris (la désélection sur
+      // clic gauche vide reste gérée par lassoStart/lassoEnd, un mécanisme
+      // séparé et déjà en place — ne rien faire ici pour ce cas).
+      if (e.type !== 'contextmenu') return
+      e.preventDefault()
+      const selectedCue = selectedCueId ? project.cues.find((c) => c.id === selectedCueId) : null
+      const availablePoints = selectedCue
+        ? project.points.filter((p) => !selectedCue.activations[p.id])
+        : []
+      const clientX = e.clientX
+      const clientY = e.clientY
+      const placeItems = !selectedCue
+        ? [{ label: t('contextMenu.placeActorNoBlock'), disabled: true, onClick: () => {} }]
+        : availablePoints.length === 0
+          ? [{ label: t('contextMenu.placeActorAllActivated'), disabled: true, onClick: () => {} }]
+          : availablePoints.map((p) => ({
+              label: t('contextMenu.placeActor', { name: p.name }),
+              onClick: () => { dropHandleRef.current?.placeActorsAt([p.id], clientX, clientY, false) },
+            }))
+      openContextMenu(e.clientX, e.clientY, [
+        placeItems,
+        [
+          { label: gridOpacity > 0 ? t('contextMenu.gridOff') : t('contextMenu.gridOn'), onClick: onToggleGrid },
+          { label: t('contextMenu.fitToWindow'), onClick: onFitToWindow },
+        ],
+      ])
+    },
+  }), [gl, camera, raycaster, selectedCueId, onSelectPoint, onSelectPoints, project, dropHandleRef, gridOpacity, onToggleGrid, onFitToWindow])
 
   // Suppr retire le waypoint sélectionné AVANT que le raccourci global ne
   // supprime le bloc (phase capture + stopPropagation) ; Échap désélectionne
@@ -2106,6 +2142,15 @@ function SceneContent({
       baseCursor: null,
     }
     if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const handleActorContextMenu = (e: ThreeEvent<MouseEvent>, pointId: string) => {
+    e.stopPropagation()
+    e.nativeEvent.preventDefault()
+    const point = project.points.find((p) => p.id === pointId)
+    if (!point) return
+    onSelectPoint(pointId)
+    openContextMenu(e.clientX, e.clientY, buildActorContextMenuSections(point, project))
   }
 
   const emphasisFor = (pointId: string): Emphasis => {
@@ -2217,6 +2262,7 @@ function SceneContent({
                 draggable={Boolean(selectedCueId)}
                 opacity={opacity}
                 onPointerDown={(e) => handleActorPointerDown(e, point.id)}
+                onContextMenu={(e) => handleActorContextMenu(e, point.id)}
               />
               <ActorLabel text={actorLabelText(point)} xCm={pose[0]} yCm={pose[1]} zCm={pose[2]} opacity={opacity}
                 scale={inBackstage ? 0.55 : 1} />
@@ -2312,6 +2358,13 @@ function SceneContent({
  * autre cible, ex. le roster lui-même). */
 export interface SceneHandle {
   placeActorsAt: (pointIds: string[], clientX: number, clientY: number, altKey: boolean) => boolean
+  /** Menu contextuel "terrain/scène vide" (DIRECTIVES.md point 8) — appelé
+   * via `onPointerMissed` du Canvas (aucun objet interactif sous le clic
+   * droit), pas via un nouveau câblage pointerdown natif comme le lasso :
+   * `onPointerMissed` est le mécanisme r3f prévu pour ce cas précis, sans
+   * toucher à l'ordre fragile pointerdown/routage déjà documenté ailleurs
+   * dans ce fichier (hitObjectRef). */
+  handleTerrainContextMenu: (e: MouseEvent) => void
 }
 
 export const Scene = forwardRef<SceneHandle, {
@@ -2330,6 +2383,8 @@ export const Scene = forwardRef<SceneHandle, {
   gridOpacity: number
   snapToGrid: boolean
   zoomAction: { token: number; factor: number }
+  onToggleGrid: () => void
+  onFitToWindow: () => void
 }>(function Scene(props, ref) {
   // Rectangle du lasso : dessiné en HTML au-dessus du canvas (le canvas ne
   // peut pas rendre de DOM) — SceneContent pilote, ce wrapper affiche.
@@ -2338,10 +2393,11 @@ export const Scene = forwardRef<SceneHandle, {
   useImperativeHandle(ref, () => ({
     placeActorsAt: (pointIds, clientX, clientY, altKey) =>
       dropHandleRef.current?.placeActorsAt(pointIds, clientX, clientY, altKey) ?? false,
+    handleTerrainContextMenu: (e) => dropHandleRef.current?.handleTerrainContextMenu(e),
   }), [])
   return (
     <div className="scene-canvas-wrap">
-      <Canvas>
+      <Canvas onPointerMissed={(e) => dropHandleRef.current?.handleTerrainContextMenu(e)}>
         <SceneContent {...props} onLassoRect={setLassoRect} dropHandleRef={dropHandleRef} />
       </Canvas>
       {lassoRect && (

@@ -471,6 +471,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             point.roster_group_id = msg["rosterGroupId"]
         if "defaultHeightCm" in msg and msg["defaultHeightCm"] is not None:
             point.default_height_cm = float(msg["defaultHeightCm"])
+        if "defaultOrientationMode" in msg:
+            point.default_orientation_mode = msg["defaultOrientationMode"]
         return None
 
     if msg_type == "delete_point":
@@ -640,6 +642,13 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # constante arbitraire. (Durée automatique active : laissé au
             # recalcul par distance/vitesse ci-dessous, comme d'habitude.)
             act.fade_ms = max(MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
+        if is_new_activation and "orientationMode" not in msg:
+            # Préremplissage depuis le Point (DIRECTIVES.md point 5, menu
+            # contextuel "mode d'orientation par défaut") — n'a d'effet que
+            # sur une activation TOUTE NEUVE, jamais sur une déjà réglée.
+            point = session.project.point_by_id(point_id)
+            if point is not None:
+                act.orientation_mode = point.default_orientation_mode
         for field_name, json_key in (
             ("target_x_cm", "targetXCm"), ("target_y_cm", "targetYCm"),
             ("target_z_cm", "targetZCm"), ("target_yaw_deg", "targetYawDeg"),

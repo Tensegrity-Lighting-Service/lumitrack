@@ -137,13 +137,14 @@ class SidecarClient {
     name?: string; number?: number | null; color?: string
     psnTrackerId?: number | null; defaultHeightCm?: number
     homeZoneId?: string | null; rosterGroupId?: string | null
+    defaultOrientationMode?: 'manual' | 'path' | 'focus'
   }) {
     this.send({ type: 'update_point', pointId, ...patch })
   }
 
   // ---- editing ----
-  addPoint(name: string, number?: number, rosterGroupId?: string | null, color?: string) {
-    this.send({ type: 'add_point', name, number, rosterGroupId, color })
+  addPoint(name: string, number?: number, rosterGroupId?: string | null, color?: string, id?: string) {
+    this.send({ type: 'add_point', name, number, rosterGroupId, color, id })
   }
   /** Jamais possible avant la mission "hiérarchie du roster" (2026-07-31) :
    * le roster ne savait qu'ajouter. */

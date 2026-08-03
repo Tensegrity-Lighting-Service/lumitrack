@@ -15,6 +15,9 @@ export interface Point {
   /** Sous-groupe du roster (purement organisationnel, §12.2 non concerné) —
    * null = sans groupe. Au plus un groupe par acteur. */
   rosterGroupId: string | null
+  /** Préremplit UNIQUEMENT les nouvelles activations de cet acteur — aucune
+   * autorité sur celles déjà réglées (DIRECTIVES.md point 5). */
+  defaultOrientationMode: 'manual' | 'path' | 'focus'
 }
 
 /** Sous-groupe du roster — juste un nom, l'ordre/l'appartenance vivent sur

@@ -14,6 +14,9 @@ import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
 import { AddActorsPanel } from './ui/AddActorsPanel'
 import { BlockDetailPanel } from './ui/BlockDetailPanel'
+import { ContextMenu } from './ui/ContextMenu'
+import { showContextMenu } from './ui/contextMenuStore'
+import { buildActorContextMenuSections } from './ui/actorContextMenu'
 import {
   DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
   type DragEndEvent, type DragOverEvent, type DragStartEvent,
@@ -201,8 +204,9 @@ function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }
  * onClick (Ctrl/Maj/clic simple) : le PointerSensor de dnd-kit n'intercepte
  * le geste qu'au-delà d'un seuil de mouvement, un simple clic remonte donc
  * normalement (voir activationConstraint dans App). */
-function RosterPointRow({ point, selected, moving, offstage, onSelect, dropLine }: {
+function RosterPointRow({ point, project, selected, moving, offstage, onSelect, dropLine }: {
   point: Point
+  project: Project
   selected: boolean
   moving: boolean
   offstage: boolean
@@ -229,6 +233,14 @@ function RosterPointRow({ point, selected, moving, offstage, onSelect, dropLine 
       style={style}
       className={`${selected ? 'selected' : ''}${dropLineClass}`}
       onClick={onSelect}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        // Ne sélectionne QUE si l'acteur n'est pas déjà la sélection unique —
+        // `onSelect` bascule une sélection déjà unique en désélection, ce qui
+        // viderait la sélection juste avant d'ouvrir un menu qui la concerne.
+        if (!selected) onSelect(e)
+        showContextMenu(e, buildActorContextMenuSections(point, project))
+      }}
       {...attributes}
       {...listeners}
     >
@@ -370,6 +382,14 @@ function App() {
   const [fitToken, setFitToken] = useState(0)
   const [editingZone, setEditingZone] = useState(false)
   const [gridOpacity, setGridOpacity] = useState(0.5)
+  // "Grille on/off" (menu contextuel terrain vide) : bascule à 0, garde la
+  // dernière opacité non nulle pour la retrouver telle quelle en rallumant
+  // plutôt que de retomber sur un défaut arbitraire.
+  const lastGridOpacityRef = useRef(0.5)
+  useEffect(() => { if (gridOpacity > 0) lastGridOpacityRef.current = gridOpacity }, [gridOpacity])
+  const toggleGrid = useCallback(() => {
+    setGridOpacity((v) => (v > 0 ? 0 : lastGridOpacityRef.current))
+  }, [])
   const [snapToGrid, setSnapToGrid] = useState(false)
   const [zoomAction, setZoomAction] = useState({ token: 0, factor: 1 })
   const [showGridSettings, setShowGridSettings] = useState(false)
@@ -893,6 +913,7 @@ function App() {
                               <RosterPointRow
                                 key={p.id}
                                 point={p}
+                                project={project}
                                 selected={selectedPointIds.includes(p.id)}
                                 moving={movingPointIds.has(p.id)}
                                 offstage={!positions[p.id]}
@@ -915,6 +936,7 @@ function App() {
                     <RosterPointRow
                       key={p.id}
                       point={p}
+                      project={project}
                       selected={selectedPointIds.includes(p.id)}
                       moving={movingPointIds.has(p.id)}
                       offstage={!positions[p.id]}
@@ -949,6 +971,8 @@ function App() {
           gridOpacity={gridOpacity}
           snapToGrid={snapToGrid}
           zoomAction={zoomAction}
+          onToggleGrid={toggleGrid}
+          onFitToWindow={() => setFitToken((v) => v + 1)}
         />
 
         <div className="viewport-toolbar">
@@ -1050,6 +1074,7 @@ function App() {
           onClose={() => setShowBlockDetail(false)}
         />
       )}
+      <ContextMenu />
       <footer className="timeline-dock">
         <CueTimeline
           project={project}
