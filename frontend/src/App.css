@@ -587,6 +587,7 @@
 
 /* ---- Transport dans la barre de la timeline ---- */
 .tl-play { font-size: 13px; min-width: 30px; }
+.tl-goto-start { font-size: 12px; min-width: 26px; }
 .tl-timecode {
   font-family: ui-monospace, monospace; font-size: 12px;
   color: #cfd6ff; min-width: 96px;

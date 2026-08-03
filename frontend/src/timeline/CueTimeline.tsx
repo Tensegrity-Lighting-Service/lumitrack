@@ -680,6 +680,13 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
             redondant a disparu : la règle fait déjà le seek. */}
         <span className={`conn-dot ${connected ? 'conn-ok' : 'conn-bad'}`} title={connected ? t('timeline.sidecarConnected') : t('timeline.sidecarDisconnected')} />
         <button
+          className="tl-goto-start"
+          title={t('timeline.gotoStart')}
+          onClick={() => sidecar.seek(0)}
+        >
+          ⏮
+        </button>
+        <button
           className="tl-play"
           title={playing ? t('timeline.pause') : t('timeline.play')}
           onClick={() => (playing ? sidecar.pause() : sidecar.play())}
