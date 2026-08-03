@@ -1438,6 +1438,16 @@ function SceneContent({
   // rien) sous le rectangle de lasso tracé par mégarde pendant le geste —
   // "la sélection disparaît au lâcher" (signalé 2026-07-31).
   const boxDragActiveRef = useRef(false)
+  // Un acteur/ghost/waypoint/poignée a été touché par CE pointerdown, même
+  // si aucun drag ne s'arme (pas de bloc actif -> les handlers ci-dessous
+  // "return" avant de poser dragRef, cf. leur garde `if (!selectedCueId)`).
+  // lassoStart s'exécute AVANT le routage r3f (voir son commentaire) : au
+  // moment où il lit dragRef, un simple clic sur un acteur SANS bloc actif
+  // n'a encore rien posé dedans, donc le lasso s'arme quand même. Sans ce
+  // second repère, lassoEnd le traitait comme "clic sur le vide" et
+  // désélectionnait l'acteur qu'on venait tout juste de sélectionner —
+  // "la transformbox disparaît aussitôt" (signalé 2026-08-03).
+  const hitObjectRef = useRef(false)
   // Sélection d'un waypoint du tracé (Suppr le retire, voir keydown).
   const [selectedWaypoint, setSelectedWaypoint] = useState<{ pointId: string; index: number } | null>(null)
   // Lus par le onMove global au moment de l'évènement (l'effet ne dépend
@@ -1740,6 +1750,9 @@ function SceneContent({
 
     // ---- lasso (clic gauche sur le vide) + pan gauche+droit ----
     const lassoStart = (e: PointerEvent) => {
+      // Remis à zéro à CHAQUE pointerdown, avant le routage r3f (voir plus
+      // bas) : hitObjectRef ne doit jamais porter l'état d'un geste précédent.
+      hitObjectRef.current = false
       // r3f a déjà traité le pointerdown : si un acteur/ghost/waypoint a
       // armé un drag, pas de lasso. Pas de lasso non plus en édition de
       // zone, ni au clic droit seul (pan MapControls), ni si la boîte de
@@ -1815,11 +1828,15 @@ function SceneContent({
       const w = Math.abs(l.x1 - l.x0)
       const h = Math.abs(l.y1 - l.y0)
       if (w < 6 && h < 6) {
-        // Simple clic sur le vide (pas un vrai lasso) : désélectionne, sauf
-        // en ajout (Ctrl/Cmd) où l'intention est de garder la sélection en
-        // cours. N'a jamais été câblé (signalé 2026-08-01 : "clic sur le
-        // vide ne sort pas d'une sélection").
-        if (!l.additive) onSelectPoints([])
+        // Simple clic (pas un vrai lasso) : désélectionne SEULEMENT si rien
+        // n'a été touché (acteur/ghost/waypoint/poignée) — sinon un simple
+        // clic de sélection sur un acteur sans bloc actif se faisait
+        // immédiatement défaire ici, la lasso s'étant armée par erreur
+        // avant que r3f route le pointerdown à l'acteur (voir hitObjectRef
+        // et le commentaire de lassoStart) : "la transformbox disparaît
+        // aussitôt" (signalé 2026-08-03). Sauf aussi en ajout (Ctrl/Cmd) où
+        // l'intention est de garder la sélection en cours.
+        if (!l.additive && !hitObjectRef.current) onSelectPoints([])
         return
       }
       if (!stageGroupRef.current) return
@@ -1884,6 +1901,7 @@ function SceneContent({
 
   const handleWaypointDown = (e: ThreeEvent<PointerEvent>, pointId: string, index: number, zCm: number) => {
     e.stopPropagation()
+    hitObjectRef.current = true
     onSelectPoint(pointId)
     setSelectedWaypoint({ pointId, index })
     if (!selectedCueId) return
@@ -1894,6 +1912,7 @@ function SceneContent({
   const handlePathHandleDown = (e: ThreeEvent<PointerEvent>, pointId: string,
                                 anchor: 'start' | 'target' | number, side: 'in' | 'out', zCm: number) => {
     e.stopPropagation()
+    hitObjectRef.current = true
     if (typeof anchor === 'number') setSelectedWaypoint({ pointId, index: anchor })
     if (!selectedCueId) return
     dragRef.current = { kind: 'handle', pointId, anchor, side, planeY: zCm * CM_TO_M, lastSent: 0 }
@@ -2028,6 +2047,7 @@ function SceneContent({
 
   const handleActorPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string) => {
     e.stopPropagation()
+    hitObjectRef.current = true
     // Glisser un acteur DÉJÀ dans la sélection multiple ne la casse pas :
     // c'est le geste "transformer la sélection". Hors sélection : simple.
     const inSelection = selectedIdsRef.current.includes(pointId)
@@ -2054,6 +2074,7 @@ function SceneContent({
   // plane height comes from the target pose instead of the live pose.
   const handleGhostPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string, targetZCm: number) => {
     e.stopPropagation()
+    hitObjectRef.current = true
     onSelectPoint(pointId)
     if (!selectedCueId) return
     const inSelection = selectedIdsRef.current.includes(pointId)
