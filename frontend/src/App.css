@@ -629,10 +629,44 @@
 .tl-grid { position: absolute; inset: 0; pointer-events: none; }
 .tl-grid-line {
   position: absolute; top: 0; bottom: 0; width: 1px;
-  background: rgba(255, 255, 255, 0.028);
+  background: rgba(255, 255, 255, 0.05);
 }
-.tl-grid-line-major { background: rgba(255, 255, 255, 0.07); }
+.tl-grid-line-major { background: rgba(255, 255, 255, 0.16); }
 .tl-header-lane { font-size: 10.5px; color: #8a8a99; }
+
+/* ---- Sélection de plage temporelle (DIRECTIVES.md point 9) ---- */
+.tl-range-overlay {
+  position: absolute; top: 0; bottom: 0; z-index: 3;
+  background: rgba(79, 109, 245, 0.14);
+  border-left: 1px solid rgba(140, 160, 255, 0.65);
+  border-right: 1px solid rgba(140, 160, 255, 0.65);
+  pointer-events: none;
+}
+.tl-range-popover {
+  position: absolute; top: 2px; left: 0;
+  display: flex; align-items: center; gap: 6px;
+  background: #1b1e26; border: 1px solid #2b2f38; border-radius: 5px;
+  padding: 4px 6px; pointer-events: auto;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+.tl-range-popover label {
+  display: flex; flex-direction: column; gap: 1px;
+  font-size: 9.5px; color: #8a92a6;
+}
+.tl-range-popover input { width: 52px; font-size: 11px; }
+.tl-range-popover button {
+  align-self: flex-end; font-size: 12px; padding: 2px 5px;
+  background: #262932; border: 1px solid #30303c; border-radius: 4px; cursor: pointer;
+}
+.tl-range-popover button:hover { background: #323744; }
+.tl-range-tooltip {
+  position: fixed; z-index: 70; pointer-events: none;
+  background: #1b1e26; border: 1px solid #2b2f38; border-radius: 4px;
+  padding: 3px 7px; font-size: 11px; color: #d5d9e4;
+  font-family: ui-monospace, monospace;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
 
 /* Lissage visuel : les blocs glissent en douceur vers toute position
    décidée ailleurs (echo backend, snap au lâcher) — jamais pendant le drag

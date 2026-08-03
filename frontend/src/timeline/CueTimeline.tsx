@@ -25,6 +25,7 @@ import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
 import { showContextMenu } from '../ui/contextMenuStore'
 import { pickColor } from '../ui/colorPicker'
+import { NumericInput } from '../ui/NumericInput'
 import {
   canSplitAtPlayhead, copyCueToClipboard, copyTimingToOtherActors, duplicateCue,
   hasCueClipboard, pasteCueFromClipboard, splitCueAtPlayhead,
@@ -38,7 +39,15 @@ const GRAPH_H = 190
 const MIN_CUE_MS = 100
 const SNAP_PX = 8
 const SEEK_THROTTLE_MS = 33
-const MIN_PX_PER_MS = 0.001 // ~16 min par 1000 px
+// "Zoom par défaut trop petit à l'ouverture" (DIRECTIVES.md point 9) : le
+// premier cadrage ajuste toute la durée du projet dans la fenêtre — pour un
+// projet long, ça rendait les blocs minuscules/injouables au clic. Plancher
+// relevé de 0.001 (~16 min/1000px) à 0.02 (~1s/20px, blocs de quelques
+// secondes restent cliquables) MÊME en mode "ajuster" — un projet très long
+// devient alors scrollable plutôt que microscopique, compromis assumé
+// explicitement par la directive plutôt que de garder "tout visible, mais
+// illisible".
+const MIN_PX_PER_MS = 0.02
 const MAX_PX_PER_MS = 2 // 0.5 s par 1000 px
 const CONTENT_PAD_PX = 160
 
@@ -146,6 +155,19 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   const [drag, setDrag] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const lastSeekRef = useRef(0)
+
+  // ---- Sélection de plage temporelle (DIRECTIVES.md point 9) ----
+  // Glisser sur la règle/le vide, PAS un bloc — "reprend une plage
+  // sélectionnée" pour "nouveau bloc ici" (menu contextuel, point 8) et
+  // sert d'ancrage pour "zoom sur la sélection".
+  const [rangeSelection, setRangeSelection] = useState<{ startMs: number; endMs: number } | null>(null)
+  const [rangeDragPreview, setRangeDragPreview] = useState<{ clientX: number; clientY: number; startMs: number; endMs: number } | null>(null)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setRangeSelection(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   // Le temps d'un geste de zoom, les blocs/playhead doivent suivre pxPerMs
   // AU PIXEL PRÈS, comme la règle/le waveform (aucune transition) — sinon
   // leurs transitions CSS respectives (`.cue-block` lissage d'écho backend,
@@ -546,6 +568,47 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     ])
   }, [onSelectCue, renameCue, selectedPointId, t, tMs, positions])
 
+  // Glisser sur la règle/le vide (PAS un bloc) pour sélectionner une plage
+  // temporelle — bouton gauche uniquement, seuil de 3px avant de compter
+  // comme un vrai glisser (sinon un simple clic créerait une plage nulle).
+  // `onPlainClick` couvre le cas "pas de mouvement" (ex. la désélection du
+  // clic sur le fond des pistes, comportement historique préservé).
+  const beginRangeSelect = useCallback((e: React.PointerEvent<HTMLElement>, onPlainClick?: () => void) => {
+    if (e.button !== 0) return
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+    e.preventDefault()
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    const rect = scrollEl.getBoundingClientRect()
+    const toMs = (clientX: number) => Math.max(0, (scrollEl.scrollLeft + clientX - rect.left) / effPxPerMs)
+    const originMs = toMs(e.clientX)
+    const startClientX = e.clientX
+    let moved = false
+    const onMove = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientX - startClientX) > 3) moved = true
+      if (!moved) return
+      const ms = toMs(ev.clientX)
+      setRangeDragPreview({
+        clientX: ev.clientX, clientY: ev.clientY,
+        startMs: Math.min(originMs, ms), endMs: Math.max(originMs, ms),
+      })
+    }
+    const onUp = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      setRangeDragPreview(null)
+      if (!moved) { onPlainClick?.(); return }
+      const ms = toMs(ev.clientX)
+      const startMs = Math.min(originMs, ms)
+      const endMs = Math.max(originMs, ms)
+      if (endMs - startMs > 20) setRangeSelection({ startMs, endMs })
+    }
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+  }, [effPxPerMs])
+
   const handleLanesContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     // Laissé au bloc lui-même (son propre onContextMenu, avec sa propre
     // stopPropagation) si le clic droit tombe dessus.
@@ -556,13 +619,18 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     const ms = snap(Math.max(0, contentX / effPxPerMs), '', false)
     const rect = e.currentTarget.getBoundingClientRect()
     const lane = Math.max(0, Math.floor((e.clientY - rect.top) / LANE_H))
+    // "Reprend une plage sélectionnée si il y en a une" (DIRECTIVES.md
+    // point 8/9) : le nouveau bloc utilise la plage active plutôt que le
+    // point de clic quand une sélection temporelle existe.
+    const newBlockStartMs = rangeSelection ? rangeSelection.startMs : ms
+    const newBlockDurationMs = rangeSelection ? rangeSelection.endMs - rangeSelection.startMs : 2000
     showContextMenu(e, [
       [
         {
           label: t('contextMenu.newBlockHere'),
           onClick: () => {
             const color = CUE_PALETTE[cues.length % CUE_PALETTE.length]
-            sidecar.addCue('Cue', ms, 2000, color, lane)
+            sidecar.addCue('Cue', newBlockStartMs, newBlockDurationMs, color, lane)
           },
         },
         {
@@ -572,7 +640,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
         },
       ],
     ])
-  }, [cues.length, effPxPerMs, snap, t])
+  }, [cues.length, effPxPerMs, rangeSelection, snap, t])
 
   const handleRulerContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     showContextMenu(e, [
@@ -664,7 +732,17 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
           onScroll={(e) => setScrollLeft(e.currentTarget.scrollLeft)}
         >
           <div className="tl-content" style={{ width: contentWidth }}>
-            <div className="tl-ruler" style={{ height: RULER_H }} onPointerDown={onRulerPointerDown} onContextMenu={handleRulerContextMenu}>
+            <div
+              className="tl-ruler"
+              style={{ height: RULER_H }}
+              onPointerDown={(e) => {
+                // Maj-glisser sur la règle = sélection de plage (garde le
+                // glisser normal = scrub, un geste déjà bien ancré).
+                if (e.shiftKey) beginRangeSelect(e)
+                else onRulerPointerDown(e)
+              }}
+              onContextMenu={handleRulerContextMenu}
+            >
               {ticks.map((tick) => (
                 <div
                   key={tick.ms}
@@ -675,6 +753,52 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                 </div>
               ))}
             </div>
+
+            {rangeSelection && (
+              <div
+                className="tl-range-overlay"
+                style={{
+                  left: rangeSelection.startMs * effPxPerMs,
+                  width: Math.max(1, (rangeSelection.endMs - rangeSelection.startMs) * effPxPerMs),
+                }}
+              >
+                <div className="tl-range-popover" onPointerDown={(e) => e.stopPropagation()}>
+                  <label>{t('timeline.rangeStart')}
+                    <NumericInput value={rangeSelection.startMs / 1000} step={0.1}
+                      onCommit={(v) => { if (v !== null && v * 1000 < rangeSelection.endMs) setRangeSelection({ ...rangeSelection, startMs: Math.max(0, v * 1000) }) }} />
+                  </label>
+                  <label>{t('timeline.rangeEnd')}
+                    <NumericInput value={rangeSelection.endMs / 1000} step={0.1}
+                      onCommit={(v) => { if (v !== null && v * 1000 > rangeSelection.startMs) setRangeSelection({ ...rangeSelection, endMs: v * 1000 }) }} />
+                  </label>
+                  <label>{t('timeline.rangeDuration')}
+                    <NumericInput value={(rangeSelection.endMs - rangeSelection.startMs) / 1000} step={0.1}
+                      onCommit={(v) => { if (v !== null && v > 0) setRangeSelection({ ...rangeSelection, endMs: rangeSelection.startMs + v * 1000 }) }} />
+                  </label>
+                  <button
+                    title={t('timeline.rangeZoomHint')}
+                    onClick={() => {
+                      const el = scrollRef.current
+                      if (!el) return
+                      const span = Math.max(1, rangeSelection.endMs - rangeSelection.startMs)
+                      const px = Math.min(MAX_PX_PER_MS, Math.max(MIN_PX_PER_MS, (el.clientWidth - 60) / span))
+                      setPxPerMs(px)
+                      el.scrollLeft = Math.max(0, rangeSelection.startMs * px - 30)
+                    }}
+                  >🔍</button>
+                  <button title={t('timeline.rangeClear')} onClick={() => setRangeSelection(null)}>✕</button>
+                </div>
+              </div>
+            )}
+            {rangeDragPreview && (
+              <div
+                className="tl-range-tooltip"
+                style={{ left: rangeDragPreview.clientX + 12, top: rangeDragPreview.clientY - 30 }}
+              >
+                {formatTimecodeMs(rangeDragPreview.startMs)} → {formatTimecodeMs(rangeDragPreview.endMs)}
+                {' '}({((rangeDragPreview.endMs - rangeDragPreview.startMs) / 1000).toFixed(2)}s)
+              </div>
+            )}
 
             {project.audioPath && (
               <div className="tl-track-audio" style={{ height: AUDIO_H }} onContextMenu={handleAudioContextMenu}>
@@ -694,8 +818,11 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
               className="tl-lanes"
               style={{ height: lanesHeight }}
               onPointerDown={(e) => {
-                // Clic sur le fond (pas sur un bloc) : désélection.
-                if (e.target === e.currentTarget) onSelectCue(null)
+                // Glisser = sélection de plage temporelle ; simple clic
+                // (pas de mouvement, pas sur un bloc) = désélection, comme
+                // avant.
+                if (e.target !== e.currentTarget) return
+                beginRangeSelect(e, () => { onSelectCue(null); setRangeSelection(null) })
               }}
               onContextMenu={handleLanesContextMenu}
             >

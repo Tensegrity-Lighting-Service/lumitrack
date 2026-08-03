@@ -218,6 +218,11 @@ export const translations: Record<Locale, Record<string, string>> = {
     'timeline.audio': 'Audio',
     'timeline.track': 'Piste {n}',
     'timeline.renameCuePrompt': 'Nom du bloc :',
+    'timeline.rangeStart': 'Début (s)',
+    'timeline.rangeEnd': 'Fin (s)',
+    'timeline.rangeDuration': 'Durée (s)',
+    'timeline.rangeZoomHint': 'Zoomer sur la sélection',
+    'timeline.rangeClear': 'Effacer la sélection (Échap)',
 
     // ------------------------------------------------------ graph editor --
     'graph.axisX': 'X',
@@ -479,6 +484,11 @@ export const translations: Record<Locale, Record<string, string>> = {
     'timeline.audio': 'Audio',
     'timeline.track': 'Track {n}',
     'timeline.renameCuePrompt': 'Block name:',
+    'timeline.rangeStart': 'Start (s)',
+    'timeline.rangeEnd': 'End (s)',
+    'timeline.rangeDuration': 'Duration (s)',
+    'timeline.rangeZoomHint': 'Zoom to selection',
+    'timeline.rangeClear': 'Clear selection (Esc)',
 
     'graph.axisX': 'X',
     'graph.axisY': 'Y',

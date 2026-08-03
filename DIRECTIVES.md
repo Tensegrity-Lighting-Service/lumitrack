@@ -899,6 +899,23 @@ action près.
      règle) ; raccourci "zoom sur la sélection" ; marqueurs de projet
      nommés ; vrai surlignage visuel de ce sur quoi on s'aligne pendant un
      glisser (pas juste l'aimantation silencieuse actuelle).
+   - **✅ LIVRÉ (2026-08-03)**, sauf les deux dernières idées
+     complémentaires (marqueurs nommés, surlignage de l'aimantation —
+     reportées, pas essentielles) :
+     - Grille : mineure 2,8%→5%, majeure 7%→16% d'opacité (`.tl-grid-line`/
+       `.tl-grid-line-major`).
+     - `MIN_PX_PER_MS` relevé de 0.001 à 0.02 (~1s/20px) — s'applique aussi
+       au premier cadrage automatique ET à "ajuster à la fenêtre" : un
+       projet très long devient scrollable plutôt que microscopique,
+       compromis assumé explicitement par la directive.
+     - Sélection de plage : glisser sur le vide des pistes, ou Maj+glisser
+       sur la règle (le glisser normal de la règle reste le scrub existant,
+       un geste déjà bien ancré — non retiré). Bulle flottante en direct
+       pendant le geste (départ/fin/durée), popover éditable au clavier
+       (`NumericInput` × 3) après relâchement, avec zoom-sur-sélection et
+       effacer (✕/Échap). Surlignage plein-hauteur des pistes (pas juste la
+       règle). "Nouveau bloc ici" (menu piste vide, point 8) reprend
+       désormais la plage active si il y en a une.
 
 **10. Petites finitions** : le seul vrai spinner natif (`<input
 type="number">`, flèches minuscules) trouvé dans tout le frontend est le
@@ -917,12 +934,16 @@ acteur/bloc désynchronisé par défaut" + décalage de départ/escalier +
 `BlockDetailPanel.tsx`, une mini-timeline par acteur pour le rendre
 visible/éditable à la souris) ; point 4 livré (diviser un bloc au
 playhead) ; point 8 livré (menus contextuels, table complète sauf "aller
-à sa zone backstage", reportée) ; overlay de trajectoire à la sélection
-livré le 08-01 puis RETIRÉ le 08-03 ("pas très utile tel quel" —
-Florian) — point 2 repasse donc en pratique à "lacet seulement", sans
-overlay de remplacement pour x/y pour l'instant.
-Toujours pas commencés : point 3 (geste de glisser libre), point 7
-(refonte inspecteur), 9 (polish timeline façon Reaper).
+à sa zone backstage", reportée) ; point 9 livré (grille de contraste,
+plancher de zoom, sélection de plage temporelle), sauf marqueurs de
+projet nommés et surlignage de l'aimantation (reportés, pas essentiels) ;
+overlay de trajectoire à la sélection livré le 08-01 puis RETIRÉ le 08-03
+("pas très utile tel quel" — Florian) — point 2 repasse donc en pratique
+à "lacet seulement", sans overlay de remplacement pour x/y pour
+l'instant.
+Toujours pas commencé : point 3 (geste de glisser libre — volontairement
+laissé pour une session avec retour visuel possible, change le modèle
+d'interaction de la scène) et point 7 (refonte inspecteur).
 
 **Périmètre volontairement pas encore tranché / à des sessions futures** :
 un système de points de focus RÉUTILISABLES et nommés (comme les zones
