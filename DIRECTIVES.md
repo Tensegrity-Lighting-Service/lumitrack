@@ -848,6 +848,11 @@ redessiner un canvas à partir de ces pics, aucun moteur audio à lui. Le
 bloc n'est plus toute l'étendue affichée : une région surlignée dans un
 référentiel de temps partagé — glisser une barre peut désormais dépasser
 le bloc (plafond retiré, le modèle le permettait déjà côté backend).
+**Accès au panneau (2026-08-03)** : trois chemins désormais équivalents —
+bouton "Détail du bloc…" dans `CueInspector`, même libellé en tête du menu
+contextuel du bloc (clic droit), et double-clic direct sur le bloc dans la
+timeline (a remplacé le double-clic "renommer", resté disponible via le
+menu contextuel).
 
 **7. Refonte de l'inspecteur** — actuellement `CueInspector` affiche TOUTES
 les activations d'un bloc dépliées en même temps (pas l'esprit AE, où le
