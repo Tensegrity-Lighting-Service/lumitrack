@@ -275,6 +275,53 @@ def test_resizing_a_block_resyncs_non_overridden_activations():
     assert cue.activations["p2"].fade_ms == pytest.approx(1000.0)  # personnalisé, intouché
 
 
+def test_start_offset_ms_is_actually_wired_into_set_activation():
+    """Régression : le champ startOffsetMs a été ajouté cote UI (App.tsx,
+    types.ts) sans jamais brancher sa lecture cote set_activation - ce
+    test aurait attrape le bug avant qu'il n'atteigne Florian."""
+    session = Session()
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=1000.0, activations={
+        "p1": Activation(target_x_cm=0, target_y_cm=0, fade_ms=500.0),
+    })]
+    reply = _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "startOffsetMs": 300.0,
+    }))
+    assert reply is None
+    assert session.project.cue_by_id("c1").activations["p1"].start_offset_ms == pytest.approx(300.0)
+
+
+def test_resizing_a_block_accounts_for_start_offset_when_resyncing():
+    """Synchroniser sur la durée du bloc doit faire TERMINER l'acteur pile
+    à la fin du bloc, décalage déduit — pas lui donner tout le bloc en
+    plus de son décalage (il déborderait)."""
+    session = Session()
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=1000.0, activations={
+        "p1": Activation(target_x_cm=0, target_y_cm=0, fade_ms=1000.0, start_offset_ms=300.0),
+    })]
+    reply = _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "c1", "durationMs": 4000.0,
+    }))
+    assert reply is None
+    assert session.project.cue_by_id("c1").activations["p1"].fade_ms == pytest.approx(3700.0)
+
+
+def test_auto_duration_accounts_for_start_offset_finish_time():
+    """Un acteur décalé qui a besoin de 1000 ms pour sa distance termine à
+    (offset + fade), pas à fade seul — le bloc doit être assez large pour
+    ça, sinon le bloc suivant démarrerait avant qu'il ait fini."""
+    session = Session()
+    session.project = _auto_duration_project()
+    cue = session.project.cue_by_id("move")
+    cue.activations["near"].start_offset_ms = 2000.0  # "near" ferait 1000ms tout seul
+    reply = _run(_handle_message(session, {"type": "update_cue", "cueId": "move", "autoDuration": True}))
+    assert reply is None
+    cue = session.project.cue_by_id("move")
+    assert cue.activations["near"].fade_ms == pytest.approx(1000.0)  # inchangé, propre à sa distance
+    # "near" termine à 2000+1000=3000, "far" (sans décalage) à 5000 :
+    # "far" reste le plus lent au final malgré le décalage de "near".
+    assert cue.duration_ms == pytest.approx(5000.0)
+
+
 def test_resizing_alongside_auto_duration_toggle_does_not_clobber_preset_fades():
     """Le bouton preset envoie durationMs ET autoDuration dans le MÊME
     message, après avoir déjà écrit un fade par acteur — le resynch de

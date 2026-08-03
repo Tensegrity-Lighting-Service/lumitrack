@@ -693,12 +693,19 @@ def required_fade_ms_per_point(project: Project, cue: Cue) -> dict:
 
 
 def required_duration_ms(project: Project, cue: Cue) -> float:
-    """Durée du bloc entier = celle de l'acteur le plus lent — c'est la
-    durée qu'écrit `Cue.auto_duration`. Un bloc sans déplacement réel
+    """Durée du bloc entier = l'instant où le DERNIER acteur termine
+    réellement son mouvement — décalage de départ inclus (2026-08-03) : un
+    acteur décalé de 500 ms qui a besoin de 1000 ms pour parcourir sa
+    distance ne termine pas à 1000 ms mais à 1500 ms, sinon le bloc serait
+    trop court pour le contenir en entier. Un bloc sans déplacement réel
     (cible = départ, ou aucun point encore positionnable) garde le
     plancher MIN_AUTO_DURATION_MS plutôt que 0."""
     per_point = required_fade_ms_per_point(project, cue)
-    return max(per_point.values(), default=MIN_AUTO_DURATION_MS)
+    finish_times = [
+        cue.activations[pid].start_offset_ms + fade_ms
+        for pid, fade_ms in per_point.items() if pid in cue.activations
+    ]
+    return max(finish_times, default=MIN_AUTO_DURATION_MS)
 
 
 class Timeline:

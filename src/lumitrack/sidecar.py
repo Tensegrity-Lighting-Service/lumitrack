@@ -278,10 +278,12 @@ def _apply_auto_duration(project: Project, cue: Cue) -> None:
     `cue.duration_ms` (largeur visuelle du bloc dans la timeline) — sinon
     la boîte change de vitesse affichée mais les acteurs continuent de
     bouger à leur ancien fade_ms (signalé 2026-08-03 : "la boîte a changé
-    de vitesse mais les acteurs non"). `cue.duration_ms` suit le plus lent,
-    les autres arrivent avant et attendent (maintien déjà existant)."""
+    de vitesse mais les acteurs non"). `cue.duration_ms` suit le plus lent
+    à TERMINER (décalage de départ inclus, sinon un acteur décalé pourrait
+    finir après la fin du bloc), les autres arrivent avant et attendent
+    (maintien déjà existant)."""
     per_point = required_fade_ms_per_point(project, cue)
-    fade_values = []
+    finish_times = []
     for point_id, computed_fade_ms in per_point.items():
         act = cue.activations.get(point_id)
         if act is None:
@@ -290,11 +292,11 @@ def _apply_auto_duration(project: Project, cue: Cue) -> None:
             # "global vs sélectif" : un acteur personnalisé garde SA valeur —
             # elle compte quand même pour la largeur du bloc, qui doit rester
             # assez large pour lui.
-            fade_values.append(act.fade_ms)
+            finish_times.append(act.start_offset_ms + act.fade_ms)
         else:
             act.fade_ms = computed_fade_ms
-            fade_values.append(computed_fade_ms)
-    cue.duration_ms = max(fade_values, default=MIN_AUTO_DURATION_MS)
+            finish_times.append(act.start_offset_ms + computed_fade_ms)
+    cue.duration_ms = max(finish_times, default=MIN_AUTO_DURATION_MS)
 
 
 async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
@@ -588,7 +590,11 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             if not cue.auto_duration and "autoDuration" not in msg:
                 for act in cue.activations.values():
                     if not act.fade_overridden:
-                        act.fade_ms = cue.duration_ms
+                        # Termine PILE à la fin du bloc, décalage de départ
+                        # déduit — pas cue.duration_ms tel quel, sinon un
+                        # acteur décalé déborderait du bloc.
+                        act.fade_ms = max(
+                            MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
         if "color" in msg:
             cue.color = msg["color"]
         if "lane" in msg:
@@ -633,7 +639,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # nouvel acteur suit cette durée dès sa création, pas une
             # constante arbitraire. (Durée automatique active : laissé au
             # recalcul par distance/vitesse ci-dessous, comme d'habitude.)
-            act.fade_ms = cue.duration_ms
+            act.fade_ms = max(MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
         for field_name, json_key in (
             ("target_x_cm", "targetXCm"), ("target_y_cm", "targetYCm"),
             ("target_z_cm", "targetZCm"), ("target_yaw_deg", "targetYawDeg"),
@@ -642,6 +648,10 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
                 setattr(act, field_name, msg[json_key])
         if "fadeMs" in msg:
             act.fade_ms = float(msg["fadeMs"])
+        if "startOffsetMs" in msg:
+            # Jamais négatif : un acteur ne peut pas démarrer avant le bloc
+            # qui le contient (voir Activation.start_offset_ms).
+            act.start_offset_ms = max(0.0, float(msg["startOffsetMs"]))
         if "fadeOverridden" in msg:
             act.fade_overridden = bool(msg["fadeOverridden"])
             # "Revenir au bloc" (bouton inspecteur) envoie fadeOverridden:
@@ -650,7 +660,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # activation sur la durée actuelle du bloc, sinon "revenir au
             # bloc" ne changeait rien du tout hors durée automatique.
             if not act.fade_overridden and not cue.auto_duration and "fadeMs" not in msg:
-                act.fade_ms = cue.duration_ms
+                act.fade_ms = max(MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
         if "easing" in msg:
             act.easing = msg["easing"]
         if "orientationMode" in msg:
