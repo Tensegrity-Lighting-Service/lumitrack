@@ -13,6 +13,7 @@ import { maxSpeedMs, msToKmh, requiredFadeMsPerPointFromContext, speedCategory, 
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
 import { AddActorsPanel } from './ui/AddActorsPanel'
+import { BlockDetailPanel } from './ui/BlockDetailPanel'
 import {
   DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
   type DragEndEvent, type DragOverEvent, type DragStartEvent,
@@ -375,6 +376,7 @@ function App() {
   const [showPsnPanel, setShowPsnPanel] = useState(false)
   const [showBundleHistory, setShowBundleHistory] = useState(false)
   const [showAddActors, setShowAddActors] = useState(false)
+  const [showBlockDetail, setShowBlockDetail] = useState(false)
   const bundlePath = useBundlePath()
 
   // "Enregistrer" : réutilise le chemin connu sans dialogue ; sans chemin
@@ -599,6 +601,12 @@ function App() {
   }, [project, tMs])
 
   const selectedCue = project?.cues.find((c) => c.id === selectedCueId) ?? null
+
+  // Le panneau "détail du bloc" est une action explicite par bloc, pas un
+  // état qui doit survivre à un changement de sélection — sinon rouvrir un
+  // autre bloc plus tard le ferait réapparaître sans que Florian ne l'ait
+  // redemandé.
+  useEffect(() => { setShowBlockDetail(false) }, [selectedCueId])
 
   // Selecting a block puts the scene in that block's edit mode (§12.6):
   // fetch its context (targets + trajectories) and keep it fresh across
@@ -1018,6 +1026,7 @@ function App() {
             selectedPointId={selectedPointId}
             onSelectPoint={setSelectedPointId}
             blockContext={blockContext}
+            onOpenBlockDetail={() => setShowBlockDetail(true)}
           />
         ) : (
           !editingZone && selectedPointIds.length === 0 && (
@@ -1033,6 +1042,14 @@ function App() {
         <BundleHistoryPanel path={bundlePath} onClose={() => setShowBundleHistory(false)} />
       )}
       {showAddActors && <AddActorsPanel project={project} onClose={() => setShowAddActors(false)} />}
+      {showBlockDetail && selectedCue && (
+        <BlockDetailPanel
+          cue={selectedCue}
+          projectPoints={project.points}
+          tMs={tMs}
+          onClose={() => setShowBlockDetail(false)}
+        />
+      )}
       <footer className="timeline-dock">
         <CueTimeline
           project={project}
@@ -1224,12 +1241,13 @@ function StagePlacementPanel({ project }: { project: Project }) {
   )
 }
 
-function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, blockContext }: {
+function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, blockContext, onOpenBlockDetail }: {
   cue: Cue
   projectPoints: Point[]
   selectedPointId: string | null
   onSelectPoint: (id: string | null) => void
   blockContext: BlockContextMessage | null
+  onOpenBlockDetail: () => void
 }) {
   const t = useT()
   const activatedIds = new Set(Object.keys(cue.activations))
@@ -1246,6 +1264,14 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
           title={t('cue.color')}
         />
         <h3>{cue.name}</h3>
+        <span className="cue-inspector-title-spacer" />
+        <button
+          className="cue-open-block-detail"
+          title={t('cue.openBlockDetailHint')}
+          onClick={onOpenBlockDetail}
+        >
+          {t('cue.openBlockDetail')}
+        </button>
       </div>
       <div className="cue-inspector-timing-row">
         <label className="cue-auto-duration" title={t('cue.autoDurationHint')}>

@@ -803,6 +803,17 @@ Activation.fade_overridden + set_activation/update_cue). Décalage de
 départ (`Activation.start_offset_ms`, miroir Rust inclus — affecte la
 résolution de lecture) + bouton "décalage en escalier" dans le
 GroupTimingPanel, respectant l'ordre de sélection.
+**Découvrabilité (2026-08-03)** : le champ "Décalage" n'était visible que
+dans la carte dépliée de CHAQUE acteur (petit champ numérique parmi
+d'autres) — Florian ne le voyait pas et a proposé une mini-timeline dédiée
+au bloc. Livré : `BlockDetailPanel.tsx`, un panneau DANS la même fenêtre
+(pas une fenêtre OS séparée — confirmé par Florian), ouvert via le bouton
+"Détail du bloc…" dans `CueInspector`. Une sous-piste horizontale par
+acteur activé, temps LOCAL au bloc (0 = début du bloc) ; glisser le corps
+d'une barre déplace le décalage de départ, glisser son bord droit change le
+fade (marque `fadeOverridden`) ; bouton "revenir au bloc" par ligne quand
+personnalisé. Glisser implémenté avec `@dnd-kit/core` (déjà une dépendance)
+plutôt qu'un nouveau câblage pointerdown/move/up à la main.
 
 **7. Refonte de l'inspecteur** — actuellement `CueInspector` affiche TOUTES
 les activations d'un bloc dépliées en même temps (pas l'esprit AE, où le
