@@ -15,12 +15,11 @@
 // broadcasts pendant le geste.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import type { BlockContextMessage, Cue, Project, TrajectoriesMessage } from '../types'
+import type { BlockContextMessage, Cue, Project } from '../types'
 import { sidecar } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
 import { BlockAutomation } from './BlockAutomation'
-import { TrajectoryOverlay, TRAJECTORY_ROW_H } from './TrajectoryOverlay'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
 
@@ -92,7 +91,7 @@ function formatTimecodeMs(ms: number): string {
   return `${pad(h)}:${pad(m)}:${sec.toFixed(3).padStart(6, '0')}`
 }
 
-export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, selectedPointIds, trajectories, blockContext }: {
+export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, blockContext }: {
   project: Project
   tMs: number
   playing: boolean
@@ -101,10 +100,6 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   selectedCueId: string | null
   selectedPointId: string | null
   onSelectCue: (cueId: string | null) => void
-  /** Ordre de sélection des acteurs (App.tsx) — pilote l'overlay de
-   * trajectoire (une ligne par acteur, dans cet ordre). */
-  selectedPointIds: string[]
-  trajectories: TrajectoriesMessage | null
   /** Contexte du bloc sélectionné (départ/cible résolus) — pilote le badge
    * de vitesse affiché directement sur le bloc, pas seulement dans
    * l'inspecteur ("la vitesse peut pas s'afficher dans le bloc même ?"). */
@@ -539,11 +534,6 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
       <div className="tl-main">
         <div className="tl-headers">
           <div className="tl-header-spacer" style={{ height: RULER_H }} />
-          {selectedPointIds.length > 0 && (
-            <div className="tl-header tl-header-trajectories" style={{ height: selectedPointIds.length * TRAJECTORY_ROW_H }}>
-              {t('timeline.trajectories')}
-            </div>
-          )}
           {project.audioPath && (
             <div className="tl-header tl-header-audio" style={{ height: AUDIO_H }}>
               <span className="tl-header-chip" style={{ background: '#4f6df5' }} />
@@ -580,14 +570,6 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                 </div>
               ))}
             </div>
-
-            <TrajectoryOverlay
-              pointIds={selectedPointIds}
-              projectPoints={project.points}
-              trajectories={trajectories}
-              pxPerMs={effPxPerMs}
-              durationMs={durationMs}
-            />
 
             {project.audioPath && (
               <div className="tl-track-audio" style={{ height: AUDIO_H }}>

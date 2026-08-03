@@ -4,7 +4,7 @@ import { Scene, type SceneHandle } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import {
   sidecar, useBlockContext, useBundlePath, useConnected, useProject, usePsnRunning,
-  useRedoAvailable, useTick, useTrajectories, useUndoAvailable,
+  useRedoAvailable, useTick, useUndoAvailable,
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -343,7 +343,6 @@ function App() {
   const connected = useConnected()
   const psnRunning = usePsnRunning()
   const blockContext = useBlockContext()
-  const trajectories = useTrajectories()
   const undoAvailable = useUndoAvailable()
   const redoAvailable = useRedoAvailable()
 
@@ -611,15 +610,6 @@ function App() {
     if (selectedCue) sidecar.resolveBlockContext(selectedCue.id)
     else sidecar.clearBlockContext()
   }, [selectedCue, project])
-
-  // Overlay de trajectoire à la sélection (mission "refonte AE/Reaper") :
-  // même principe que le blockContext ci-dessus, mais suit la sélection
-  // d'ACTEURS plutôt que de bloc — indépendant l'un de l'autre, les deux
-  // peuvent être actifs en même temps.
-  useEffect(() => {
-    if (selectedPointIds.length > 0) sidecar.resolveTrajectories(selectedPointIds)
-    else sidecar.clearTrajectories()
-  }, [selectedPointIds, project])
 
   // "ouvre automatiquement le bloc dans lequel il se trouve" (Florian,
   // 2026-08-01) : sélectionner UN acteur ouvre directement le bloc qui
@@ -1053,8 +1043,6 @@ function App() {
           selectedCueId={selectedCueId}
           selectedPointId={selectedPointId}
           onSelectCue={setSelectedCueId}
-          selectedPointIds={selectedPointIds}
-          trajectories={trajectories}
           blockContext={blockContext}
         />
       </footer>
