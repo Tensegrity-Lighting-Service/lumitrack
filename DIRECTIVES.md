@@ -931,10 +931,12 @@ action près.
      reportées, pas essentielles) :
      - Grille : mineure 2,8%→5%, majeure 7%→16% d'opacité (`.tl-grid-line`/
        `.tl-grid-line-major`).
-     - `MIN_PX_PER_MS` relevé de 0.001 à 0.02 (~1s/20px) — s'applique aussi
-       au premier cadrage automatique ET à "ajuster à la fenêtre" : un
-       projet très long devient scrollable plutôt que microscopique,
-       compromis assumé explicitement par la directive.
+     - `MIN_PX_PER_MS` relevé de 0.001 à 0.02, puis **ANNULÉ (2026-08-04)** :
+       s'appliquait aussi à "ajuster à la fenêtre" et au zoom manuel, rendant
+       impossible de dézoomer sur un projet dépassant ~1 minute ("on ne sait
+       plus dézoomer sur toute la longueur de la timeline", bug réel signalé
+       par Florian) — remis à 0.001, "tout visible mais dense" l'emporte sur
+       "impossible de tout voir".
      - Sélection de plage : glisser sur le vide des pistes, ou Maj+glisser
        sur la règle (le glisser normal de la règle reste le scrub existant,
        un geste déjà bien ancré — non retiré). Bulle flottante en direct
@@ -976,3 +978,13 @@ d'interaction de la scène) et point 7 (refonte inspecteur).
 un système de points de focus RÉUTILISABLES et nommés (comme les zones
 backstage) plutôt que des coordonnées libres par activation, si le besoin
 s'en fait sentir à l'usage.
+
+## Régression signalée, pas encore diagnostiquée (2026-08-04)
+
+Florian, en cours de session (redesign visuel des acteurs) : "le [app] ne
+se lance plus, drag and drop des acteurs sur le terrain ne marche plus."
+Reporté volontairement à une prochaine session ("continue celle qu'on a
+mis en place récemment" — la refonte orientation/points de focus en
+cours). Pas encore reproduit ni investigué — deux symptômes distincts
+possibles (lancement de l'app ET glisser-déposer roster→scène), à
+vérifier séparément avant de chercher une cause commune.

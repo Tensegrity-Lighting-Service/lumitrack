@@ -43,15 +43,14 @@ const GRAPH_H = 190
 const MIN_CUE_MS = 100
 const SNAP_PX = 8
 const SEEK_THROTTLE_MS = 33
-// "Zoom par défaut trop petit à l'ouverture" (DIRECTIVES.md point 9) : le
-// premier cadrage ajuste toute la durée du projet dans la fenêtre — pour un
-// projet long, ça rendait les blocs minuscules/injouables au clic. Plancher
-// relevé de 0.001 (~16 min/1000px) à 0.02 (~1s/20px, blocs de quelques
-// secondes restent cliquables) MÊME en mode "ajuster" — un projet très long
-// devient alors scrollable plutôt que microscopique, compromis assumé
-// explicitement par la directive plutôt que de garder "tout visible, mais
-// illisible".
-const MIN_PX_PER_MS = 0.02
+// Plancher de zoom arrière. Relevé une fois de 0.001 à 0.02 pour éviter des
+// blocs microscopiques au premier cadrage d'un projet long (DIRECTIVES.md
+// point 9) — mais ce plancher s'appliquait aussi à "Ajuster à la fenêtre"
+// et au zoom manuel, rendant impossible de dézoomer sur toute la longueur
+// d'un projet dépassant ~1 min (BUG réel signalé 2026-08-04 : "on ne sait
+// plus dézoomer sur toute la longueur de la timeline"). Remis à 0.001 —
+// "tout visible mais dense" reste préférable à "impossible de tout voir".
+const MIN_PX_PER_MS = 0.001
 const MAX_PX_PER_MS = 2 // 0.5 s par 1000 px
 const CONTENT_PAD_PX = 160
 
@@ -742,42 +741,52 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
               ))}
             </div>
 
-            {rangeSelection && (
-              <div
-                className="tl-range-overlay"
-                style={{
-                  left: rangeSelection.startMs * effPxPerMs,
-                  width: Math.max(1, (rangeSelection.endMs - rangeSelection.startMs) * effPxPerMs),
-                }}
-              >
-                <div className="tl-range-popover" onPointerDown={(e) => e.stopPropagation()}>
-                  <label>{t('timeline.rangeStart')}
-                    <NumericInput value={rangeSelection.startMs / 1000} step={0.1}
-                      onCommit={(v) => { if (v !== null && v * 1000 < rangeSelection.endMs) setRangeSelection({ ...rangeSelection, startMs: Math.max(0, v * 1000) }) }} />
-                  </label>
-                  <label>{t('timeline.rangeEnd')}
-                    <NumericInput value={rangeSelection.endMs / 1000} step={0.1}
-                      onCommit={(v) => { if (v !== null && v * 1000 > rangeSelection.startMs) setRangeSelection({ ...rangeSelection, endMs: v * 1000 }) }} />
-                  </label>
-                  <label>{t('timeline.rangeDuration')}
-                    <NumericInput value={(rangeSelection.endMs - rangeSelection.startMs) / 1000} step={0.1}
-                      onCommit={(v) => { if (v !== null && v > 0) setRangeSelection({ ...rangeSelection, endMs: rangeSelection.startMs + v * 1000 }) }} />
-                  </label>
-                  <button
-                    title={t('timeline.rangeZoomHint')}
-                    onClick={() => {
-                      const el = scrollRef.current
-                      if (!el) return
-                      const span = Math.max(1, rangeSelection.endMs - rangeSelection.startMs)
-                      const px = Math.min(MAX_PX_PER_MS, Math.max(MIN_PX_PER_MS, (el.clientWidth - 60) / span))
-                      setPxPerMs(px)
-                      el.scrollLeft = Math.max(0, rangeSelection.startMs * px - 30)
-                    }}
-                  >🔍</button>
-                  <button title={t('timeline.rangeClear')} onClick={() => setRangeSelection(null)}>✕</button>
+            {/* Le bandeau translucide suit le glisser EN DIRECT (rangeDragPreview),
+                pas seulement la sélection déjà validée au relâchement — sinon
+                on ne voit l'étirement qu'après coup ("j'aurais aimé que cela
+                s'anime pour voir l'étirement", signalé 2026-08-04). Le popover
+                éditable, lui, n'a de sens qu'une fois le geste terminé. */}
+            {(rangeDragPreview ?? rangeSelection) && (() => {
+              const r = (rangeDragPreview ?? rangeSelection)!
+              return (
+                <div
+                  className="tl-range-overlay"
+                  style={{
+                    left: r.startMs * effPxPerMs,
+                    width: Math.max(1, (r.endMs - r.startMs) * effPxPerMs),
+                  }}
+                >
+                  {rangeSelection && !rangeDragPreview && (
+                    <div className="tl-range-popover" onPointerDown={(e) => e.stopPropagation()}>
+                      <label>{t('timeline.rangeStart')}
+                        <NumericInput value={rangeSelection.startMs / 1000} step={0.1}
+                          onCommit={(v) => { if (v !== null && v * 1000 < rangeSelection.endMs) setRangeSelection({ ...rangeSelection, startMs: Math.max(0, v * 1000) }) }} />
+                      </label>
+                      <label>{t('timeline.rangeEnd')}
+                        <NumericInput value={rangeSelection.endMs / 1000} step={0.1}
+                          onCommit={(v) => { if (v !== null && v * 1000 > rangeSelection.startMs) setRangeSelection({ ...rangeSelection, endMs: v * 1000 }) }} />
+                      </label>
+                      <label>{t('timeline.rangeDuration')}
+                        <NumericInput value={(rangeSelection.endMs - rangeSelection.startMs) / 1000} step={0.1}
+                          onCommit={(v) => { if (v !== null && v > 0) setRangeSelection({ ...rangeSelection, endMs: rangeSelection.startMs + v * 1000 }) }} />
+                      </label>
+                      <button
+                        title={t('timeline.rangeZoomHint')}
+                        onClick={() => {
+                          const el = scrollRef.current
+                          if (!el) return
+                          const span = Math.max(1, rangeSelection.endMs - rangeSelection.startMs)
+                          const px = Math.min(MAX_PX_PER_MS, Math.max(MIN_PX_PER_MS, (el.clientWidth - 60) / span))
+                          setPxPerMs(px)
+                          el.scrollLeft = Math.max(0, rangeSelection.startMs * px - 30)
+                        }}
+                      >🔍</button>
+                      <button title={t('timeline.rangeClear')} onClick={() => setRangeSelection(null)}>✕</button>
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              )
+            })()}
             {rangeDragPreview && (
               <div
                 className="tl-range-tooltip"
