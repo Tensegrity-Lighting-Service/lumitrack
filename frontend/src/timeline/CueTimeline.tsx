@@ -852,7 +852,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                       transition: zooming ? 'none' : undefined,
                     } as React.CSSProperties}
                     onPointerDown={(e) => beginBlockDrag(e, cue, 'move')}
-                    onDoubleClick={() => renameCue(cue)}
+                    onDoubleClick={() => { onSelectCue(cue.id); onOpenBlockDetail() }}
                     onContextMenu={(e) => handleBlockContextMenu(e, cue)}
                   >
                     <div className="cue-block-header">
