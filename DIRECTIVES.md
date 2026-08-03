@@ -795,14 +795,14 @@ respecte l'ORDRE DE SÉLECTION des acteurs (déjà suivi dans
 `selectedPointIds`, aucun nouveau suivi à écrire) — incrément en ms
 réglable par champ numérique ET par poignée à glisser directement dans la
 sous-timeline de sélection du point 2 (façon "time stretch" AE).
-**✅ Partiellement livré (2026-08-03)** : le "bloc = défaut, acteur peut
-personnaliser, clic pour revenir" tourne maintenant pour de vrai, y
-compris HORS durée automatique (jusque-là seul le cas auto-durée était
-câblé — un bug réel : "le timing de l'acteur ne suit pas le timing du
-bloc", cf. le fix Activation.fade_overridden + set_activation/update_cue).
-Encore manquant : le champ **décalage de départ** par acteur lui-même
-(aucun champ, aucune UI) et le "décalage en escalier" respectant l'ordre
-de sélection — rien de tout ça n'existe encore.
+**✅ LIVRÉ (2026-08-03)** : le "bloc = défaut, acteur peut personnaliser,
+clic pour revenir" tourne pour de vrai, y compris HORS durée automatique
+(jusque-là seul le cas auto-durée était câblé — un bug réel : "le
+timing de l'acteur ne suit pas le timing du bloc", cf. le fix
+Activation.fade_overridden + set_activation/update_cue). Décalage de
+départ (`Activation.start_offset_ms`, miroir Rust inclus — affecte la
+résolution de lecture) + bouton "décalage en escalier" dans le
+GroupTimingPanel, respectant l'ordre de sélection.
 
 **7. Refonte de l'inspecteur** — actuellement `CueInspector` affiche TOUTES
 les activations d'un bloc dépliées en même temps (pas l'esprit AE, où le
@@ -862,15 +862,14 @@ morceau qui reste, volontairement pas attaqué sans retour visuel
 possible (change le modèle d'interaction de la scène). Points 4, 6, 7,
 8, 9 pas commencés.
 
-**Mise à jour 2026-08-03** : point 6 passé à moitié livré (le fix
-"timing acteur/bloc désynchronisé par défaut" ci-dessus) ; overlay de
-trajectoire à la sélection livré le 08-01 puis RETIRÉ le 08-03 ("pas
-très utile tel quel" — Florian) — point 2 repasse donc en pratique à
-"lacet seulement", sans overlay de remplacement pour x/y pour l'instant.
-Toujours pas commencés : point 3 (geste de glisser libre), point 4
-(diviser un bloc au playhead), la moitié restante du point 6 (décalage
-de départ + décalage en escalier), points 7 (refonte inspecteur), 8
-(menus contextuels), 9 (polish timeline façon Reaper).
+**Mise à jour 2026-08-03** : point 6 entièrement livré (fix "timing
+acteur/bloc désynchronisé par défaut" + décalage de départ/escalier) ;
+overlay de trajectoire à la sélection livré le 08-01 puis RETIRÉ le
+08-03 ("pas très utile tel quel" — Florian) — point 2 repasse donc en
+pratique à "lacet seulement", sans overlay de remplacement pour x/y
+pour l'instant. Toujours pas commencés : point 3 (geste de glisser
+libre), point 4 (diviser un bloc au playhead), point 7 (refonte
+inspecteur), 8 (menus contextuels), 9 (polish timeline façon Reaper).
 
 **Périmètre volontairement pas encore tranché / à des sessions futures** :
 un système de points de focus RÉUTILISABLES et nommés (comme les zones
