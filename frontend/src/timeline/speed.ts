@@ -57,6 +57,19 @@ export function maxSpeedMs(cue: Cue, blockContext: BlockContextMessage | null): 
   return max
 }
 
+/** Même calcul que `maxSpeedMs`, mais pour UN SEUL acteur — utilisé par la
+ * carte repliée de l'inspecteur (mission "replier les acteurs", 2026-08-03)
+ * pour afficher sa vitesse individuelle sans dérouler tous ses champs. */
+export function pointSpeedMs(pointId: string, cueId: string, blockContext: BlockContextMessage | null): number | null {
+  if (!blockContext || blockContext.cueId !== cueId) return null
+  const entry = blockContext.entries[pointId]
+  if (!entry) return null
+  const { startPose, targetPose, timing } = entry
+  if (!startPose || !targetPose || timing.fadeMs <= 0) return null
+  const distCm = Math.hypot(targetPose[0] - startPose[0], targetPose[1] - startPose[1])
+  return (distCm / 100) / (timing.fadeMs / 1000)
+}
+
 const MIN_AUTO_DURATION_MS = 200
 
 /** Fade (ms) nécessaire pour CHAQUE acteur de ce bloc à parcourir SA

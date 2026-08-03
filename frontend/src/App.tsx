@@ -9,7 +9,7 @@ import {
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
-import { maxSpeedMs, msToKmh, requiredFadeMsPerPointFromContext, speedCategory, SPEED_PRESETS } from './timeline/speed'
+import { maxSpeedMs, msToKmh, pointSpeedMs, requiredFadeMsPerPointFromContext, speedCategory, SPEED_PRESETS } from './timeline/speed'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
 import { AddActorsPanel } from './ui/AddActorsPanel'
@@ -1357,6 +1357,7 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
               activation={act}
               selected={pointId === selectedPointId}
               onSelect={() => onSelectPoint(pointId === selectedPointId ? null : pointId)}
+              blockContext={blockContext}
             />
           )
         })}
@@ -1475,15 +1476,21 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   )
 }
 
-function ActivationCard({ cueId, pointId, point, activation, selected, onSelect }: {
+function ActivationCard({ cueId, pointId, point, activation, selected, onSelect, blockContext }: {
   cueId: string
   pointId: string
   point: Point | undefined
   activation: Activation
   selected: boolean
   onSelect: () => void
+  blockContext: BlockContextMessage | null
 }) {
   const t = useT()
+  // Repliée par défaut (mission "replier les acteurs", 2026-08-03) : une
+  // carte dépliée par acteur activé rendait l'inspecteur illisible dès 3-4
+  // acteurs (cf. point 7 du DIRECTIVES.md, pas encore attaqué en entier).
+  // Repliement PROPRE à chaque carte, indépendant de la sélection.
+  const [collapsed, setCollapsed] = useState(true)
   const set = (patch: Partial<{
     targetXCm: number | null; targetYCm: number | null; targetZCm: number | null
     targetYawDeg: number | null; fadeMs: number; fadeOverridden: boolean
@@ -1492,16 +1499,33 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
     focusXCm: number | null; focusYCm: number | null
   }>) => sidecar.setActivation(cueId, pointId, patch)
   const mode = activation.orientationMode ?? 'manual'
+  const speed = pointSpeedMs(pointId, cueId, blockContext)
 
   return (
-    <div className={`activation-card${selected ? ' selected' : ''}`} onClick={onSelect}>
+    <div className={`activation-card${selected ? ' selected' : ''}${collapsed ? ' collapsed' : ''}`} onClick={onSelect}>
       <div className="activation-card-head">
+        <button
+          className="activation-collapse-toggle"
+          title={collapsed ? t('cue.expandCard') : t('cue.collapseCard')}
+          onClick={(e) => { e.stopPropagation(); setCollapsed((v) => !v) }}
+        >
+          {collapsed ? '▸' : '▾'}
+        </button>
         <span className="swatch" style={{ background: point?.color ?? '#666' }} />
         <span className="activation-card-name">{point?.name ?? pointId}</span>
+        {collapsed && speed !== null && (() => {
+          const [key, color] = speedCategory(speed)
+          return (
+            <span className="activation-speed-badge" style={{ '--speed-color': color } as React.CSSProperties}
+              title={t('cue.actorSpeedHint', { kmh: msToKmh(speed).toFixed(1), label: t(`speed.${key}`) })}>
+              {msToKmh(speed).toFixed(1)} km/h
+            </span>
+          )
+        })()}
       </div>
       {/* stopPropagation : cliquer dans un champ ne doit pas basculer la
           sélection de l'acteur portée par la carte entière. */}
-      <div className="activation-grid" onClick={(e) => e.stopPropagation()}>
+      {!collapsed && <div className="activation-grid" onClick={(e) => e.stopPropagation()}>
         <label>{t('cue.x')}
           <NumericInput value={activation.targetXCm === null ? null : activation.targetXCm / 100} step={0.1} nullable
             onCommit={(v) => set({ targetXCm: v === null ? null : v * 100 })} />
@@ -1572,7 +1596,7 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
             {EASING_NAMES.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         </label>
-      </div>
+      </div>}
     </div>
   )
 }
