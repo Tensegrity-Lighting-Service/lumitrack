@@ -796,9 +796,12 @@ l'usage.
    - **✅ LIVRÉ (2026-08-01)** : les 3 modes tournent en Python
      (`resolve_positions` + `resolve_block_context`) ET en miroir Rust,
      sélecteur + champs focus dans l'inspecteur, garde anti-écrasement dans
-     `SelectionTransform` lors d'une rotation de groupe. Reste hors
-     périmètre : le réglage par défaut au niveau Point (préremplissage des
-     nouvelles activations) n'est pas encore câblé.
+     `SelectionTransform` lors d'une rotation de groupe.
+   - **✅ Réglage par défaut au niveau Point LIVRÉ (2026-08-03)**, à
+     l'occasion de la mission menus contextuels (point 8) :
+     `Point.defaultOrientationMode` (backend + tests), sous-menu "orientation
+     par défaut" du menu contextuel Acteur — préremplit uniquement les
+     nouvelles activations, sans toucher celles déjà réglées.
 
 **6. Timing global (bloc) vs sélectif (acteur)** — analogie validée par
 Florian. Le bloc fournit une valeur par défaut (fade, et nouveau champ
