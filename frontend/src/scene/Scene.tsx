@@ -2048,9 +2048,22 @@ function SceneContent({
   const handleActorPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string) => {
     e.stopPropagation()
     hitObjectRef.current = true
+    const inSelection = selectedIdsRef.current.includes(pointId)
+    // Ctrl/Cmd-clic AJOUTE/RETIRE cet acteur de la sélection au lieu de la
+    // remplacer (même geste que le roster, cf. selectRange dans App.tsx) —
+    // jamais câblé ici jusqu'ici : cliquer un deuxième acteur dans la scène
+    // remplaçait TOUJOURS la sélection par lui seul, même Ctrl enfoncé
+    // ("la sélection multiple dans un bloc ne fonctionne toujours pas",
+    // signalé 2026-08-03). Un clic-modificateur ne démarre jamais de drag
+    // (ambigu de savoir lequel des membres on voudrait déplacer).
+    if (e.ctrlKey || e.metaKey) {
+      onSelectPoints(inSelection
+        ? selectedIdsRef.current.filter((id) => id !== pointId)
+        : [...selectedIdsRef.current, pointId])
+      return
+    }
     // Glisser un acteur DÉJÀ dans la sélection multiple ne la casse pas :
     // c'est le geste "transformer la sélection". Hors sélection : simple.
-    const inSelection = selectedIdsRef.current.includes(pointId)
     if (!inSelection) onSelectPoint(pointId)
     if (!selectedCueId) return
     const pose = positions[pointId]
@@ -2075,9 +2088,16 @@ function SceneContent({
   const handleGhostPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string, targetZCm: number) => {
     e.stopPropagation()
     hitObjectRef.current = true
+    const inSelection = selectedIdsRef.current.includes(pointId)
+    // Même geste d'ajout/retrait que handleActorPointerDown ci-dessus.
+    if (e.ctrlKey || e.metaKey) {
+      onSelectPoints(inSelection
+        ? selectedIdsRef.current.filter((id) => id !== pointId)
+        : [...selectedIdsRef.current, pointId])
+      return
+    }
     onSelectPoint(pointId)
     if (!selectedCueId) return
-    const inSelection = selectedIdsRef.current.includes(pointId)
     const members = inSelection && selectedIdsRef.current.length > 1
       ? selectedIdsRef.current : [pointId]
     dragRef.current = {
