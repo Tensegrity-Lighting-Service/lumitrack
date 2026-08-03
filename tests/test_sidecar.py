@@ -216,6 +216,97 @@ def test_reverting_override_puts_the_activation_back_under_auto_duration():
     assert move.duration_ms == pytest.approx(5000.0)  # "far" redevient le plus lent
 
 
+# ---------------------------------- global vs sélectif, suite (2026-08-03) --
+#
+# "le timing de l'acteur ne suit pas le timing du bloc ... on dirait qu'ils
+# sont par défaut désynchronisés du bloc" (Florian) : hors durée automatique,
+# un bloc EST par définition le fade par défaut de ses membres — un nouvel
+# acteur doit suivre cette durée dès sa création (pas 1000 ms fixe), et
+# redimensionner le bloc doit resynchroniser les acteurs non personnalisés.
+
+def test_new_activation_without_auto_duration_inherits_the_block_duration():
+    session = Session()
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=3500.0)]
+    reply = _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 10.0, "targetYCm": 20.0,
+    }))
+    assert reply is None
+    act = session.project.cue_by_id("c1").activations["p1"]
+    assert act.fade_ms == pytest.approx(3500.0)  # pas les 1000 ms par défaut du dataclass
+    assert act.fade_overridden is False
+
+
+def test_new_activation_with_auto_duration_still_uses_speed_based_fade():
+    """Le fix ci-dessus ne doit pas percuter la durée automatique déjà
+    testée ailleurs : un bloc auto reste piloté par la distance/vitesse."""
+    session = Session()
+    session.project = _auto_duration_project()
+    session.project.points.append(Point(id="extra", name="extra"))
+    _run(_handle_message(session, {"type": "update_cue", "cueId": "move", "autoDuration": True}))
+    reply = _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "move", "pointId": "extra",
+        "targetXCm": 1000, "targetYCm": 0,
+    }))
+    assert reply is None
+    move = session.project.cue_by_id("move")
+    act = move.activations["extra"]
+    # "extra" n'a ni zone backstage ni position connue : sa "première
+    # apparition" retombe sur sa propre cible (résolution existante de
+    # resolve_block_context), donc distance nulle -> le plancher, pas les
+    # 1000 ms fixes du dataclass — la preuve que ce cas passe bien par le
+    # calcul auto (required_fade_ms_per_point), pas par le fix du point 1.
+    assert act.fade_ms == pytest.approx(200.0)
+    assert act.fade_overridden is False
+    assert move.duration_ms == pytest.approx(5000.0)  # "far" reste le plus lent
+
+
+def test_resizing_a_block_resyncs_non_overridden_activations():
+    session = Session()
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=1000.0, activations={
+        "p1": Activation(target_x_cm=0, target_y_cm=0, fade_ms=1000.0),
+        "p2": Activation(target_x_cm=0, target_y_cm=0, fade_ms=1000.0, fade_overridden=True),
+    })]
+    reply = _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "c1", "durationMs": 4000.0,
+    }))
+    assert reply is None
+    cue = session.project.cue_by_id("c1")
+    assert cue.activations["p1"].fade_ms == pytest.approx(4000.0)  # suit le bloc
+    assert cue.activations["p2"].fade_ms == pytest.approx(1000.0)  # personnalisé, intouché
+
+
+def test_resizing_alongside_auto_duration_toggle_does_not_clobber_preset_fades():
+    """Le bouton preset envoie durationMs ET autoDuration dans le MÊME
+    message, après avoir déjà écrit un fade par acteur — le resynch de
+    redimensionnement ne doit pas les remplacer par une seule valeur."""
+    session = Session()
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=1000.0, activations={
+        "near": Activation(target_x_cm=0, target_y_cm=0, fade_ms=500.0),
+        "far": Activation(target_x_cm=0, target_y_cm=0, fade_ms=2500.0),
+    })]
+    reply = _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "c1", "durationMs": 2500.0, "autoDuration": False,
+    }))
+    assert reply is None
+    cue = session.project.cue_by_id("c1")
+    assert cue.activations["near"].fade_ms == pytest.approx(500.0)  # inchangé
+    assert cue.activations["far"].fade_ms == pytest.approx(2500.0)  # inchangé
+
+
+def test_reverting_override_without_auto_duration_syncs_to_block_duration():
+    session = Session()
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=4000.0, activations={
+        "p1": Activation(target_x_cm=0, target_y_cm=0, fade_ms=800.0, fade_overridden=True),
+    })]
+    reply = _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "fadeOverridden": False,
+    }))
+    assert reply is None
+    act = session.project.cue_by_id("c1").activations["p1"]
+    assert act.fade_overridden is False
+    assert act.fade_ms == pytest.approx(4000.0)
+
+
 def test_set_roster_groups_broadcasts_and_prunes_detached_points():
     session = Session()
     _run(_handle_message(session, {"type": "update_point", "pointId": "p1", "rosterGroupId": "g1"}))

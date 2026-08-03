@@ -578,6 +578,17 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             cue.start_ms = float(msg["startMs"])
         if "durationMs" in msg:
             cue.duration_ms = float(msg["durationMs"])
+            # Un redimensionnement DIRECT du bloc (glisser son bord dans la
+            # timeline) est le bloc qui redéfinit son propre défaut : les
+            # acteurs non personnalisés suivent (mission "global vs
+            # sélectif"). Exclu si ce message touche AUSSI autoDuration
+            # (ex. bouton preset qui vient de calculer un fade PAR ACTEUR
+            # avant de désactiver la durée automatique dans le même appel —
+            # écraser ces valeurs ici serait la régression inverse).
+            if not cue.auto_duration and "autoDuration" not in msg:
+                for act in cue.activations.values():
+                    if not act.fade_overridden:
+                        act.fade_ms = cue.duration_ms
         if "color" in msg:
             cue.color = msg["color"]
         if "lane" in msg:
@@ -608,7 +619,21 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         point_id = msg.get("pointId")
         if session.project.point_by_id(point_id) is None:
             return {"type": "error", "message": f"Unknown point id {point_id!r}"}
-        act = cue.activations.get(point_id) or Activation()
+        act = cue.activations.get(point_id)
+        is_new_activation = act is None
+        act = act or Activation()
+        if is_new_activation and "fadeMs" not in msg and not cue.auto_duration:
+            # "le timing de l'acteur ne suit pas le timing du bloc ... on
+            # dirait qu'ils sont par défaut désynchronisés" (Florian,
+            # 2026-08-03) : un acteur fraîchement activé (glisser dans la
+            # scène, dépôt roster, "+ Activer un point") héritait du
+            # fade_ms par défaut du dataclass (1000 ms), sans aucun rapport
+            # avec la durée réelle du bloc. Un bloc SANS durée automatique
+            # EST par définition le fade par défaut de ses membres — un
+            # nouvel acteur suit cette durée dès sa création, pas une
+            # constante arbitraire. (Durée automatique active : laissé au
+            # recalcul par distance/vitesse ci-dessous, comme d'habitude.)
+            act.fade_ms = cue.duration_ms
         for field_name, json_key in (
             ("target_x_cm", "targetXCm"), ("target_y_cm", "targetYCm"),
             ("target_z_cm", "targetZCm"), ("target_yaw_deg", "targetYawDeg"),
@@ -619,6 +644,13 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             act.fade_ms = float(msg["fadeMs"])
         if "fadeOverridden" in msg:
             act.fade_overridden = bool(msg["fadeOverridden"])
+            # "Revenir au bloc" (bouton inspecteur) envoie fadeOverridden:
+            # false seul — en durée automatique, _apply_auto_duration plus
+            # bas s'en charge déjà ; sinon (bloc manuel), synchronise cette
+            # activation sur la durée actuelle du bloc, sinon "revenir au
+            # bloc" ne changeait rien du tout hors durée automatique.
+            if not act.fade_overridden and not cue.auto_duration and "fadeMs" not in msg:
+                act.fade_ms = cue.duration_ms
         if "easing" in msg:
             act.easing = msg["easing"]
         if "orientationMode" in msg:

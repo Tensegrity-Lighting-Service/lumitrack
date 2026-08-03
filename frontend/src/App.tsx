@@ -1305,7 +1305,6 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
               activation={act}
               selected={pointId === selectedPointId}
               onSelect={() => onSelectPoint(pointId === selectedPointId ? null : pointId)}
-              autoDuration={cue.autoDuration}
             />
           )
         })}
@@ -1315,7 +1314,10 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
           defaultValue=""
           onChange={(e) => {
             if (!e.target.value) return
-            sidecar.setActivation(cue.id, e.target.value, { fadeMs: 1000, easing: 'linear' })
+            // Pas de fadeMs explicite : le backend applique le défaut du
+            // bloc (sa durée) pour un nouvel acteur, pas une constante
+            // arbitraire (voir set_activation, mission "global vs sélectif").
+            sidecar.setActivation(cue.id, e.target.value, { easing: 'linear' })
             e.target.value = ''
           }}
         >
@@ -1404,17 +1406,13 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   )
 }
 
-function ActivationCard({ cueId, pointId, point, activation, selected, onSelect, autoDuration }: {
+function ActivationCard({ cueId, pointId, point, activation, selected, onSelect }: {
   cueId: string
   pointId: string
   point: Point | undefined
   activation: Activation
   selected: boolean
   onSelect: () => void
-  /** Le bouton "revenir au réglage du bloc" n'a de sens que si la durée
-   * automatique est active sur ce bloc — sinon il n'y a rien "vers quoi"
-   * revenir (demande de Florian, 2026-08-03). */
-  autoDuration: boolean
 }) {
   const t = useT()
   const set = (patch: Partial<{
@@ -1475,7 +1473,7 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
         <label>{t('cue.fade')}
           <NumericInput value={activation.fadeMs / 1000} step={0.1}
             onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v * 1000, fadeOverridden: true }) }} />
-          {autoDuration && activation.fadeOverridden && (
+          {activation.fadeOverridden && (
             <button
               className="inspector-revert-fade"
               title={t('cue.revertFadeHint')}
