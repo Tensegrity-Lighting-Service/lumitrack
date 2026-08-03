@@ -1086,6 +1086,7 @@ function App() {
           selectedPointId={selectedPointId}
           onSelectCue={setSelectedCueId}
           blockContext={blockContext}
+          positions={positions}
         />
       </footer>
 

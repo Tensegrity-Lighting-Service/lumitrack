@@ -762,6 +762,21 @@ et éditable au milieu. Si on éloigne le second bloc dans le temps après
 coup, les acteurs attendent simplement plus longtemps à leur position
 figée avant de repartir — automatique, c'est déjà le mécanisme de
 maintien/LTP existant, aucune logique spéciale à écrire pour ça.
+**✅ LIVRÉ (2026-08-03)** : `frontend/src/timeline/blockOps.ts`
+(`splitCueAtPlayhead`/`canSplitAtPlayhead`), menu contextuel du bloc. Ne
+recalcule AUCUNE position — fige exactement `positions` du tick (déjà
+résolu par le backend, même source que la scène, §13.1.7), donc aucune
+nouvelle route de résolution "à un instant arbitraire" n'a été
+nécessaire. Ne fige que les axes que l'activation touchait déjà (un axe
+non animé continue de suivre sa source précédente, comme avant la
+coupe). Le second bloc recale son décalage de départ pour arriver au
+MÊME instant absolu qu'avant la coupe (immédiatement si le mouvement
+avait déjà commencé, après une attente résiduelle sinon). **Limite
+connue** : courbes personnalisées (graph editor) et tracé spatial
+(motion path) ne se reparamètrent pas à travers la coupure — remis à une
+ligne droite/easing nommé des deux côtés plutôt que produire une
+trajectoire déformée ; à reprendre si le besoin s'en fait sentir à
+l'usage.
 
 **5. Modes de rotation, par bloc OU par acteur** (3 modes) :
    - **Manuel** (existant, inchangé) : valeur animée comme aujourd'hui.
@@ -856,15 +871,14 @@ existantes (`addCue` avec un id fourni par le client + N `set_activation`,
 `Point.defaultOrientationMode` (backend + tests) pour le sous-menu
 "orientation par défaut" du menu Acteur, qui ne réécrit jamais une
 activation déjà réglée.
-Deux actions **reportées** (non construites, pas seulement désactivées) :
-- "Aller à sa zone backstage" (menu Acteur) : demande un nouveau mécanisme
-  de caméra (cadrer un rectangle de zone précis, pas le terrain entier) —
-  pas construit, même prudence que le point 3 (code caméra risqué sans
-  retour visuel possible).
-- "Diviser au playhead" (menu Bloc) : dépend du point 4 ci-dessous, lui
-  aussi pas commencé — geler chaque acteur activé à l'instant du playhead
-  demande une résolution de position à un instant arbitraire que le
-  backend n'expose pas encore comme commande isolée.
+Une action **reportée** (non construite, pas seulement désactivée) :
+"Aller à sa zone backstage" (menu Acteur) : demande un nouveau mécanisme
+de caméra (cadrer un rectangle de zone précis, pas le terrain entier) —
+pas construit, même prudence que le point 3 (code caméra risqué sans
+retour visuel possible).
+"Diviser au playhead" (menu Bloc) : **✅ LIVRÉ (2026-08-03)**, voir le
+point 4 plus bas — la table ci-dessus est donc désormais complète à une
+action près.
 
 **9. Polish visuel de la timeline, inspiré Reaper** :
    - **Grille du temps** : contraste actuel bien trop faible (vérifié —
@@ -901,15 +915,14 @@ possible (change le modèle d'interaction de la scène). Points 4, 6, 7,
 **Mise à jour 2026-08-03** : point 6 entièrement livré (fix "timing
 acteur/bloc désynchronisé par défaut" + décalage de départ/escalier +
 `BlockDetailPanel.tsx`, une mini-timeline par acteur pour le rendre
-visible/éditable à la souris) ; point 8 livré (menus contextuels, table
-complète sauf "aller à sa zone backstage" et "diviser au playhead",
-reportées — voir le détail à la section du point 8) ; overlay de
-trajectoire à la sélection livré le 08-01 puis RETIRÉ le 08-03 ("pas très
-utile tel quel" — Florian) — point 2 repasse donc en pratique à "lacet
-seulement", sans overlay de remplacement pour x/y pour l'instant.
-Toujours pas commencés : point 3 (geste de glisser libre), point 4
-(diviser un bloc au playhead), point 7 (refonte inspecteur), 9 (polish
-timeline façon Reaper).
+visible/éditable à la souris) ; point 4 livré (diviser un bloc au
+playhead) ; point 8 livré (menus contextuels, table complète sauf "aller
+à sa zone backstage", reportée) ; overlay de trajectoire à la sélection
+livré le 08-01 puis RETIRÉ le 08-03 ("pas très utile tel quel" —
+Florian) — point 2 repasse donc en pratique à "lacet seulement", sans
+overlay de remplacement pour x/y pour l'instant.
+Toujours pas commencés : point 3 (geste de glisser libre), point 7
+(refonte inspecteur), 9 (polish timeline façon Reaper).
 
 **Périmètre volontairement pas encore tranché / à des sessions futures** :
 un système de points de focus RÉUTILISABLES et nommés (comme les zones

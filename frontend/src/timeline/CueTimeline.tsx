@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
-import type { BlockContextMessage, Cue, Project } from '../types'
+import type { BlockContextMessage, Cue, Pose, Project } from '../types'
 import { sidecar } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
@@ -25,7 +25,10 @@ import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
 import { showContextMenu } from '../ui/contextMenuStore'
 import { pickColor } from '../ui/colorPicker'
-import { copyCueToClipboard, copyTimingToOtherActors, duplicateCue, hasCueClipboard, pasteCueFromClipboard } from './blockOps'
+import {
+  canSplitAtPlayhead, copyCueToClipboard, copyTimingToOtherActors, duplicateCue,
+  hasCueClipboard, pasteCueFromClipboard, splitCueAtPlayhead,
+} from './blockOps'
 
 const MS_PER_S = 1000
 const RULER_H = 26
@@ -95,7 +98,7 @@ function formatTimecodeMs(ms: number): string {
   return `${pad(h)}:${pad(m)}:${sec.toFixed(3).padStart(6, '0')}`
 }
 
-export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, blockContext }: {
+export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, blockContext, positions }: {
   project: Project
   tMs: number
   playing: boolean
@@ -108,6 +111,10 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
    * de vitesse affiché directement sur le bloc, pas seulement dans
    * l'inspecteur ("la vitesse peut pas s'afficher dans le bloc même ?"). */
   blockContext: BlockContextMessage | null
+  /** Positions RÉSOLUES par le backend (tick, même source que la scène) —
+   * jamais recalculées ici : "diviser au playhead" fige exactement ce qui
+   * est déjà affiché, pas une approximation frontend (§13.1.7). */
+  positions: Record<string, Pose>
 }) {
   const t = useT()
   const cues = project.cues
@@ -524,10 +531,20 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
         },
       ],
       [
+        {
+          label: t('contextMenu.splitAtPlayhead'),
+          disabled: !canSplitAtPlayhead(cue, tMs),
+          onClick: () => {
+            const secondId = splitCueAtPlayhead(cue, tMs, positions)
+            if (secondId) onSelectCue(secondId)
+          },
+        },
+      ],
+      [
         { label: t('contextMenu.delete'), danger: true, onClick: () => { sidecar.deleteCue(cue.id); onSelectCue(null) } },
       ],
     ])
-  }, [onSelectCue, renameCue, selectedPointId, t])
+  }, [onSelectCue, renameCue, selectedPointId, t, tMs, positions])
 
   const handleLanesContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     // Laissé au bloc lui-même (son propre onContextMenu, avec sa propre
