@@ -86,7 +86,7 @@ function formatTimecodeMs(ms: number): string {
   return `${pad(h)}:${pad(m)}:${sec.toFixed(3).padStart(6, '0')}`
 }
 
-export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, blockContext, positions }: {
+export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, blockContext, positions, onOpenBlockDetail }: {
   project: Project
   tMs: number
   playing: boolean
@@ -103,6 +103,9 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
    * jamais recalculées ici : "diviser au playhead" fige exactement ce qui
    * est déjà affiché, pas une approximation frontend (§13.1.7). */
   positions: Record<string, Pose>
+  /** Ouvre le panneau détail du bloc (menu contextuel) — le bloc visé est
+   * déjà sélectionné par `onSelectCue` avant l'appel. */
+  onOpenBlockDetail: () => void
 }) {
   const t = useT()
   const cues = project.cues
@@ -514,6 +517,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     showContextMenu(e, [
       [
         { label: t('contextMenu.rename'), onClick: () => renameCue(cue) },
+        { label: t('cue.openBlockDetail'), onClick: onOpenBlockDetail },
         { label: t('contextMenu.duplicate'), onClick: () => duplicateCue(cue) },
         { label: t('contextMenu.copy'), onClick: () => copyCueToClipboard(cue) },
       ],
@@ -543,7 +547,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
         { label: t('contextMenu.delete'), danger: true, onClick: () => { sidecar.deleteCue(cue.id); onSelectCue(null) } },
       ],
     ])
-  }, [onSelectCue, renameCue, selectedPointId, t, tMs, positions])
+  }, [onOpenBlockDetail, onSelectCue, renameCue, selectedPointId, t, tMs, positions])
 
   // Glisser sur la règle/le vide (PAS un bloc) pour sélectionner une plage
   // temporelle — bouton gauche uniquement, seuil de 3px avant de compter

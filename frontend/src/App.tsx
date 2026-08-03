@@ -1088,6 +1088,7 @@ function App() {
           onSelectCue={setSelectedCueId}
           blockContext={blockContext}
           positions={positions}
+          onOpenBlockDetail={() => setShowBlockDetail(true)}
         />
       </footer>
 
