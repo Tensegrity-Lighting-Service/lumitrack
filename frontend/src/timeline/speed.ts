@@ -57,24 +57,30 @@ export function maxSpeedMs(cue: Cue, blockContext: BlockContextMessage | null): 
   return max
 }
 
-/** Durée (ms) nécessaire pour que l'acteur le plus lent de ce bloc parcoure
- * sa distance à la vitesse donnée (m/s) — même principe que le
- * `required_duration_ms` backend (core/timeline.py), mais calculé ici
+const MIN_AUTO_DURATION_MS = 200
+
+/** Fade (ms) nécessaire pour CHAQUE acteur de ce bloc à parcourir SA
+ * distance à la vitesse donnée (m/s) — même principe que le
+ * `required_fade_ms_per_point` backend (core/timeline.py), calculé ici
  * directement depuis le blockContext déjà en main pour un retour instantané
  * au clic sur un preset (pas d'aller-retour serveur nécessaire avant
- * d'écrire la durée). Plancher 200 ms, comme côté backend.
+ * d'écrire les fades). Un acteur avec moins de chemin à faire reçoit un
+ * fade PLUS COURT, pas celui du bloc entier — sinon la boîte change de
+ * vitesse affichée mais les acteurs continuent de bouger à leur ancien
+ * fade_ms ("la boîte a changé de vitesse mais les acteurs non", signalé
+ * 2026-08-03). null si le contexte ne correspond pas encore à ce bloc.
  */
-export function requiredDurationMsFromContext(
+export function requiredFadeMsPerPointFromContext(
   cue: Cue, blockContext: BlockContextMessage | null, speedMs: number,
-): number | null {
+): Record<string, number> | null {
   if (!blockContext || blockContext.cueId !== cue.id || speedMs <= 0) return null
   const speedCmsPerS = speedMs * 100
-  let durationMs = 200
-  for (const entry of Object.values(blockContext.entries)) {
+  const result: Record<string, number> = {}
+  for (const [pointId, entry] of Object.entries(blockContext.entries)) {
     const { startPose, targetPose } = entry
     if (!startPose || !targetPose) continue
     const distCm = Math.hypot(targetPose[0] - startPose[0], targetPose[1] - startPose[1])
-    durationMs = Math.max(durationMs, (distCm / speedCmsPerS) * 1000)
+    result[pointId] = Math.max(MIN_AUTO_DURATION_MS, (distCm / speedCmsPerS) * 1000)
   }
-  return durationMs
+  return result
 }

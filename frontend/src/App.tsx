@@ -9,7 +9,7 @@ import {
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { NumericInput } from './ui/NumericInput'
-import { maxSpeedMs, msToKmh, requiredDurationMsFromContext, speedCategory, SPEED_PRESETS } from './timeline/speed'
+import { maxSpeedMs, msToKmh, requiredFadeMsPerPointFromContext, speedCategory, SPEED_PRESETS } from './timeline/speed'
 import { PsnPanel } from './ui/PsnPanel'
 import { BundleHistoryPanel } from './ui/BundleHistoryPanel'
 import { AddActorsPanel } from './ui/AddActorsPanel'
@@ -1288,8 +1288,17 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
             style={{ '--speed-color': preset.color } as React.CSSProperties}
             disabled={blockContext?.cueId !== cue.id}
             onClick={() => {
-              const durationMs = requiredDurationMsFromContext(cue, blockContext, preset.ms)
-              if (durationMs !== null) sidecar.updateCue(cue.id, { durationMs, autoDuration: false })
+              // Chaque acteur reçoit SON fade (sa propre distance à cette
+              // vitesse) — pas juste la largeur du bloc, sinon la boîte
+              // change de vitesse affichée mais les acteurs continuent de
+              // bouger à leur ancien fade_ms (signalé 2026-08-03).
+              const perPoint = requiredFadeMsPerPointFromContext(cue, blockContext, preset.ms)
+              if (!perPoint || Object.keys(perPoint).length === 0) return
+              for (const [pointId, fadeMs] of Object.entries(perPoint)) {
+                sidecar.setActivation(cue.id, pointId, { fadeMs })
+              }
+              const durationMs = Math.max(...Object.values(perPoint))
+              sidecar.updateCue(cue.id, { durationMs, autoDuration: false })
             }}
           >
             {t(`speed.${preset.key}`)} ({msToKmh(preset.ms).toFixed(0)} km/h)

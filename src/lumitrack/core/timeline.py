@@ -656,24 +656,38 @@ def resolve_trajectories(project: Project, point_ids, samples: int = TRAJECTORY_
 MIN_AUTO_DURATION_MS = 200.0
 
 
-def required_duration_ms(project: Project, cue: Cue) -> float:
-    """Mission "refonte AE/Reaper" (2026-08-01) : durée nécessaire pour que
-    l'acteur le plus lent de ce bloc parcoure sa distance à la vitesse de
-    référence du projet — c'est la durée qu'écrit `Cue.auto_duration`. Prend
-    le départ/la cible EXACTS déjà calculés par `resolve_block_context` (même
-    logique de "première apparition"/zone backstage/téléportation, aucune
-    duplication) ; seule la distance x/y compte, pas la hauteur ni le lacet.
-    Un bloc sans déplacement réel (cible = départ, ou aucun point encore
-    positionnable) garde le plancher MIN_AUTO_DURATION_MS plutôt que 0."""
+def required_fade_ms_per_point(project: Project, cue: Cue) -> dict:
+    """Mission "refonte AE/Reaper" (2026-08-01) : durée (fade_ms) nécessaire
+    pour CHAQUE acteur de ce bloc parcoure SA distance à la vitesse de
+    référence du projet — un acteur avec moins de chemin à faire arrive
+    juste plus tôt et attend (mécanique de maintien déjà existante, aucune
+    logique spéciale), il ne doit pas hériter du fade des autres. Corrige
+    le bug "la boîte change de vitesse mais les acteurs non" (signalé
+    2026-08-03) : `Cue.auto_duration` et les presets de vitesse ne
+    touchaient QUE `cue.duration_ms` (largeur visuelle du bloc), jamais le
+    `fade_ms` de chaque activation qui gouverne réellement la vitesse de
+    déplacement. Prend le départ/la cible EXACTS déjà calculés par
+    `resolve_block_context` (même logique de "première apparition"/zone
+    backstage/téléportation, aucune duplication) ; seule la distance x/y
+    compte, pas la hauteur ni le lacet."""
     speed_cms_per_s = max(1.0, project.reference_speed_cms)
-    duration_ms = MIN_AUTO_DURATION_MS
-    for entry in resolve_block_context(project, cue.id)["entries"].values():
+    result = {}
+    for point_id, entry in resolve_block_context(project, cue.id)["entries"].items():
         start, target = entry["startPose"], entry["targetPose"]
         if start is None or target is None:
             continue
         distance_cm = math.hypot(target[0] - start[0], target[1] - start[1])
-        duration_ms = max(duration_ms, (distance_cm / speed_cms_per_s) * 1000.0)
-    return duration_ms
+        result[point_id] = max(MIN_AUTO_DURATION_MS, (distance_cm / speed_cms_per_s) * 1000.0)
+    return result
+
+
+def required_duration_ms(project: Project, cue: Cue) -> float:
+    """Durée du bloc entier = celle de l'acteur le plus lent — c'est la
+    durée qu'écrit `Cue.auto_duration`. Un bloc sans déplacement réel
+    (cible = départ, ou aucun point encore positionnable) garde le
+    plancher MIN_AUTO_DURATION_MS plutôt que 0."""
+    per_point = required_fade_ms_per_point(project, cue)
+    return max(per_point.values(), default=MIN_AUTO_DURATION_MS)
 
 
 class Timeline:

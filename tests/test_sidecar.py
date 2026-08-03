@@ -14,6 +14,7 @@ import asyncio
 import pytest
 
 from lumitrack.sidecar import Session, _handle_message
+from lumitrack.core.project import Project, Point, Cue, Activation
 
 
 def _run(coro):
@@ -116,6 +117,59 @@ def test_reorder_points_broadcasts_and_reorders():
     reply = _run(_handle_message(session, {"type": "reorder_points", "pointIds": reversed_ids}))
     assert reply is None
     assert [p.id for p in session.project.points] == reversed_ids
+
+
+# ----------------------------------------- duree automatique (2026-08-03) --
+#
+# "j'ai change la vitesse des acteurs avec le preset marche ... la boite a
+# change de vitesse mais les acteurs n'ont pas change de vitesse" (Florian) :
+# la duree automatique et les presets de vitesse ne touchaient QUE
+# cue.duration_ms (largeur visuelle du bloc), jamais le fade_ms de chaque
+# activation qui gouverne reellement la vitesse de deplacement.
+
+def _auto_duration_project():
+    project = Project()
+    project.reference_speed_cms = 100.0  # 1 m/s, calcul simple
+    project.points = [Point(id="near", name="near"), Point(id="far", name="far")]
+    project.cues = [
+        Cue(id="setup", name="setup", start_ms=0, duration_ms=1, activations={
+            "near": Activation(target_x_cm=0, target_y_cm=0, fade_ms=1),
+            "far": Activation(target_x_cm=0, target_y_cm=0, fade_ms=1),
+        }),
+        Cue(id="move", name="move", start_ms=1000, duration_ms=1, activations={
+            # "near" parcourt 100cm (1s a 1 m/s), "far" 500cm (5s).
+            "near": Activation(target_x_cm=100, target_y_cm=0, fade_ms=1),
+            "far": Activation(target_x_cm=500, target_y_cm=0, fade_ms=1),
+        }),
+    ]
+    return project
+
+
+def test_auto_duration_checkbox_sets_per_point_fade_not_just_block_width():
+    session = Session()
+    session.project = _auto_duration_project()
+    reply = _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "move", "autoDuration": True,
+    }))
+    assert reply is None
+    move = session.project.cue_by_id("move")
+    assert move.activations["near"].fade_ms == pytest.approx(1000.0)
+    assert move.activations["far"].fade_ms == pytest.approx(5000.0)
+    assert move.duration_ms == pytest.approx(5000.0)  # le plus lent
+
+
+def test_reference_speed_change_resyncs_every_activation_of_auto_blocks():
+    session = Session()
+    session.project = _auto_duration_project()
+    _run(_handle_message(session, {"type": "update_cue", "cueId": "move", "autoDuration": True}))
+    reply = _run(_handle_message(session, {
+        "type": "update_project_settings", "referenceSpeedCms": 200.0,  # 2 m/s
+    }))
+    assert reply is None
+    move = session.project.cue_by_id("move")
+    assert move.activations["near"].fade_ms == pytest.approx(500.0)
+    assert move.activations["far"].fade_ms == pytest.approx(2500.0)
+    assert move.duration_ms == pytest.approx(2500.0)
 
 
 def test_set_roster_groups_broadcasts_and_prunes_detached_points():

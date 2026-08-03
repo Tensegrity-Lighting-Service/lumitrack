@@ -25,8 +25,8 @@ from .core.project import (
     Project, Point, Cue, Activation, import_stancz, save_bundle, load_bundle, list_archive,
 )
 from .core.timeline import (
-    Timeline, OutputTransform, resolve_block_context, required_duration_ms,
-    resolve_trajectories,
+    Timeline, OutputTransform, resolve_block_context,
+    required_fade_ms_per_point, resolve_trajectories, MIN_AUTO_DURATION_MS,
 )
 from .core.engine import Transport, PsnBroadcaster
 
@@ -272,6 +272,22 @@ async def _autosave_loop(session: Session):
             logger.exception("Échec de l'autosauvegarde")
 
 
+def _apply_auto_duration(project: Project, cue: Cue) -> None:
+    """Écrit la durée automatique : le fade_ms de CHAQUE activation du bloc
+    (ce qui gouverne réellement sa vitesse de déplacement), pas seulement
+    `cue.duration_ms` (largeur visuelle du bloc dans la timeline) — sinon
+    la boîte change de vitesse affichée mais les acteurs continuent de
+    bouger à leur ancien fade_ms (signalé 2026-08-03 : "la boîte a changé
+    de vitesse mais les acteurs non"). `cue.duration_ms` suit le plus lent,
+    les autres arrivent avant et attendent (maintien déjà existant)."""
+    per_point = required_fade_ms_per_point(project, cue)
+    for point_id, fade_ms in per_point.items():
+        act = cue.activations.get(point_id)
+        if act is not None:
+            act.fade_ms = fade_ms
+    cue.duration_ms = max(per_point.values(), default=MIN_AUTO_DURATION_MS)
+
+
 async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
     """Apply one client command. Returns a reply message (error/ack) to send
     only to the requester, or None — in which case the caller broadcasts a
@@ -379,7 +395,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             session.project.reference_speed_cms = max(1.0, float(msg["referenceSpeedCms"]))
             for cue in session.project.cues:
                 if cue.auto_duration:
-                    cue.duration_ms = required_duration_ms(session.project, cue)
+                    _apply_auto_duration(session.project, cue)
             session.timeline.rebuild()
             session.transport.set_duration(session.timeline.duration_ms)
         return None
@@ -563,7 +579,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # celle réglée à la main jusqu'à la prochaine activation touchée
             # — trompeur, la case semblerait ne rien faire).
             if cue.auto_duration:
-                cue.duration_ms = required_duration_ms(session.project, cue)
+                _apply_auto_duration(session.project, cue)
         session.project.sort_cues()
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
@@ -627,7 +643,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         # avoir changé de distance à parcourir, jamais ses voisins — recalcul
         # ciblé, pas un balayage de tout le projet à chaque frappe.
         if cue.auto_duration:
-            cue.duration_ms = required_duration_ms(session.project, cue)
+            _apply_auto_duration(session.project, cue)
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
         return None
