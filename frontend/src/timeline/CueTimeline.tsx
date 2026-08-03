@@ -26,15 +26,19 @@ import { useT } from '../i18n'
 import { showContextMenu } from '../ui/contextMenuStore'
 import { pickColor } from '../ui/colorPicker'
 import { NumericInput } from '../ui/NumericInput'
+import { chooseTickStep, computeTicks } from './ticks'
+import { setTimelineView } from './timelineView'
 import {
   canSplitAtPlayhead, copyCueToClipboard, copyTimingToOtherActors, duplicateCue,
   hasCueClipboard, pasteCueFromClipboard, splitCueAtPlayhead,
 } from './blockOps'
 
-const MS_PER_S = 1000
-const RULER_H = 26
-const AUDIO_H = 52
-const LANE_H = 36
+// Exportées : le panneau détail du bloc (BlockDetailPanel.tsx) partage ces
+// mêmes hauteurs pour rester visuellement aligné (même règle, même piste
+// audio) — mission "panneau détail du bloc synchronisé", 2026-08-03.
+export const RULER_H = 26
+export const AUDIO_H = 52
+export const LANE_H = 36
 const GRAPH_H = 190
 const MIN_CUE_MS = 100
 const SNAP_PX = 8
@@ -54,34 +58,9 @@ const CONTENT_PAD_PX = 160
 const CUE_PALETTE = ['#4F6DF5', '#F5734F', '#B06FE0', '#4FF58C', '#4FF5E0', '#F5C84F']
 
 
-// Pas de graduation adaptatif : le plus petit pas qui laisse >= ~80 px
-// entre deux labels. Les sous-graduations (step/5) apparaissent dès 12 px.
-const TICK_STEPS_MS = [
-  50, 100, 250, 500,
-  1000, 2000, 5000, 10_000, 15_000, 30_000,
-  60_000, 120_000, 300_000, 600_000,
-]
-
-function chooseTickStep(pxPerMs: number): number {
-  for (const step of TICK_STEPS_MS) {
-    if (step * pxPerMs >= 80) return step
-  }
-  return TICK_STEPS_MS[TICK_STEPS_MS.length - 1]
-}
-
-function formatTick(ms: number, stepMs: number): string {
-  const totalS = ms / MS_PER_S
-  const h = Math.floor(totalS / 3600)
-  const m = Math.floor((totalS % 3600) / 60)
-  const s = Math.floor(totalS % 60)
-  const pad = (n: number) => n.toString().padStart(2, '0')
-  const base = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
-  if (stepMs < 1000) {
-    const millis = Math.round(ms % 1000)
-    return `${base}.${millis.toString().padStart(3, '0')}`
-  }
-  return base
-}
+// Graduations : extraites dans ./ticks.ts (mission "panneau détail du bloc
+// synchronisé", 2026-08-03) pour que le panneau détail du bloc partage
+// EXACTEMENT le même calcul.
 
 interface DragState {
   cueId: string
@@ -179,6 +158,13 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   const [zooming, setZooming] = useState(false)
 
   const effPxPerMs = pxPerMs ?? 0.05
+
+  // Miroir en lecture seule pour BlockDetailPanel (mission "panneau détail
+  // du bloc synchronisé", 2026-08-03) — CueTimeline reste seul propriétaire
+  // du scroll/zoom réel, ce useEffect ne fait que publier.
+  useEffect(() => {
+    setTimelineView({ pxPerMs: effPxPerMs, scrollLeft })
+  }, [effPxPerMs, scrollLeft])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -366,19 +352,10 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   const contentWidth = Math.max(viewportWidth, durationMs * effPxPerMs + CONTENT_PAD_PX)
 
   // ---- règle : graduations visibles uniquement ----
-  const ticks = useMemo(() => {
-    const step = chooseTickStep(effPxPerMs)
-    const minor = step / 5
-    const showMinor = minor * effPxPerMs >= 12
-    const t0 = Math.max(0, Math.floor(scrollLeft / effPxPerMs / step - 1) * step)
-    const t1 = (scrollLeft + viewportWidth) / effPxPerMs + step
-    const out: { ms: number; label: string | null }[] = []
-    for (let t = t0; t <= t1; t += showMinor ? minor : step) {
-      const isMajor = Math.round(t) % step === 0
-      out.push({ ms: t, label: isMajor ? formatTick(t, step) : null })
-    }
-    return out
-  }, [effPxPerMs, scrollLeft, viewportWidth])
+  const ticks = useMemo(
+    () => computeTicks(effPxPerMs, scrollLeft, viewportWidth),
+    [effPxPerMs, scrollLeft, viewportWidth],
+  )
 
   // ---- seek au clic/drag sur la règle ----
   const seekTo = useCallback((clientX: number) => {

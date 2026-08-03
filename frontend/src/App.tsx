@@ -1066,16 +1066,17 @@ function App() {
         <BundleHistoryPanel path={bundlePath} onClose={() => setShowBundleHistory(false)} />
       )}
       {showAddActors && <AddActorsPanel project={project} onClose={() => setShowAddActors(false)} />}
-      {showBlockDetail && selectedCue && (
-        <BlockDetailPanel
-          cue={selectedCue}
-          projectPoints={project.points}
-          tMs={tMs}
-          onClose={() => setShowBlockDetail(false)}
-        />
-      )}
       <ContextMenu />
       <footer className="timeline-dock">
+        {showBlockDetail && selectedCue && (
+          <BlockDetailPanel
+            cue={selectedCue}
+            projectPoints={project.points}
+            tMs={tMs}
+            audioPath={project.audioPath}
+            onClose={() => setShowBlockDetail(false)}
+          />
+        )}
         <CueTimeline
           project={project}
           tMs={tMs}

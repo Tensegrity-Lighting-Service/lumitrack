@@ -799,54 +799,65 @@
 .psn-mono { font-family: ui-monospace, monospace; }
 .psn-up { color: #4ff58c; }
 
-/* ---- Panneau détail du bloc (2026-08-03) ---- */
-.block-detail-overlay {
-  position: fixed; inset: 0; z-index: 60;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex; align-items: center; justify-content: center;
+/* ---- Panneau détail du bloc — DOCKÉ, pas modal (2026-08-03) ----
+   Revu le même jour ("c'est pas une timeline, on ne sait pas dépasser le
+   bloc, et on ne voit pas la piste audio") : partage le zoom/scroll de la
+   vraie timeline (timelineView.ts) au lieu d'une échelle 0→durée du bloc
+   isolée. Docké au-dessus de CueTimeline (App.tsx), pas de backdrop — la
+   vraie timeline reste utilisable pendant que ce panneau est ouvert. */
+.block-detail-dock {
+  background: #16161c; border-top: 1px solid #2c2c36; border-bottom: 1px solid #2c2c36;
+  padding: 8px 14px 6px; flex-shrink: 0;
 }
-.block-detail-panel {
-  width: min(720px, 92vw); max-height: 80vh; overflow-y: auto;
-  background: #16161c; border: 1px solid #2c2c36; border-radius: 10px;
-  padding: 14px 18px 18px; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
-}
-.block-detail-head { display: flex; align-items: center; gap: 8px; }
-.block-detail-head h2 { margin: 0; font-size: 15px; }
-.block-detail-duration { font-size: 11.5px; color: #9a9aa8; font-family: ui-monospace, monospace; }
+.block-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.block-detail-head h2 { margin: 0; font-size: 13px; }
+.block-detail-duration { font-size: 11px; color: #9a9aa8; font-family: ui-monospace, monospace; }
 .block-detail-spacer { flex: 1; }
-.block-detail-hint { margin: 4px 0 12px; }
 /* Deux colonnes SIBLINGS (étiquettes / pistes) plutôt qu'une grille par
-   ligne — `tracksRef` (BlockDetailPanel.tsx) mesure `.block-detail-tracks`
-   pour convertir un delta de glisser en ms ; cette colonne ne doit donc
-   contenir QUE les pistes, jamais la colonne des étiquettes. */
-.block-detail-body { display: flex; }
-.block-detail-labels { flex: 0 0 132px; width: 132px; }
-.block-detail-tracks { position: relative; flex: 1; min-width: 0; }
-.block-detail-ruler-spacer { height: 20px; border-bottom: 1px solid #26262e; }
+   ligne — `.block-detail-tracks` (BlockDetailPanel.tsx) doit contenir
+   UNIQUEMENT les pistes, jamais la colonne des étiquettes, pour que sa
+   largeur mesurée (viewportWidth) corresponde exactement à la fenêtre de
+   temps visible. */
+.block-detail-body { display: flex; max-height: 200px; overflow-y: auto; }
+.block-detail-labels { flex-shrink: 0; border-right: 1px solid #26262e; }
+.block-detail-tracks { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.block-detail-ruler-spacer { border-bottom: 1px solid #26262e; }
 .block-detail-ruler {
-  display: flex; justify-content: space-between; align-items: flex-end;
-  height: 20px; box-sizing: border-box;
-  font-size: 10.5px; color: #6e6e7c; font-family: ui-monospace, monospace;
-  padding-bottom: 4px; border-bottom: 1px solid #26262e;
+  position: relative; box-sizing: border-box;
+  font-size: 10px; color: #6e6e7c; font-family: ui-monospace, monospace;
+  border-bottom: 1px solid #26262e; overflow: hidden;
+}
+.block-detail-audio-spacer { border-bottom: 1px solid #1d1d24; }
+.block-detail-audio { border-bottom: 1px solid #1d1d24; overflow: hidden; }
+.mini-waveform-canvas { display: block; }
+/* Le bloc n'est plus toute l'étendue affichée : une région surlignée dans
+   le référentiel de temps partagé, comme la sélection de plage de la
+   timeline (même esprit visuel que .tl-range-overlay). */
+.block-detail-extent {
+  position: absolute; top: 0; bottom: 0; z-index: 1;
+  background: rgba(79, 109, 245, 0.10);
+  border-left: 1px solid rgba(140, 160, 255, 0.5);
+  border-right: 1px solid rgba(140, 160, 255, 0.5);
+  pointer-events: none;
 }
 .block-detail-playhead {
   position: absolute; top: 0; bottom: 0; width: 1px;
   background: #f5734f; z-index: 2; pointer-events: none;
 }
 .block-detail-row-label {
-  display: flex; align-items: center; gap: 5px; height: 30px; box-sizing: border-box;
-  font-size: 11.5px; color: #cfd6ff; white-space: nowrap; overflow: hidden;
+  display: flex; align-items: center; gap: 5px; box-sizing: border-box;
+  font-size: 11px; color: #cfd6ff; white-space: nowrap; overflow: hidden;
   border-bottom: 1px solid #1d1d24;
 }
 .block-detail-row-name { overflow: hidden; text-overflow: ellipsis; }
 .block-detail-revert { flex-shrink: 0; }
 .block-detail-row-track {
-  position: relative; height: 30px; box-sizing: border-box;
+  position: relative; box-sizing: border-box;
   border-bottom: 1px solid #1d1d24; display: flex; align-items: center;
 }
 .block-detail-bar {
-  position: absolute; top: 0; height: 100%; border-radius: 4px;
-  cursor: grab; display: flex; align-items: center;
+  position: absolute; top: 2px; bottom: 2px; border-radius: 4px;
+  cursor: grab; display: flex; align-items: center; z-index: 2;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
 .block-detail-bar:active { cursor: grabbing; }

@@ -829,6 +829,25 @@ d'une barre déplace le décalage de départ, glisser son bord droit change le
 fade (marque `fadeOverridden`) ; bouton "revenir au bloc" par ligne quand
 personnalisé. Glisser implémenté avec `@dnd-kit/core` (déjà une dépendance)
 plutôt qu'un nouveau câblage pointerdown/move/up à la main.
+**Refonte "panneau synchronisé" (2026-08-03, même jour)** : premier retour
+de Florian sur le panneau ci-dessus — "c'est pas une timeline, on ne sait
+pas dépasser le bloc, et on ne voit pas la piste audio". Trois options
+proposées (enrichir le panneau isolé / le synchroniser sur le zoom-scroll
+de la vraie timeline / tout replier dans la timeline principale) ;
+Florian a choisi la synchronisation. Livré : le panneau devient DOCKÉ
+au-dessus de CueTimeline (plus une fenêtre modale bloquante — la vraie
+timeline reste utilisable pendant qu'il est ouvert) et partage son
+zoom/scroll via un nouveau store `timelineView.ts` (miroir en lecture
+seule, CueTimeline reste seul propriétaire du scroll/zoom réel). Règle
+partagée via `ticks.ts` (extrait de CueTimeline, mêmes graduations
+exactement). Piste audio via `MiniWaveform.tsx` + `audioPeaks.ts` : un
+second `<AudioTrack>` aurait fait jouer le son deux fois (deuxième
+instance wavesurfer) — `audioPeaks.ts` republie en lecture seule les pics
+qu'AudioTrack a déjà décodés/mis en cache, `MiniWaveform` ne fait que
+redessiner un canvas à partir de ces pics, aucun moteur audio à lui. Le
+bloc n'est plus toute l'étendue affichée : une région surlignée dans un
+référentiel de temps partagé — glisser une barre peut désormais dépasser
+le bloc (plafond retiré, le modèle le permettait déjà côté backend).
 
 **7. Refonte de l'inspecteur** — actuellement `CueInspector` affiche TOUTES
 les activations d'un bloc dépliées en même temps (pas l'esprit AE, où le

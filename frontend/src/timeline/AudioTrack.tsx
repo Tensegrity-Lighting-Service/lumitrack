@@ -19,18 +19,12 @@ import WaveSurfer from 'wavesurfer.js'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { sidecar } from '../sidecar'
 import { useT } from '../i18n'
+import { setAudioPeaks, type Peaks } from './audioPeaks'
 
 const DRIFT_THRESHOLD_S = 0.2
 const PEAK_BUCKETS_PER_S = 100 // résolution des pics précalculés
 const MAX_PEAK_BUCKETS = 60_000
 const TILE_W = 1024 // largeur d'une tuile de waveform (px contenu)
-
-interface Peaks {
-  min: Float32Array
-  max: Float32Array
-  bucketMs: number
-  durationS: number
-}
 
 // ---- cache des pics (IndexedDB) ----
 //
@@ -154,11 +148,13 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
         if (cancelled) return
         if (cached && Math.abs(cached.durationS - buffer.duration) < 0.05) {
           setPeaks(cached)
+          setAudioPeaks(audioPath, cached)
           return
         }
         computePeaksAsync(buffer, () => cancelled).then((result) => {
           if (!result || cancelled) return
           setPeaks(result)
+          setAudioPeaks(audioPath, result)
           saveCachedPeaks(audioPath, result)
         })
       })
@@ -173,6 +169,7 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
       ws.destroy()
       wsRef.current = null
       setPeaks(null)
+      setAudioPeaks(audioPath, null)
     }
     // knownDurationS volontairement absent des deps : il ne sert qu'au
     // moment du décodage, et en dépendre recréerait l'instance audio (et
