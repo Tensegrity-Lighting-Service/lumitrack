@@ -979,6 +979,72 @@ un système de points de focus RÉUTILISABLES et nommés (comme les zones
 backstage) plutôt que des coordonnées libres par activation, si le besoin
 s'en fait sentir à l'usage.
 
+## Mission "modes d'orientation + points de focus + presets de montage" (2026-08-04) — EN COURS
+
+Discutée en profondeur avec Florian avant tout code (plan approuvé,
+`C:\Users\decle\.claude\plans\lazy-spinning-koala.md`), à partir d'un
+constat double : les 3 modes d'orientation actuels (manual/path/focus,
+livrés le 08-01) ne distinguent pas "pendant le trajet" de "à l'arrivée",
+n'ont pas de réglage par bloc (contrairement au timing, point 6), et un
+point de focus n'est qu'une paire de coordonnées tapées à la main sans
+marqueur visuel ; plus un besoin concret nouveau — piloter un tube Astera
+Titan (pixel 1 côté connecteur d'alimentation, confirmé depuis le fichier
+CAO du fabricant) qui peut être monté horizontal/vertical/posé au sol.
+
+4 chantiers, chacun testé et commité indépendamment, dans l'ordre de
+dépendance A → B → C → D :
+
+**A. Redesign visuel de l'acteur — ✅ LIVRÉ (2026-08-04).** Sphère 3D
+(0,4 m, illisible à l'échelle d'un vrai terrain) remplacée par un disque
+plat + encoche directionnelle ; sélection = anneau blanc fin (plus de
+lueur émissive, jugée "trop vulgaire"). Aller-retour en direct avec
+Florian sur la taille : screen-constant essayé puis rejeté (grossit sans
+borne au dézoom, blob au moindre regroupement d'acteurs — ex. la ligne
+backstage) ; retenu une taille FIXE en espace réel, confirmée à 60 cm de
+diamètre (référence de Florian : largeur d'épaules / tube Astera tenu).
+Devenu un réglage PROJET (`Project.actorDiameterCm`, menu Réglages,
+nouveau type d'item "numeric" dans `MenuItemDef`) plutôt qu'une
+constante — le fixture réellement porté varie d'un show à l'autre.
+Purement visuel, aucun miroir Rust nécessaire.
+
+**B. Points de focus — ✅ LIVRÉ (2026-08-04).** Nouveau `Point
+.is_focus_point: bool` (booléen, pas un enum — même logique que
+`fade_overridden`/`auto_duration`) : un simple repère de visée, pas un
+acteur réel — exclu du PSN (`Broadcaster.build_trackers`), exclu de la
+grille backstage (`backstage_slot`, garde ET exclusion de la liste des
+occupants pour ne pas décaler les vrais acteurs qui partagent la zone).
+Miroir Rust nécessaire (contrairement à `roster_group_id`/
+`default_orientation_mode`, purs conventions d'édition) puisque ce champ
+affecte `backstage_slot`, donc la résolution. Numérotation en LETTRES
+(compteur séparé des acteurs) portée par le NOM à la création ("Focus
+A", "Focus B"…) plutôt qu'un nouveau champ — `Point.number` reste
+`null`/inutilisé pour un point de focus. Création via un bouton dédié
+("+ Point de focus", roster), pas le panneau d'ajout en lot pensé pour
+la numérotation des acteurs. Section roster séparée, menu contextuel
+réduit (pas d'orientation ni de dossier), marqueur scène en losange
+(réutilise `PathMarker`, déjà écran-constant — même vocabulaire visuel
+que les poignées de tracé spatial).
+
+**C. Refonte du modèle d'orientation — pas commencé.** Le plus gros
+chantier : séparer "en trajet"/"à l'arrivée" (3 choix chacun : Fixe avec
+sélecteur boussole 8 directions/Suit la trajectoire ou Ne change pas/
+Focus vers un point choisi), abandon du lacet animé en douceur (ancien
+"manuel"), réglage par défaut à 2 niveaux (Point puis Cue, même esprit
+que le timing point 6), restructuration en 2 passes de
+`resolve_positions`/`resolve_block_context` (un point en mode "focus"
+doit lire la position d'un AUTRE point déjà résolue au même instant).
+Migration des anciens projets (orientationMode/focusXCm/targetYawDeg)
+prévue. Détail complet dans le fichier de plan ci-dessus.
+
+**D. Presets de montage de fixture — pas commencé.** Liste de presets
+nommés et éditables au niveau projet (pas un enum codé en dur), assignés
+PAR ACTEUR (un vrai plateau mélange des montages différents en même
+temps) ; dérive tangage/roulis depuis le lacet déjà résolu, au moment de
+l'émission PSN uniquement (aucune nouvelle timeline d'animation). Formule
+de composition 3D signalée comme base de départ à régler en direct face
+au vrai matériel, pas quelque chose qu'une revue de code peut valider
+seule.
+
 ## Régression signalée, pas encore diagnostiquée (2026-08-04)
 
 Florian, en cours de session (redesign visuel des acteurs) : "le [app] ne

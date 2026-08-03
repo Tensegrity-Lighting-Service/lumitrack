@@ -478,6 +478,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             point.default_height_cm = float(msg["defaultHeightCm"])
         if "defaultOrientationMode" in msg:
             point.default_orientation_mode = msg["defaultOrientationMode"]
+        if "isFocusPoint" in msg:
+            point.is_focus_point = bool(msg["isFocusPoint"])
         return None
 
     if msg_type == "delete_point":
@@ -556,6 +558,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             id=pid, name=msg.get("name", "Point"), number=msg.get("number"),
             color=msg.get("color", "#4F6DF5"),
             roster_group_id=msg.get("rosterGroupId"),
+            is_focus_point=bool(msg.get("isFocusPoint", False)),
         ))
         # Attache backstage immédiate : le nouvel acteur apparaît dans sa
         # zone au lieu d'être invisible (mission backstage).

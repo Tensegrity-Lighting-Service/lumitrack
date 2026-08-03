@@ -138,6 +138,7 @@ class SidecarClient {
     psnTrackerId?: number | null; defaultHeightCm?: number
     homeZoneId?: string | null; rosterGroupId?: string | null
     defaultOrientationMode?: 'manual' | 'path' | 'focus'
+    isFocusPoint?: boolean
   }) {
     this.send({ type: 'update_point', pointId, ...patch })
   }
@@ -145,6 +146,13 @@ class SidecarClient {
   // ---- editing ----
   addPoint(name: string, number?: number, rosterGroupId?: string | null, color?: string, id?: string) {
     this.send({ type: 'add_point', name, number, rosterGroupId, color, id })
+  }
+  /** Simple repère de visée, pas un acteur réel — bouton dédié plutôt que
+   * le panneau d'ajout en lot (numéroté), qui ne s'applique pas ici : un
+   * point de focus n'entre jamais dans le compteur numérique des acteurs
+   * (mission "modes d'orientation", 2026-08-04). */
+  addFocusPoint(name: string, color: string, id: string) {
+    this.send({ type: 'add_point', name, color, id, isFocusPoint: true })
   }
   /** Jamais possible avant la mission "hiérarchie du roster" (2026-07-31) :
    * le roster ne savait qu'ajouter. */

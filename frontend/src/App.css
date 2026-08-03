@@ -187,6 +187,17 @@
   border-top: 1px dashed #2b2f38; cursor: default !important;
 }
 .roster-ungrouped-zone:hover { background: #22262f; }
+/* Points de focus (mission "modes d'orientation", 2026-08-04) : simples
+   repères de visée, jamais mélangés aux dossiers d'acteurs — section à
+   part, même style d'étiquette que "SANS GROUPE" ci-dessus. Losange plutôt
+   qu'un rond pour le swatch : même vocabulaire visuel que leur marqueur
+   dans la scène (PathMarker en mode "diamant"). */
+.roster-section-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em;
+  color: #6e7686; padding: 4px 6px !important; margin-top: 4px;
+  border-top: 1px dashed #2b2f38; cursor: default !important;
+}
+.focus-point-swatch { border-radius: 2px; transform: rotate(45deg); }
 
 /* Badge suivant le curseur pendant un glisser d'acteur(s)/dossier — seul
    retour visuel du geste depuis le passage en pointer-events (2026-07-31,

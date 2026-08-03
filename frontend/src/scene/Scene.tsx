@@ -35,7 +35,7 @@ import { sidecar } from '../sidecar'
 import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, PathPoint, Point, Project, Pose } from '../types'
 import { boundsOf, rotationArc } from './transformBox'
 import { openContextMenu } from '../ui/contextMenuStore'
-import { buildActorContextMenuSections } from '../ui/actorContextMenu'
+import { buildActorContextMenuSections, buildFocusPointContextMenuSections } from '../ui/actorContextMenu'
 import { t } from '../i18n'
 
 const CM_TO_M = 0.01
@@ -76,6 +76,12 @@ const GHOST_PX = 15
 const ACTOR_LABEL_PX = 18
 // Waypoints/poignées du tracé spatial : mêmes règles d'échelle écran.
 const WAYPOINT_PX = 9
+// Point de focus (mission "modes d'orientation", 2026-08-04) : un simple
+// repère de visée, pas un acteur — taille écran constante comme le reste de
+// ce vocabulaire visuel (contrairement à l'acteur, redevenu taille fixe en
+// espace réel : un point de focus n'a pas d'occupation physique réelle à
+// représenter fidèlement, juste un repère à toujours voir).
+const FOCUS_MARKER_PX = 16
 const BOX_PAD_PX = 14
 const PATH_HANDLE_PX = 6
 // Live-state dimming in block-edit mode (§12.6): activated actors stay
@@ -269,6 +275,17 @@ function actorLabelText(point: Point): string {
   return trimmed.slice(0, 2).toUpperCase()
 }
 
+/** Étiquette d'un point de focus : juste sa lettre ("Focus A" -> "A"), pas
+ * les initiales comme actorLabelText — un point de focus n'a pas de
+ * numéro, et prendre les initiales de "Focus A" donnerait "FA", pas "A".
+ * Robuste à un renommage : dernier mot du nom, pas un motif figé. */
+function focusPointLabelText(point: Point): string {
+  const trimmed = point.name.trim()
+  if (!trimmed) return '?'
+  const words = trimmed.split(/\s+/).filter(Boolean)
+  return words[words.length - 1] ?? '?'
+}
+
 /** Badge numéro/abrégé au-dessus de l'acteur : plan à taille écran
  * constante (même technique que ScreenSizedHandle/TargetGhost), texte
  * rendu dans un CanvasTexture avec contour sombre pour rester lisible sur
@@ -353,7 +370,7 @@ function Trajectory({ path, color, emphasis, onDoubleClick }: {
 
 /** Marqueur d'édition du tracé à taille écran constante (waypoint = carré
  * pivoté, poignée = disque). Même logique de zoom que TargetGhost. */
-function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown }: {
+function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown, onContextMenu }: {
   xCm: number
   yCm: number
   zCm: number
@@ -362,6 +379,7 @@ function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown }
   shape: 'diamond' | 'dot'
   selected: boolean
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
+  onContextMenu?: (e: ThreeEvent<MouseEvent>) => void
 }) {
   const [x, y, z] = stageToLocal(xCm, yCm, zCm)
   const ref = useRef<THREE.Group>(null)
@@ -377,6 +395,7 @@ function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown }
         ref={ref}
         rotation={[-Math.PI / 2, 0, shape === 'diamond' ? Math.PI / 4 : 0]}
         onPointerDown={onPointerDown}
+        onContextMenu={onContextMenu}
         onPointerOver={() => { document.body.style.cursor = 'grab' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
       >
@@ -2180,6 +2199,15 @@ function SceneContent({
     openContextMenu(e.clientX, e.clientY, buildActorContextMenuSections(point, project))
   }
 
+  const handleFocusPointContextMenu = (e: ThreeEvent<MouseEvent>, pointId: string) => {
+    e.stopPropagation()
+    e.nativeEvent.preventDefault()
+    const point = project.points.find((p) => p.id === pointId)
+    if (!point) return
+    onSelectPoint(pointId)
+    openContextMenu(e.clientX, e.clientY, buildFocusPointContextMenuSections(point))
+  }
+
   const emphasisFor = (pointId: string): Emphasis => {
     // Un acteur sélectionné qui n'est PAS activé dans le bloc ne doit pas
     // tout atténuer (verdict Mission 1, point c) : sans rien à mettre en
@@ -2280,6 +2308,20 @@ function SceneContent({
           const inBackstage = (project.backstageZones ?? []).some((z) =>
             pose[0] >= z.xCm && pose[0] <= z.xCm + z.widthCm
             && pose[1] >= z.yCm && pose[1] <= z.yCm + z.heightCm)
+          if (point.isFocusPoint) {
+            return (
+              <group key={point.id}>
+                <PathMarker
+                  xCm={pose[0]} yCm={pose[1]} zCm={pose[2]} px={FOCUS_MARKER_PX}
+                  color={point.color} shape="diamond"
+                  selected={selectedPointIds.includes(point.id)}
+                  onPointerDown={(e) => handleActorPointerDown(e, point.id)}
+                  onContextMenu={(e) => handleFocusPointContextMenu(e, point.id)}
+                />
+                <ActorLabel text={focusPointLabelText(point)} xCm={pose[0]} yCm={pose[1]} zCm={pose[2]} opacity={opacity} />
+              </group>
+            )
+          }
           return (
             <group key={point.id}>
               <Actor

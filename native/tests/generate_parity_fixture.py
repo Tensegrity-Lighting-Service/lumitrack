@@ -25,6 +25,10 @@ def rand_project(n_points, n_cues):
     ]
     for pt in p.points:
         pt.home_zone_id = random.choice(["bsA", "bsB", None])
+        # ~15% de points de focus (mission "modes d'orientation", 2026-08-04)
+        # — exerce la garde backstage_slot (jamais de place en coulisse, et
+        # ne creuse jamais d'écart pour les vrais acteurs de la même zone).
+        pt.is_focus_point = random.random() < 0.15
     easings = ["linear", "smooth", "ease-in", "ease-out", "bounce", "spring", "exponential"]
 
     def rand_curve():

@@ -61,3 +61,35 @@ export function buildActorContextMenuSections(point: Point, project: Project): C
     ],
   ]
 }
+
+/** Menu contextuel "Point de focus" — un simple repère de visée, pas un
+ * acteur réel : pas de section mode d'orientation (il n'en a pas), pas de
+ * section dossier (vit dans sa propre liste du roster, pas les dossiers
+ * d'acteurs). Rename/couleur/dupliquer/supprimer réutilisés tels quels. */
+export function buildFocusPointContextMenuSections(point: Point): ContextMenuSections {
+  return [
+    [
+      {
+        label: t('contextMenu.rename'),
+        onClick: () => {
+          const name = window.prompt(t('contextMenu.renameActorPrompt'), point.name)
+          if (name && name !== point.name) sidecar.updatePoint(point.id, { name })
+        },
+      },
+      { label: t('contextMenu.color'), onClick: () => pickColor(point.color, (hex) => sidecar.updatePoint(point.id, { color: hex })) },
+      {
+        label: t('contextMenu.duplicate'),
+        onClick: () => sidecar.addFocusPoint(`${point.name} (copie)`, point.color, crypto.randomUUID()),
+      },
+    ],
+    [
+      {
+        label: t('contextMenu.delete'),
+        danger: true,
+        onClick: () => {
+          if (window.confirm(t('contextMenu.deleteActorConfirm', { name: point.name }))) sidecar.deletePoint(point.id)
+        },
+      },
+    ],
+  ]
+}

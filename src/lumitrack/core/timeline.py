@@ -278,9 +278,17 @@ def backstage_slot(project: Project, point_id: str):
     me = project.point_by_id(point_id)
     if me is None:
         return None
+    # Un point de focus n'est qu'un repère de visée, pas un acteur réel : il
+    # n'attend jamais en coulisse (mission "modes d'orientation", 2026-08-04).
+    if me.is_focus_point:
+        return None
     my_zone_id = zone_of(me)
     zone = zones[my_zone_id]
-    occupants = [pt.id for pt in project.points if zone_of(pt) == my_zone_id]
+    # Exclut aussi les points de focus des occupants — sinon un point de
+    # focus partageant la zone d'un acteur lui volerait une case dans la
+    # grille (décalage visible) sans jamais l'occuper lui-même (garde
+    # ci-dessus).
+    occupants = [pt.id for pt in project.points if zone_of(pt) == my_zone_id and not pt.is_focus_point]
     idx = occupants.index(point_id)
     cols = max(1, int(float(zone["widthCm"]) // BACKSTAGE_SPACING_CM))
     row, col = divmod(idx, cols)

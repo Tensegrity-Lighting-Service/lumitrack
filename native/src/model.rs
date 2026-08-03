@@ -22,6 +22,13 @@ pub struct Point {
     /// Zone backstage d'attache (mission backstage) — None = première zone.
     #[serde(default)]
     pub home_zone_id: Option<String>,
+    /// Point de focus (mission "modes d'orientation", 2026-08-04) : simple
+    /// repère de visée, jamais placé en coulisse (backstage_slot) — DOIT
+    /// être mirroré, contrairement à roster_group_id/default_orientation_mode
+    /// ci-dessus (conventions d'édition pures que la résolution ne lit
+    /// jamais, absentes de ce struct exprès).
+    #[serde(default)]
+    pub is_focus_point: bool,
 }
 
 fn default_color() -> String { "#4F6DF5".to_string() }

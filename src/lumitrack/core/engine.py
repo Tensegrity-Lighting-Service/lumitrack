@@ -179,6 +179,12 @@ class PsnBroadcaster:
         poses = timeline.positions_at(t_ms)
         trackers = []
         for index, point in enumerate(project.points):
+            if point.is_focus_point:
+                # Un simple repère de visée, pas un fixture réel — jamais
+                # émis en PSN (mission "modes d'orientation", 2026-08-04).
+                # `index` continue quand même : garde stable
+                # resolved_tracker_id() des acteurs déjà en place.
+                continue
             pose = poses.get(point.id)
             if pose is None:
                 continue  # never invent a position at (0,0)

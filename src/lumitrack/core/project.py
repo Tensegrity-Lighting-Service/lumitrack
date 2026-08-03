@@ -71,6 +71,14 @@ class Point:
     # seule valeur qui compte une fois l'activation créée) : pas de miroir
     # Rust nécessaire.
     default_orientation_mode: str = "manual"
+    # Point de focus (mission "modes d'orientation", 2026-08-04) : un simple
+    # repère de visée, pas un acteur réel — pas d'orientation propre, jamais
+    # émis en PSN (core/engine.py::Broadcaster.build_trackers), jamais placé
+    # dans la grille backstage (timeline.py::backstage_slot). Contrairement
+    # à roster_group_id/default_orientation_mode (conventions d'édition
+    # pures), CE champ affecte la résolution (backstage_slot) — miroir Rust
+    # nécessaire (native/src/model.rs::Point).
+    is_focus_point: bool = False
 
     def resolved_tracker_id(self, fallback_index: int) -> int:
         if self.psn_tracker_id is not None:
@@ -89,6 +97,7 @@ class Point:
             "homeZoneId": self.home_zone_id,
             "rosterGroupId": self.roster_group_id,
             "defaultOrientationMode": self.default_orientation_mode,
+            "isFocusPoint": self.is_focus_point,
         }
 
     @classmethod
@@ -100,6 +109,7 @@ class Point:
             home_zone_id=d.get("homeZoneId"),
             roster_group_id=d.get("rosterGroupId"),
             default_orientation_mode=d.get("defaultOrientationMode", "manual"),
+            is_focus_point=bool(d.get("isFocusPoint", False)),
         )
 
 

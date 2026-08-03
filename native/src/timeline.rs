@@ -71,10 +71,18 @@ fn backstage_slot(project: &Project, point_id: &str) -> Option<(f64, f64)> {
         }
     };
     let me = project.points.iter().find(|p| p.id == point_id)?;
+    // Un point de focus n'est qu'un repère de visée, pas un acteur réel : il
+    // n'attend jamais en coulisse (mission "modes d'orientation", 2026-08-04).
+    if me.is_focus_point {
+        return None;
+    }
     let my_zone_id = zone_of(me);
     let zone = project.backstage_zones.iter().find(|z| z.id == my_zone_id)?;
+    // Exclut aussi les points de focus des occupants — sinon un point de
+    // focus partageant la zone d'un acteur lui volerait une case dans la
+    // grille sans jamais l'occuper lui-même (garde ci-dessus).
     let occupants: Vec<&str> = project.points.iter()
-        .filter(|p| zone_of(p) == my_zone_id)
+        .filter(|p| zone_of(p) == my_zone_id && !p.is_focus_point)
         .map(|p| p.id.as_str())
         .collect();
     let idx = occupants.iter().position(|id| *id == point_id)? as f64;
@@ -471,7 +479,7 @@ mod tests {
         Point {
             id: id.into(), name: id.to_uppercase(), number: None,
             color: "#fff".into(), psn_tracker_id: None, default_height_cm: 0.0,
-            home_zone_id: None,
+            home_zone_id: None, is_focus_point: false,
         }
     }
 

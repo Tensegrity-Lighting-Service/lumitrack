@@ -16,7 +16,7 @@ import { AddActorsPanel } from './ui/AddActorsPanel'
 import { BlockDetailPanel } from './ui/BlockDetailPanel'
 import { ContextMenu } from './ui/ContextMenu'
 import { showContextMenu } from './ui/contextMenuStore'
-import { buildActorContextMenuSections } from './ui/actorContextMenu'
+import { buildActorContextMenuSections, buildFocusPointContextMenuSections } from './ui/actorContextMenu'
 import {
   DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
   type DragEndEvent, type DragOverEvent, type DragStartEvent,
@@ -260,6 +260,51 @@ function RosterPointRow({ point, project, selected, moving, offstage, onSelect, 
       {point.number !== null && <span className="point-number">{point.number}</span>}
       <span className="point-name">{point.name}</span>
       {offstage && <span className="offstage" title={t('roster.offstage')}>•</span>}
+    </li>
+  )
+}
+
+/** Prochaine lettre libre (A, B, C…) pour nommer un nouveau point de focus
+ * — compteur SÉPARÉ du numéro des acteurs (mission "modes d'orientation",
+ * 2026-08-04) : un point de focus n'a pas de `number` du tout, juste un nom
+ * "Focus X" dont on scanne la lettre. Au-delà de Z (26 points de focus,
+ * improbable en pratique), passe à AA/AB… */
+function firstFreeLetter(existingNames: string[]): string {
+  const used = new Set(
+    existingNames
+      .map((n) => /^Focus ([A-Z]+)$/.exec(n)?.[1])
+      .filter((x): x is string => Boolean(x)),
+  )
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  for (const letter of alphabet) if (!used.has(letter)) return letter
+  for (const a of alphabet) for (const b of alphabet) {
+    const letters = a + b
+    if (!used.has(letters)) return letters
+  }
+  return 'X'
+}
+
+/** Ligne de point de focus du roster — version allégée de RosterPointRow :
+ * pas de statut mouvant/offstage (un repère de visée n'a pas de "vie"
+ * propre au sens acteur), pas de glisser-déposer dnd-kit (liste séparée,
+ * pas de dossiers ni de réordonnancement pour l'instant). */
+function FocusPointRow({ point, selected, onSelect }: {
+  point: Point
+  selected: boolean
+  onSelect: (e: React.MouseEvent) => void
+}) {
+  return (
+    <li
+      className={selected ? 'selected' : ''}
+      onClick={onSelect}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        if (!selected) onSelect(e)
+        showContextMenu(e, buildFocusPointContextMenuSections(point))
+      }}
+    >
+      <span className="swatch focus-point-swatch" style={{ background: point.color }} />
+      <span className="point-name">{point.name}</span>
     </li>
   )
 }
@@ -839,6 +884,15 @@ function App() {
           >
             {t('roster.addActorBtn')}
           </button>
+          <button
+            title={t('roster.addFocusPointHint')}
+            onClick={() => {
+              const letter = firstFreeLetter(project.points.filter((p) => p.isFocusPoint).map((p) => p.name))
+              sidecar.addFocusPoint(`Focus ${letter}`, '#D8D8E2', crypto.randomUUID())
+            }}
+          >
+            {t('roster.addFocusPointBtn')}
+          </button>
         </div>
         <ul>
           {(() => {
@@ -871,15 +925,19 @@ function App() {
             }
 
             // Groupes (dans leur ordre défini) d'abord, acteurs sans groupe
-            // ensuite — purement pour ordonner la vue.
+            // ensuite — purement pour ordonner la vue. Les points de focus
+            // (simples repères de visée, pas des acteurs) vivent dans leur
+            // propre section plus bas, jamais mélangés aux dossiers.
             const grouped = project.rosterGroups.map((g) => ({
               group: g,
-              members: project.points.filter((p) => p.rosterGroupId === g.id),
+              members: project.points.filter((p) => p.rosterGroupId === g.id && !p.isFocusPoint),
             }))
             const ungrouped = project.points.filter((p) =>
-              !project.rosterGroups.some((g) => g.id === p.rosterGroupId))
+              !p.isFocusPoint && !project.rosterGroups.some((g) => g.id === p.rosterGroupId))
+            const focusPoints = project.points.filter((p) => p.isFocusPoint)
 
             return (
+              <>
               <SortableContext
                 items={project.rosterGroups.map((g) => `group:${g.id}`)}
                 strategy={verticalListSortingStrategy}
@@ -960,6 +1018,20 @@ function App() {
                   ))}
                 </SortableContext>
               </SortableContext>
+              {focusPoints.length > 0 && (
+                <>
+                  <li className="roster-section-label">{t('roster.focusPointsSection')}</li>
+                  {focusPoints.map((p) => (
+                    <FocusPointRow
+                      key={p.id}
+                      point={p}
+                      selected={selectedPointIds.includes(p.id)}
+                      onSelect={selectRange(p)}
+                    />
+                  ))}
+                </>
+              )}
+              </>
             )
           })()}
         </ul>

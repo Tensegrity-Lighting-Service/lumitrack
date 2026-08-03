@@ -377,6 +377,22 @@ def test_add_point_accepts_a_roster_group_id():
     assert session.project.point_by_id("new1").roster_group_id == "g1"
 
 
+def test_add_point_and_update_point_accept_is_focus_point():
+    session = Session()
+    _run(_handle_message(session, {
+        "type": "add_point", "id": "focus1", "name": "Focus A", "isFocusPoint": True,
+    }))
+    assert session.project.point_by_id("focus1").is_focus_point is True
+
+    _run(_handle_message(session, {"type": "add_point", "id": "actor1", "name": "Acteur"}))
+    assert session.project.point_by_id("actor1").is_focus_point is False
+
+    _run(_handle_message(session, {
+        "type": "update_point", "pointId": "actor1", "isFocusPoint": True,
+    }))
+    assert session.project.point_by_id("actor1").is_focus_point is True
+
+
 def test_default_orientation_mode_prefills_new_activation_only():
     """Menu contextuel "mode d'orientation par défaut" (DIRECTIVES.md point
     5) : préremplit une activation TOUTE NEUVE, n'a plus aucun effet une

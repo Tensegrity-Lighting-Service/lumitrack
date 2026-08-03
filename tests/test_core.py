@@ -1297,3 +1297,30 @@ def test_backstage_roundtrip():
     p2 = Project.from_dict(p.to_dict())
     assert p2.backstage_zones == p.backstage_zones
     assert p2.points[0].home_zone_id == p.points[0].home_zone_id
+
+
+def test_focus_point_is_excluded_from_backstage_grid():
+    """Mission "modes d'orientation" (2026-08-04) : un point de focus n'est
+    qu'un repère de visée, pas un acteur réel — jamais placé en coulisse, et
+    ne doit pas non plus voler une case à un vrai acteur qui partage la même
+    zone."""
+    from lumitrack.core.timeline import backstage_slot, BACKSTAGE_SPACING_CM
+    p = _bs_project()
+    p.points[1].is_focus_point = True
+
+    assert backstage_slot(p, "p1") is None  # jamais de place en coulisse
+
+    # p0 et p2 restent adjacents (p1, exclu, ne creuse pas d'écart entre eux).
+    s0 = backstage_slot(p, "p0")
+    s2 = backstage_slot(p, "p2")
+    assert abs(s2[0] - s0[0]) == BACKSTAGE_SPACING_CM or abs(s2[1] - s0[1]) == BACKSTAGE_SPACING_CM
+
+
+def test_focus_point_default_and_roundtrip():
+    from lumitrack.core.project import Point, Project
+    assert Point(id="a", name="A").is_focus_point is False
+    p = _bs_project()
+    p.points[0].is_focus_point = True
+    p2 = Project.from_dict(p.to_dict())
+    assert p2.points[0].is_focus_point is True
+    assert p2.points[1].is_focus_point is False

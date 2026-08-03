@@ -18,6 +18,10 @@ export interface Point {
   /** Préremplit UNIQUEMENT les nouvelles activations de cet acteur — aucune
    * autorité sur celles déjà réglées (DIRECTIVES.md point 5). */
   defaultOrientationMode: 'manual' | 'path' | 'focus'
+  /** Simple repère de visée, pas un acteur réel — pas d'orientation propre,
+   * jamais émis en PSN, jamais placé en coulisse (mission "modes
+   * d'orientation", 2026-08-04). */
+  isFocusPoint: boolean
 }
 
 /** Sous-groupe du roster — juste un nom, l'ordre/l'appartenance vivent sur
