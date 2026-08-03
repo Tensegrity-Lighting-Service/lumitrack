@@ -409,6 +409,11 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
                     _apply_auto_duration(session.project, cue)
             session.timeline.rebuild()
             session.transport.set_duration(session.timeline.duration_ms)
+        if "actorDiameterCm" in msg and msg["actorDiameterCm"] is not None:
+            # Purement visuel (taille du marqueur dans la scène) : aucun
+            # recalcul de timeline nécessaire, contrairement à la vitesse
+            # de référence ci-dessus.
+            session.project.actor_diameter_cm = max(1.0, float(msg["actorDiameterCm"]))
         return None
 
     if msg_type == "list_ifaces":

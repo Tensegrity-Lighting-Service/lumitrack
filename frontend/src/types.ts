@@ -135,6 +135,8 @@ export interface Project {
   terrainRotationDeg: number
   /** cm/s — durée des blocs en "durée automatique" (distance / vitesse). */
   referenceSpeedCms: number
+  /** Diamètre du marqueur d'acteur dans la scène (cm) — purement visuel. */
+  actorDiameterCm: number
   backstageZones: BackstageZone[]
   rosterGroups: RosterGroup[]
   points: Point[]

@@ -150,6 +150,7 @@ function HorizontalResizer({ area, onDeltaY }: { area: string; onDeltaY: (dy: nu
 type MenuItemDef =
   | { label: string; onClick: () => void; checked?: boolean; disabled?: boolean }
   | { separator: true }
+  | { numeric: true; label: string; value: number; step: number; title?: string; onCommit: (v: number | null) => void }
 
 function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }) {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
@@ -178,18 +179,25 @@ function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }
               {menu.items.map((item, j) => (
                 'separator' in item
                   ? <div key={j} className="menu-separator" />
-                  : (
-                    <button
-                      key={j}
-                      type="button"
-                      className="menu-item"
-                      disabled={item.disabled}
-                      onClick={() => { item.onClick(); setOpenIndex(null) }}
-                    >
-                      <span className="menu-item-check">{item.checked ? '✓' : ''}</span>
-                      <span>{item.label}</span>
-                    </button>
-                  )
+                  : 'numeric' in item
+                    ? (
+                      <label key={j} className="menu-item-numeric" title={item.title}>
+                        <span>{item.label}</span>
+                        <NumericInput value={item.value} step={item.step} onCommit={item.onCommit} />
+                      </label>
+                    )
+                    : (
+                      <button
+                        key={j}
+                        type="button"
+                        className="menu-item"
+                        disabled={item.disabled}
+                        onClick={() => { item.onClick(); setOpenIndex(null) }}
+                      >
+                        <span className="menu-item-check">{item.checked ? '✓' : ''}</span>
+                        <span>{item.label}</span>
+                      </button>
+                    )
               ))}
             </div>
           )}
@@ -790,6 +798,12 @@ function App() {
       items: [
         { label: t('menu.settings.language.fr'), checked: locale === 'fr', onClick: () => setLocale('fr') },
         { label: t('menu.settings.language.en'), checked: locale === 'en', onClick: () => setLocale('en') },
+        { separator: true } as const,
+        {
+          numeric: true, label: t('menu.settings.actorDiameter'), title: t('menu.settings.actorDiameterHint'),
+          value: project.actorDiameterCm / 100, step: 0.05,
+          onCommit: (v: number | null) => { if (v !== null && v > 0) sidecar.updateProjectSettings({ actorDiameterCm: v * 100 }) },
+        } as const,
       ],
     },
   ]

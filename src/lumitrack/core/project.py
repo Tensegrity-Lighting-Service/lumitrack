@@ -297,6 +297,14 @@ class Project:
     # cf. recherche vitesses humaines : marche ~1,3 m/s, jogging ~2,2 m/s).
     reference_speed_cms: float = 220.0
 
+    # Diamètre du marqueur d'acteur dans la scène (cm) — réglage PROJET
+    # (menu Réglages), pas une constante : la taille "correcte" dépend du
+    # fixture réellement porté (Florian : "la taille des épaules d'une
+    # personne, ou la longueur d'un tube Astera" — confirmé à 60 cm par
+    # défaut). Purement visuel/éditeur : n'affecte jamais la résolution de
+    # lecture, aucun miroir Rust nécessaire.
+    actor_diameter_cm: float = 60.0
+
     # ---------- helpers ----------
 
     def ensure_backstage(self):
@@ -445,6 +453,7 @@ class Project:
             "stageMapRotationDeg": self.stage_map_rotation_deg,
             "terrainRotationDeg": self.terrain_rotation_deg,
             "referenceSpeedCms": self.reference_speed_cms,
+            "actorDiameterCm": self.actor_diameter_cm,
             "backstageZones": self.backstage_zones,
             "rosterGroups": self.roster_groups,
             "points": [p.to_dict() for p in self.points],
@@ -496,6 +505,7 @@ class Project:
             stage_map_rotation_deg=float(d.get("stageMapRotationDeg", 0.0)),
             terrain_rotation_deg=float(d.get("terrainRotationDeg", 0.0)),
             reference_speed_cms=float(d.get("referenceSpeedCms", 220.0)),
+            actor_diameter_cm=float(d.get("actorDiameterCm", 60.0)),
         )
         proj.backstage_zones = list(d.get("backstageZones") or [])
         proj.roster_groups = list(d.get("rosterGroups") or [])

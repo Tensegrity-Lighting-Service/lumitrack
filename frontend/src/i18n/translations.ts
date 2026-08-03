@@ -43,6 +43,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     'menu.settings': 'Réglages',
     'menu.settings.language.fr': 'Français',
     'menu.settings.language.en': 'English',
+    'menu.settings.actorDiameter': 'Diamètre acteur (m)',
+    'menu.settings.actorDiameterHint': 'Taille du marqueur d\'acteur dans la scène — à ajuster selon le fixture réellement porté (épaules, tube tenu…)',
 
     // --------------------------------------------------------- roster ---
     'roster.title': 'Roster',
@@ -324,6 +326,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     'menu.settings': 'Settings',
     'menu.settings.language.fr': 'Français',
     'menu.settings.language.en': 'English',
+    'menu.settings.actorDiameter': 'Actor diameter (m)',
+    'menu.settings.actorDiameterHint': 'Size of the actor marker in the scene — adjust to match the fixture actually carried (shoulders, held tube…)',
 
     'roster.title': 'Roster',
     'roster.newFolder': 'New subfolder',

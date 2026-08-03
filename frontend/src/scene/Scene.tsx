@@ -40,7 +40,22 @@ import { t } from '../i18n'
 
 const CM_TO_M = 0.01
 const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
-const ACTOR_RADIUS_M = 0.4 // was 0.18 — too small to read against a full-size stage
+// Redesign 2026-08-04 (Florian: "les acteurs sont vraiment petits sur un
+// terrain de cette taille, et à l'inverse le point sélectionné est trop
+// gros trop vulgaire") — replaced the old sphere with a flat disc, same
+// idea (§12.5's directional marker). Tried screen-constant sizing (like
+// GHOST_PX below) to fix "too small at zoom-to-fit" — round-tripped with
+// Florian and explicitly REJECTED: it grows the marker's WORLD footprint
+// without bound as the camera zooms out, so a backstage line-up (actors
+// 60cm apart, BACKSTAGE_SPACING_CM) blows up into an overlapping blob —
+// and even tuned down, a screen-constant size stops looking proportioned to
+// the real stage ("on ne comprend plus rien"). Florian's call: a FIXED
+// world size, true to real scale (his own reference — "la taille des
+// épaules d'une personne, ou la longueur d'un tube Astera") — zoom in if
+// you need to see detail, exactly like a real venue. Confirmé à 60cm de
+// diamètre. Devenu un réglage PROJET (`Project.actorDiameterCm`, menu
+// Réglages) plutôt qu'une constante à la demande de Florian — le fixture
+// réellement porté varie d'un show à l'autre.
 const FIT_PADDING = 0.9 // leaves a small margin around the fit region on zoom-to-fit
 // Handles keep a constant *screen* size (px) regardless of zoom — see
 // ScreenSizedMesh — rather than a fixed world size, which would shrink to
@@ -183,7 +198,7 @@ function GenericFloor({ widthM, heightM }: { widthM: number; heightM: number }) 
   )
 }
 
-function Actor({ pose, color, selected, draggable, opacity, onPointerDown, onContextMenu }: {
+function Actor({ pose, color, selected, draggable, opacity, radiusM, onPointerDown, onContextMenu }: {
   pose: Pose
   color: string
   selected: boolean
@@ -191,6 +206,8 @@ function Actor({ pose, color, selected, draggable, opacity, onPointerDown, onCon
   /** 1 in live view; dimmed in block-edit mode, where the live state is
    * context and the targets/trajectories are the subject (§12.6). */
   opacity: number
+  /** Réglage projet (menu Réglages), pas une constante — cf. ACTOR_RADIUS_M. */
+  radiusM: number
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
   onContextMenu?: (e: ThreeEvent<MouseEvent>) => void
 }) {
@@ -198,6 +215,7 @@ function Actor({ pose, color, selected, draggable, opacity, onPointerDown, onCon
   const [x, y, z] = stageToLocal(x_cm, y_cm, z_cm)
   const yawRad = THREE.MathUtils.degToRad(yaw_deg)
   const transparent = opacity < 1
+  const r = radiusM
   return (
     <group
       position={[x, y, z]}
@@ -207,25 +225,34 @@ function Actor({ pose, color, selected, draggable, opacity, onPointerDown, onCon
       onPointerOver={() => { document.body.style.cursor = draggable ? 'grab' : 'pointer' }}
       onPointerOut={() => { document.body.style.cursor = 'auto' }}
     >
-      <mesh>
-        <sphereGeometry args={[ACTOR_RADIUS_M, 20, 16]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={selected ? color : '#000000'}
-          emissiveIntensity={selected ? 0.6 : 0}
-          transparent={transparent}
-          opacity={opacity}
-        />
+      {/* Disque plat vu du dessus — plus une sphère 3D, qui perdait de sa
+          taille apparente sous l'éclairage/l'ombrage en vue du dessus.
+          Taille FIXE en espace monde (cf. commentaire ACTOR_RADIUS_M) —
+          zoomer pour voir le détail, comme dans un vrai lieu. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[r, 20]} />
+        <meshBasicMaterial color={color} transparent={transparent} opacity={opacity} side={THREE.DoubleSide} />
       </mesh>
-      {/* Directional pointer: shows which way the carried fixture faces (§12.5). */}
-      <mesh position={[0, 0, ACTOR_RADIUS_M * 1.8]}>
-        <coneGeometry args={[ACTOR_RADIUS_M * 0.45, ACTOR_RADIUS_M * 1.6, 12]} />
-        <meshStandardMaterial color={color} transparent={transparent} opacity={opacity} />
+      {/* Encoche directionnelle : même trick que le tick de cap de
+          TargetGhost (cône à 3 segments radiaux = triangle plat), même
+          convention d'axe (+Z local) pour que l'acteur et sa cible
+          s'accordent sur ce que "le lacet" veut dire. */}
+      <mesh position={[0, 0, r * 1.45]} rotation={[Math.PI / 2, 0, 0]}>
+        <coneGeometry args={[r * 0.38, r * 0.85, 3]} />
+        <meshBasicMaterial color={color} transparent={transparent} opacity={opacity} />
       </mesh>
+      {/* Sélection = anneau blanc fin, jamais un disque plus gros ni une
+          lueur ("le point sélectionné est trop gros trop vulgaire"). */}
+      {selected && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[r * 1.05, r * 1.3, 32]} />
+          <meshBasicMaterial color="#ffffff" transparent opacity={opacity} depthTest={false} side={THREE.DoubleSide} />
+        </mesh>
+      )}
       {/* Larger invisible hit target: the visible marker is small, dragging
           shouldn't require pixel-perfect aim on it. */}
-      <mesh visible={false}>
-        <sphereGeometry args={[ACTOR_RADIUS_M * 1.8, 8, 8]} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} visible={false}>
+        <circleGeometry args={[r * 1.8, 12]} />
       </mesh>
     </group>
   )
@@ -2261,6 +2288,7 @@ function SceneContent({
                 selected={selectedPointIds.includes(point.id)}
                 draggable={Boolean(selectedCueId)}
                 opacity={opacity}
+                radiusM={(project.actorDiameterCm / 2) * CM_TO_M}
                 onPointerDown={(e) => handleActorPointerDown(e, point.id)}
                 onContextMenu={(e) => handleActorContextMenu(e, point.id)}
               />
