@@ -68,6 +68,9 @@ export interface Activation {
   targetZCm: number | null
   targetYawDeg: number | null
   fadeMs: number
+  /** "global vs sélectif" (2026-08-03) : fade_ms modifié à la main — sort du
+   * recalcul de la durée automatique du bloc tant qu'il reste personnalisé. */
+  fadeOverridden: boolean
   easing: string
   orientationMode: 'manual' | 'path' | 'focus'
   /** Cible du mode "focus" (terrain, cm) ; null tant qu'aucun point choisi. */

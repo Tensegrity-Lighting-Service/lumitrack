@@ -553,6 +553,12 @@
   border-radius: 4px; cursor: pointer;
 }
 .inspector-clear-path:hover { background: #2a2a35; }
+.inspector-revert-fade {
+  font-size: 10px; padding: 1px 6px; margin-left: 4px;
+  background: color-mix(in srgb, #4F6DF5 16%, transparent);
+  color: #8fa6ff; border: 1px solid #4F6DF5; border-radius: 4px; cursor: pointer;
+}
+.inspector-revert-fade:hover { background: color-mix(in srgb, #4F6DF5 28%, transparent); }
 
 
 /* ---- Roster : en-tête ---- */

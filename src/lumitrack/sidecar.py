@@ -281,11 +281,20 @@ def _apply_auto_duration(project: Project, cue: Cue) -> None:
     de vitesse mais les acteurs non"). `cue.duration_ms` suit le plus lent,
     les autres arrivent avant et attendent (maintien déjà existant)."""
     per_point = required_fade_ms_per_point(project, cue)
-    for point_id, fade_ms in per_point.items():
+    fade_values = []
+    for point_id, computed_fade_ms in per_point.items():
         act = cue.activations.get(point_id)
-        if act is not None:
-            act.fade_ms = fade_ms
-    cue.duration_ms = max(per_point.values(), default=MIN_AUTO_DURATION_MS)
+        if act is None:
+            continue
+        if act.fade_overridden:
+            # "global vs sélectif" : un acteur personnalisé garde SA valeur —
+            # elle compte quand même pour la largeur du bloc, qui doit rester
+            # assez large pour lui.
+            fade_values.append(act.fade_ms)
+        else:
+            act.fade_ms = computed_fade_ms
+            fade_values.append(computed_fade_ms)
+    cue.duration_ms = max(fade_values, default=MIN_AUTO_DURATION_MS)
 
 
 async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
@@ -608,6 +617,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
                 setattr(act, field_name, msg[json_key])
         if "fadeMs" in msg:
             act.fade_ms = float(msg["fadeMs"])
+        if "fadeOverridden" in msg:
+            act.fade_overridden = bool(msg["fadeOverridden"])
         if "easing" in msg:
             act.easing = msg["easing"]
         if "orientationMode" in msg:

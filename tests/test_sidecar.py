@@ -172,6 +172,50 @@ def test_reference_speed_change_resyncs_every_activation_of_auto_blocks():
     assert move.duration_ms == pytest.approx(2500.0)
 
 
+def test_overridden_activation_is_not_overwritten_by_auto_duration():
+    """"global vs sélectif" (2026-08-03) : un acteur dont le fade a été
+    modifié à la main sort du recalcul automatique tant qu'il reste
+    personnalisé — mais compte quand même dans la largeur du bloc."""
+    session = Session()
+    session.project = _auto_duration_project()
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "move", "pointId": "near",
+        "fadeMs": 9000.0, "fadeOverridden": True,
+    }))
+    reply = _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "move", "autoDuration": True,
+    }))
+    assert reply is None
+    move = session.project.cue_by_id("move")
+    assert move.activations["near"].fade_ms == pytest.approx(9000.0)  # inchangé
+    assert move.activations["far"].fade_ms == pytest.approx(5000.0)  # recalculé normalement
+    assert move.duration_ms == pytest.approx(9000.0)  # assez large pour "near"
+
+
+def test_reverting_override_puts_the_activation_back_under_auto_duration():
+    session = Session()
+    session.project = _auto_duration_project()
+    _run(_handle_message(session, {"type": "update_cue", "cueId": "move", "autoDuration": True}))
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "move", "pointId": "near",
+        "fadeMs": 9000.0, "fadeOverridden": True,
+    }))
+    move = session.project.cue_by_id("move")
+    assert move.activations["near"].fade_overridden is True
+    assert move.duration_ms == pytest.approx(9000.0)
+
+    # "Revenir au réglage du bloc" : efface la personnalisation, ce qui la
+    # remet sous contrôle de la durée automatique déjà active sur ce bloc.
+    reply = _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "move", "pointId": "near", "fadeOverridden": False,
+    }))
+    assert reply is None
+    move = session.project.cue_by_id("move")
+    assert move.activations["near"].fade_overridden is False
+    assert move.activations["near"].fade_ms == pytest.approx(1000.0)  # 100cm a 1 m/s
+    assert move.duration_ms == pytest.approx(5000.0)  # "far" redevient le plus lent
+
+
 def test_set_roster_groups_broadcasts_and_prunes_detached_points():
     session = Session()
     _run(_handle_message(session, {"type": "update_point", "pointId": "p1", "rosterGroupId": "g1"}))

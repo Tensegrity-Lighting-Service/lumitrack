@@ -1317,6 +1317,7 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
               activation={act}
               selected={pointId === selectedPointId}
               onSelect={() => onSelectPoint(pointId === selectedPointId ? null : pointId)}
+              autoDuration={cue.autoDuration}
             />
           )
         })}
@@ -1366,7 +1367,11 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   const sharedEasing = shared((a) => a.easing)
 
   const applyAll = (patch: { fadeMs?: number; easing?: string }) => {
-    for (const id of activated) sidecar.setActivation(cue.id, id, patch)
+    // Une édition groupée est aussi une personnalisation manuelle : sort du
+    // recalcul de la durée automatique tant qu'elle reste personnalisée
+    // (même logique que le champ individuel de ActivationCard).
+    const withOverride = 'fadeMs' in patch ? { ...patch, fadeOverridden: true } : patch
+    for (const id of activated) sidecar.setActivation(cue.id, id, withOverride)
   }
 
   const names = selectedPointIds
@@ -1411,18 +1416,22 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   )
 }
 
-function ActivationCard({ cueId, pointId, point, activation, selected, onSelect }: {
+function ActivationCard({ cueId, pointId, point, activation, selected, onSelect, autoDuration }: {
   cueId: string
   pointId: string
   point: Point | undefined
   activation: Activation
   selected: boolean
   onSelect: () => void
+  /** Le bouton "revenir au réglage du bloc" n'a de sens que si la durée
+   * automatique est active sur ce bloc — sinon il n'y a rien "vers quoi"
+   * revenir (demande de Florian, 2026-08-03). */
+  autoDuration: boolean
 }) {
   const t = useT()
   const set = (patch: Partial<{
     targetXCm: number | null; targetYCm: number | null; targetZCm: number | null
-    targetYawDeg: number | null; fadeMs: number; easing: string
+    targetYawDeg: number | null; fadeMs: number; fadeOverridden: boolean; easing: string
     orientationMode: 'manual' | 'path' | 'focus'
     focusXCm: number | null; focusYCm: number | null
   }>) => sidecar.setActivation(cueId, pointId, patch)
@@ -1477,7 +1486,16 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
         )}
         <label>{t('cue.fade')}
           <NumericInput value={activation.fadeMs / 1000} step={0.1}
-            onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v * 1000 }) }} />
+            onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v * 1000, fadeOverridden: true }) }} />
+          {autoDuration && activation.fadeOverridden && (
+            <button
+              className="inspector-revert-fade"
+              title={t('cue.revertFadeHint')}
+              onClick={() => set({ fadeOverridden: false })}
+            >
+              {t('cue.revertFade')}
+            </button>
+          )}
         </label>
         <label>{t('cue.curve')}
           {(activation.pathPoints?.length || activation.startHandle || activation.targetHandle) ? (

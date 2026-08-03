@@ -105,6 +105,14 @@ class Activation:
     target_yaw_deg: Optional[float] = None
     fade_ms: float = 1000.0
     easing: str = "linear"
+    # Mission "global vs sélectif" (2026-08-03) : marque un fade_ms modifié
+    # à la main par l'utilisateur (pas par la "durée automatique" du bloc).
+    # Une activation personnalisée sort du recalcul automatique tant
+    # qu'elle reste personnalisée (voir sidecar._apply_auto_duration) — et
+    # peut revenir dans le rang via "revenir au réglage du bloc"
+    # (set_activation avec fadeOverridden=false, qui la recalcule une
+    # dernière fois puis la remet sous contrôle de la durée automatique).
+    fade_overridden: bool = False
     # Mission "refonte AE/Reaper" (2026-08-01) : le lacet gouverné par cette
     # activation peut suivre trois régimes — "manual" (valeur animée comme
     # n'importe quel axe, comportement historique), "path" (tangente de la
@@ -149,6 +157,7 @@ class Activation:
             "targetXCm": self.target_x_cm, "targetYCm": self.target_y_cm,
             "targetZCm": self.target_z_cm, "targetYawDeg": self.target_yaw_deg,
             "fadeMs": self.fade_ms, "easing": self.easing,
+            "fadeOverridden": self.fade_overridden,
             "orientationMode": self.orientation_mode,
             "focusXCm": self.focus_x_cm, "focusYCm": self.focus_y_cm,
             "curves": self.curves,
@@ -163,6 +172,7 @@ class Activation:
             target_x_cm=d.get("targetXCm"), target_y_cm=d.get("targetYCm"),
             target_z_cm=d.get("targetZCm"), target_yaw_deg=d.get("targetYawDeg"),
             fade_ms=float(d.get("fadeMs", 1000.0)), easing=d.get("easing", "linear"),
+            fade_overridden=bool(d.get("fadeOverridden", False)),
             orientation_mode=d.get("orientationMode", "manual"),
             focus_x_cm=d.get("focusXCm"), focus_y_cm=d.get("focusYCm"),
             curves=d.get("curves"),
