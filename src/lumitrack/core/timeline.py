@@ -338,7 +338,12 @@ def _axis_keyframes(project: Project, point_id: str, axis: str):
             else:
                 continue
         fade_ms = min(act.fade_ms, YAW_TURN_MS) if axis == "yaw" else act.fade_ms
-        kfs.append((cue.start_ms, cue.start_ms + fade_ms, value, act, cue.id, axis))
+        # Décalage de départ (mission "global vs sélectif", 2026-08-03) :
+        # cette activation démarre (et gouverne LTP) start_offset_ms après
+        # le début nominal du bloc, pas exactement dessus — entrées en
+        # escalier/vague. 0 par défaut = comportement historique inchangé.
+        effective_start = cue.start_ms + act.start_offset_ms
+        kfs.append((effective_start, effective_start + fade_ms, value, act, cue.id, axis))
     kfs.sort(key=lambda k: k[0])
     return kfs
 
@@ -543,6 +548,12 @@ def resolve_block_context(project: Project, cue_id: str,
         act = cue.activations.get(point.id)
         if act is None:
             continue
+        # Décalage de départ (2026-08-03) : le moment où CETTE activation
+        # démarre vraiment, pas forcément le début nominal du bloc — tout
+        # ce qui suit doit interroger les autres tracks à CET instant, pas
+        # à cue.start_ms brut (sinon l'aperçu de départ/cible mentirait dès
+        # qu'un acteur a un décalage).
+        effective_start = cue.start_ms + act.start_offset_ms
 
         axis_start = {}
         axis_target = {}
@@ -553,7 +564,7 @@ def resolve_block_context(project: Project, cue_id: str,
             if value is None:
                 # Axis untouched by this activation: during the block it
                 # keeps tracking whatever governs it at the block's start.
-                resolved = _resolve_axis(kfs, cue.start_ms)
+                resolved = _resolve_axis(kfs, effective_start)
                 axis_start[axis] = resolved
                 axis_target[axis] = resolved
                 sources[axis] = None
@@ -569,7 +580,7 @@ def resolve_block_context(project: Project, cue_id: str,
                     axis_start[axis] = value
                 sources[axis] = None
             else:
-                resolved = _resolve_axis(kfs[:index], cue.start_ms)
+                resolved = _resolve_axis(kfs[:index], effective_start)
                 axis_start[axis] = resolved if resolved is not None else kfs[index - 1][2]
                 sources[axis] = kfs[index - 1][4]
             axis_target[axis] = value
@@ -581,10 +592,10 @@ def resolve_block_context(project: Project, cue_id: str,
             # lacet réellement affiché au départ/à la cible de CE bloc, à
             # partir des positions x/y déjà résolues juste au-dessus.
             if axis_start.get("x") is not None and axis_start.get("y") is not None:
-                axis_start["yaw"] = _resolve_yaw(project, point.id, cue.start_ms, axis_start["x"], axis_start["y"])
+                axis_start["yaw"] = _resolve_yaw(project, point.id, effective_start, axis_start["x"], axis_start["y"])
             if axis_target.get("x") is not None and axis_target.get("y") is not None:
                 axis_target["yaw"] = _resolve_yaw(
-                    project, point.id, cue.start_ms + act.fade_ms, axis_target["x"], axis_target["y"])
+                    project, point.id, effective_start + act.fade_ms, axis_target["x"], axis_target["y"])
             sources["yaw"] = None
 
         def pose_or_none(values):
@@ -620,7 +631,7 @@ def resolve_block_context(project: Project, cue_id: str,
             "startPose": start_pose,
             "targetPose": target_pose,
             "path": path,
-            "timing": {"startMs": cue.start_ms, "fadeMs": act.fade_ms,
+            "timing": {"startMs": effective_start, "fadeMs": act.fade_ms,
                        "easing": act.easing},
             "sources": sources,
         }

@@ -65,6 +65,14 @@ pub struct Activation {
     pub focus_x_cm: Option<f64>,
     #[serde(default)]
     pub focus_y_cm: Option<f64>,
+    /// Mission "global vs sélectif", décalage de départ (2026-08-03) :
+    /// cette activation démarre (et gouverne LTP) start_offset_ms après le
+    /// début nominal du bloc — entrées en escalier/vague. 0 = comportement
+    /// historique (démarre pile avec le bloc). Affecte la résolution de
+    /// lecture (contrairement à fade_overridden, purement un repère
+    /// d'édition côté sidecar — pas besoin de miroir ici).
+    #[serde(default)]
+    pub start_offset_ms: f64,
 }
 
 fn default_fade_ms() -> f64 { 1000.0 }

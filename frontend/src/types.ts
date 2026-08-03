@@ -71,6 +71,10 @@ export interface Activation {
   /** "global vs sélectif" (2026-08-03) : fade_ms modifié à la main — sort du
    * recalcul de la durée automatique du bloc tant qu'il reste personnalisé. */
   fadeOverridden: boolean
+  /** "global vs sélectif", décalage de départ (2026-08-03) : cette
+   * activation démarre startOffsetMs après le début nominal du bloc — 0 =
+   * comportement historique. Entrées en escalier/vague. */
+  startOffsetMs: number
   easing: string
   orientationMode: 'manual' | 'path' | 'focus'
   /** Cible du mode "focus" (terrain, cm) ; null tant qu'aucun point choisi. */

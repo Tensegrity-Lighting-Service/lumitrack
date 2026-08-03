@@ -101,7 +101,10 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
   }, [availableAxes, hiddenAxes, curveFor])
 
   const fadeMs = Math.max(1, act?.fadeMs ?? cue.durationMs)
-  const x0 = cue.startMs * pxPerMs
+  // Décalage de départ (2026-08-03) : cette activation démarre réellement
+  // startOffsetMs après le début nominal du bloc — sans ça, la zone de
+  // fade dessinée mentirait sur quand l'acteur bouge vraiment.
+  const x0 = (cue.startMs + (act?.startOffsetMs ?? 0)) * pxPerMs
   const fadeW = fadeMs * pxPerMs
   const tToX = useCallback((t: number) => x0 + t * fadeW, [x0, fadeW])
   const vToY = useCallback(

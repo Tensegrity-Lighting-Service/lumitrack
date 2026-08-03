@@ -250,6 +250,106 @@ def test_yaw_turn_is_eased_not_an_instant_cut():
     assert 0.0 < just_after_start.yaw_deg < 90.0
 
 
+# --------------------------------- décalage de départ, escalier (2026-08-03) --
+#
+# "le bloc fournit une valeur par défaut ... décalage de départ par acteur,
+# pour des effets d'entrée en escalier/vague" (DIRECTIVES.md point 6) :
+# Activation.start_offset_ms décale le moment où CETTE activation démarre
+# (et gouverne LTP), indépendamment du début nominal du bloc.
+
+def test_zero_offset_is_the_historical_behaviour():
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=1000)}),
+    ]
+    mid = resolve_positions(project, 1500)["a"]
+    assert mid.x_cm == pytest.approx(50.0)
+
+
+def test_start_offset_delays_when_the_activation_begins_moving():
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=1000,
+                                          start_offset_ms=500)}),
+    ]
+    # Le bloc "commence" à 1000ms mais cet acteur ne bouge pas encore : il
+    # tient toujours sa position précédente jusqu'à 1000+500=1500ms.
+    still_waiting = resolve_positions(project, 1400)["a"]
+    assert still_waiting.x_cm == pytest.approx(0.0)
+    mid_move = resolve_positions(project, 2000)["a"]  # 1500 + 1000/2
+    assert mid_move.x_cm == pytest.approx(50.0)
+    arrived = resolve_positions(project, 2500)["a"]
+    assert arrived.x_cm == pytest.approx(100.0)
+
+
+def test_staggered_offsets_create_a_wave_within_one_block():
+    """Deux acteurs du MÊME bloc, décalage différent : effet escalier."""
+    project = Project()
+    project.points = [Point(id="a", name="A"), Point(id="b", name="B")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0, activations={
+            "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0),
+            "b": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0),
+        }),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000, activations={
+            "a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=500, start_offset_ms=0),
+            "b": Activation(target_x_cm=100, target_y_cm=0, fade_ms=500, start_offset_ms=500),
+        }),
+    ]
+    # À 1250ms : "a" est à mi-chemin (démarré à 1000, fade 500 -> fini à
+    # 1500), "b" n'a pas encore bougé (démarre à 1500).
+    poses = resolve_positions(project, 1250)
+    assert poses["a"].x_cm == pytest.approx(50.0)
+    assert poses["b"].x_cm == pytest.approx(0.0)
+    # À 1750ms : "a" est arrivé, "b" est à mi-chemin (démarré à 1500, fini
+    # à 2000).
+    poses = resolve_positions(project, 1750)
+    assert poses["a"].x_cm == pytest.approx(100.0)
+    assert poses["b"].x_cm == pytest.approx(50.0)
+
+
+def test_start_offset_reflected_in_block_context_timing_and_start_pose():
+    from lumitrack.core.timeline import resolve_block_context
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=500,
+                                          start_offset_ms=300)}),
+    ]
+    entry = resolve_block_context(project, "c1")["entries"]["a"]
+    assert entry["timing"]["startMs"] == pytest.approx(1300.0)
+    assert entry["startPose"][0] == pytest.approx(0.0)  # tient encore sa position d'avant
+    assert entry["targetPose"][0] == pytest.approx(100.0)
+
+
+def test_start_offset_roundtrips_and_never_negative():
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=1000, activations={
+        "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=1000, start_offset_ms=250),
+    })]
+    back = Project.from_dict(project.to_dict())
+    assert back.cues[0].activations["a"].start_offset_ms == pytest.approx(250.0)
+
+    # Une valeur négative reçue (bundle corrompu, ancien format...) est
+    # ramenée à 0 plutôt que de faire démarrer un acteur avant son bloc.
+    d = project.to_dict()
+    d["cues"][0]["activations"]["a"]["startOffsetMs"] = -50.0
+    clamped = Project.from_dict(d)
+    assert clamped.cues[0].activations["a"].start_offset_ms == 0.0
+
+
 # ------------------------------------------ modes de rotation (2026-08-01) --
 #
 # "je veux pouvoir choisir entre 3 mode ... suivre courbe de trajectoire,

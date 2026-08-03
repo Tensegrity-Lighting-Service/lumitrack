@@ -114,9 +114,13 @@ fn axis_keyframes<'a>(project: &'a Project, point_id: &str, axis: Axis) -> Vec<K
                 None => return None,
             };
             let fade_ms = if axis == Axis::Yaw { act.fade_ms.min(YAW_TURN_MS) } else { act.fade_ms };
+            // Décalage de départ (2026-08-03) : cette activation démarre
+            // (et gouverne LTP) start_offset_ms après le début nominal du
+            // bloc, pas exactement dessus — entrées en escalier/vague.
+            let effective_start = cue.start_ms + act.start_offset_ms;
             Some(Keyframe {
-                start_ms: cue.start_ms,
-                fade_end_ms: cue.start_ms + fade_ms,
+                start_ms: effective_start,
+                fade_end_ms: effective_start + fade_ms,
                 value,
                 easing: act.easing.clone(),
                 curve: act.curves.as_ref()
@@ -344,6 +348,10 @@ pub fn resolve_block_context(
     let mut entries = BTreeMap::new();
     for point in &project.points {
         let Some(act) = cue.activations.get(&point.id) else { continue };
+        // Décalage de départ (2026-08-03) : l'instant où CETTE activation
+        // démarre vraiment — tout ce qui suit interroge les autres tracks
+        // à CET instant, pas au début nominal brut du bloc.
+        let effective_start = cue.start_ms + act.start_offset_ms;
 
         let mut axis_start: BTreeMap<Axis, Option<f64>> = BTreeMap::new();
         let mut axis_target: BTreeMap<Axis, Option<f64>> = BTreeMap::new();
@@ -355,7 +363,7 @@ pub fn resolve_block_context(
                 None => {
                     // Axe non touché par ce bloc : il continue de suivre ce
                     // qui le gouverne au départ du bloc.
-                    let resolved = resolve_axis(&kfs, cue.start_ms);
+                    let resolved = resolve_axis(&kfs, effective_start);
                     axis_start.insert(axis, resolved);
                     axis_target.insert(axis, resolved);
                     sources.insert(axis.key(), None);
@@ -377,7 +385,7 @@ pub fn resolve_block_context(
                     } else {
                         // Fix téléportation : départ = position résolue au
                         // démarrage du bloc, pas la cible brute du précédent.
-                        let resolved = resolve_axis(&kfs[..index], cue.start_ms)
+                        let resolved = resolve_axis(&kfs[..index], effective_start)
                             .unwrap_or(kfs[index - 1].value);
                         axis_start.insert(axis, Some(resolved));
                         sources.insert(axis.key(), Some(kfs[index - 1].cue_id.clone()));
@@ -396,13 +404,13 @@ pub fn resolve_block_context(
             let sx = axis_start.get(&Axis::X).copied().flatten();
             let sy = axis_start.get(&Axis::Y).copied().flatten();
             if let (Some(sx), Some(sy)) = (sx, sy) {
-                axis_start.insert(Axis::Yaw, Some(resolve_yaw(project, &point.id, cue.start_ms, sx, sy)));
+                axis_start.insert(Axis::Yaw, Some(resolve_yaw(project, &point.id, effective_start, sx, sy)));
             }
             let tx = axis_target.get(&Axis::X).copied().flatten();
             let ty = axis_target.get(&Axis::Y).copied().flatten();
             if let (Some(tx), Some(ty)) = (tx, ty) {
                 axis_target.insert(Axis::Yaw,
-                    Some(resolve_yaw(project, &point.id, cue.start_ms + act.fade_ms, tx, ty)));
+                    Some(resolve_yaw(project, &point.id, effective_start + act.fade_ms, tx, ty)));
             }
             sources.insert(Axis::Yaw.key(), None);
         }
@@ -444,7 +452,7 @@ pub fn resolve_block_context(
             target_pose,
             path,
             timing: Timing {
-                start_ms: cue.start_ms,
+                start_ms: effective_start,
                 fade_ms: act.fade_ms,
                 easing: act.easing.clone(),
             },

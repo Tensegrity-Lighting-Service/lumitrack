@@ -576,6 +576,13 @@
   display: flex; flex-direction: column; gap: 3px;
   font-size: 11px; color: #9a9aa8; flex: 1;
 }
+.group-timing-stagger {
+  display: flex; align-items: flex-end; gap: 8px; margin-top: 8px;
+}
+.group-timing-stagger label {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 11px; color: #9a9aa8; flex: 1;
+}
 
 /* ---- Timeline multi-pistes + polish (mission "clean comme Logic") ---- */
 .tl-lane-stripe {

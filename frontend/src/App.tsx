@@ -1349,6 +1349,7 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   projectPoints: Point[]
 }) {
   const t = useT()
+  const [staggerMs, setStaggerMs] = useState(100)
   const activated = selectedPointIds.filter((id) => cue.activations[id])
   const acts = activated.map((id) => cue.activations[id])
   const shared = <T,>(get: (a: Activation) => T): T | null =>
@@ -1362,6 +1363,15 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
     // (même logique que le champ individuel de ActivationCard).
     const withOverride = 'fadeMs' in patch ? { ...patch, fadeOverridden: true } : patch
     for (const id of activated) sidecar.setActivation(cue.id, id, withOverride)
+  }
+
+  // "Décalage en escalier" (DIRECTIVES.md point 6) : respecte l'ORDRE DE
+  // SÉLECTION déjà suivi par `selectedPointIds` (donc `activated`, qui en
+  // hérite) — le premier acteur cliqué part en premier, le suivant
+  // `staggerMs` plus tard, etc. Effet vague/escalier sans nouveau suivi
+  // d'ordre à écrire.
+  const applyStagger = () => {
+    activated.forEach((id, i) => sidecar.setActivation(cue.id, id, { startOffsetMs: i * staggerMs }))
   }
 
   const names = selectedPointIds
@@ -1400,6 +1410,13 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
               </select>
             </label>
           </div>
+          <div className="group-timing-stagger" title={t('cue.staggerHint')}>
+            <label>{t('cue.stagger')}
+              <NumericInput value={staggerMs} step={10}
+                onCommit={(v) => setStaggerMs(Math.max(0, v ?? 0))} />
+            </label>
+            <button onClick={applyStagger}>{t('cue.staggerApply')}</button>
+          </div>
         </>
       )}
     </div>
@@ -1417,7 +1434,8 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
   const t = useT()
   const set = (patch: Partial<{
     targetXCm: number | null; targetYCm: number | null; targetZCm: number | null
-    targetYawDeg: number | null; fadeMs: number; fadeOverridden: boolean; easing: string
+    targetYawDeg: number | null; fadeMs: number; fadeOverridden: boolean
+    startOffsetMs: number; easing: string
     orientationMode: 'manual' | 'path' | 'focus'
     focusXCm: number | null; focusYCm: number | null
   }>) => sidecar.setActivation(cueId, pointId, patch)
@@ -1482,6 +1500,11 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect 
               {t('cue.revertFade')}
             </button>
           )}
+        </label>
+        <label>{t('cue.startOffset')}
+          <NumericInput value={activation.startOffsetMs / 1000} step={0.05}
+            title={t('cue.startOffsetHint')}
+            onCommit={(v) => { if (v !== null && v >= 0) set({ startOffsetMs: v * 1000 }) }} />
         </label>
         <label>{t('cue.curve')}
           {(activation.pathPoints?.length || activation.startHandle || activation.targetHandle) ? (

@@ -88,6 +88,11 @@ def rand_project(n_points, n_cues):
                     target_yaw_deg=maybe(-360, 720, 0.4) if mode == "manual" else None,
                     fade_ms=round(random.uniform(0, 5000), 1),
                     easing=random.choice(easings),
+                    # Décalage de départ (2026-08-03) : ~40 % des activations
+                    # démarrent après le début nominal du bloc (entrées en
+                    # escalier/vague), le reste garde le comportement
+                    # historique (0).
+                    start_offset_ms=round(random.uniform(0, 800), 1) if random.random() < 0.4 else 0.0,
                     orientation_mode=mode,
                     focus_x_cm=maybe(-500, 5500, 0.7) if mode == "focus" else None,
                     focus_y_cm=maybe(-500, 3500, 0.7) if mode == "focus" else None,

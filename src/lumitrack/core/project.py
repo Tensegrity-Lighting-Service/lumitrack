@@ -113,6 +113,15 @@ class Activation:
     # (set_activation avec fadeOverridden=false, qui la recalcule une
     # dernière fois puis la remet sous contrôle de la durée automatique).
     fade_overridden: bool = False
+    # Mission "global vs sélectif", décalage de départ (2026-08-03,
+    # DIRECTIVES.md point 6) : cette activation démarre (et gouverne LTP)
+    # `start_offset_ms` après le début nominal du bloc (cue.start_ms), pas
+    # exactement dessus — permet des entrées en escalier/vague quand
+    # plusieurs acteurs partagent un bloc. 0 = comportement historique
+    # (démarre pile avec le bloc). Jamais négatif (un acteur ne peut pas
+    # démarrer AVANT le bloc qui le contient — sortirait de la cohérence
+    # des tracks LTP, qui suppose un bloc = une fenêtre bien à lui).
+    start_offset_ms: float = 0.0
     # Mission "refonte AE/Reaper" (2026-08-01) : le lacet gouverné par cette
     # activation peut suivre trois régimes — "manual" (valeur animée comme
     # n'importe quel axe, comportement historique), "path" (tangente de la
@@ -158,6 +167,7 @@ class Activation:
             "targetZCm": self.target_z_cm, "targetYawDeg": self.target_yaw_deg,
             "fadeMs": self.fade_ms, "easing": self.easing,
             "fadeOverridden": self.fade_overridden,
+            "startOffsetMs": self.start_offset_ms,
             "orientationMode": self.orientation_mode,
             "focusXCm": self.focus_x_cm, "focusYCm": self.focus_y_cm,
             "curves": self.curves,
@@ -173,6 +183,7 @@ class Activation:
             target_z_cm=d.get("targetZCm"), target_yaw_deg=d.get("targetYawDeg"),
             fade_ms=float(d.get("fadeMs", 1000.0)), easing=d.get("easing", "linear"),
             fade_overridden=bool(d.get("fadeOverridden", False)),
+            start_offset_ms=max(0.0, float(d.get("startOffsetMs", 0.0))),
             orientation_mode=d.get("orientationMode", "manual"),
             focus_x_cm=d.get("focusXCm"), focus_y_cm=d.get("focusYCm"),
             curves=d.get("curves"),
