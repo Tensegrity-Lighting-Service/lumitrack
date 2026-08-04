@@ -14,9 +14,13 @@ const MIN_SPLIT_MS = 200
 function cloneActivationPatch(act: Activation) {
   return {
     targetXCm: act.targetXCm, targetYCm: act.targetYCm, targetZCm: act.targetZCm,
-    targetYawDeg: act.targetYawDeg, fadeMs: act.fadeMs, fadeOverridden: act.fadeOverridden,
-    startOffsetMs: act.startOffsetMs, easing: act.easing, orientationMode: act.orientationMode,
-    focusXCm: act.focusXCm ?? null, focusYCm: act.focusYCm ?? null,
+    fadeMs: act.fadeMs, fadeOverridden: act.fadeOverridden,
+    startOffsetMs: act.startOffsetMs, easing: act.easing,
+    orientationOverridden: act.orientationOverridden,
+    travelOrientationMode: act.travelOrientationMode, travelFixedYawDeg: act.travelFixedYawDeg,
+    travelFocusPointId: act.travelFocusPointId ?? null,
+    arrivalOrientationMode: act.arrivalOrientationMode, arrivalFixedYawDeg: act.arrivalFixedYawDeg,
+    arrivalFocusPointId: act.arrivalFocusPointId ?? null,
     curves: act.curves ?? null, pathPoints: act.pathPoints ?? null,
     startHandle: act.startHandle ?? null, targetHandle: act.targetHandle ?? null,
   }
@@ -93,32 +97,46 @@ export function splitCueAtPlayhead(cue: Cue, tMs: number, positions: Record<stri
     const effectiveStart = cue.startMs + act.startOffsetMs
     const originalArrivalMs = effectiveStart + act.fadeMs
 
-    // Bloc tronqué : fige SEULEMENT les axes que cette activation animait
-    // déjà (un axe non touché continue de suivre son ancienne source,
-    // comme avant la coupe) ; arrive pile à la nouvelle fin du bloc.
+    // Bloc tronqué : fige SEULEMENT les axes x/y/z que cette activation
+    // animait déjà (un axe non touché continue de suivre son ancienne
+    // source, comme avant la coupe) ; arrive pile à la nouvelle fin du
+    // bloc. Le lacet À L'ARRIVÉE est TOUJOURS figé sur la valeur déjà
+    // résolue et visible à l'instant de la coupe (mission "modes
+    // d'orientation", 2026-08-04) — la trajectoire visuelle ne saute pas,
+    // quel que soit le mode de trajet d'origine (fixed/path/focus, inchangé
+    // ici, seule l'arrivée du sous-bloc tronqué est réglée).
     sidecar.setActivation(cue.id, pointId, {
       targetXCm: act.targetXCm !== null ? xCm : null,
       targetYCm: act.targetYCm !== null ? yCm : null,
       targetZCm: act.targetZCm !== null ? zCm : null,
-      targetYawDeg: act.targetYawDeg !== null ? yawDeg : null,
       fadeMs: Math.max(MIN_SPLIT_MS, tMs - effectiveStart),
       fadeOverridden: true,
       startOffsetMs: Math.min(act.startOffsetMs, Math.max(0, firstDurationMs - MIN_SPLIT_MS)),
+      orientationOverridden: true,
+      arrivalOrientationMode: 'fixed',
+      arrivalFixedYawDeg: yawDeg,
       curves: null, pathPoints: null, startHandle: null, targetHandle: null,
     })
 
-    // Second bloc : reprend la cible D'ORIGINE, calée pour arriver au même
-    // instant absolu qu'avant la coupe (immédiatement si le mouvement avait
-    // déjà commencé, après une attente résiduelle sinon).
+    // Second bloc : reprend la cible D'ORIGINE et le réglage d'orientation
+    // D'ORIGINE tel quel (trajet ET arrivée inchangés), calé pour arriver
+    // au même instant absolu qu'avant la coupe (immédiatement si le
+    // mouvement avait déjà commencé, après une attente résiduelle sinon).
     const secondOffsetMs = Math.max(0, effectiveStart - tMs)
     sidecar.setActivation(secondId, pointId, {
       targetXCm: act.targetXCm, targetYCm: act.targetYCm,
-      targetZCm: act.targetZCm, targetYawDeg: act.targetYawDeg,
+      targetZCm: act.targetZCm,
       fadeMs: Math.max(MIN_SPLIT_MS, originalArrivalMs - (tMs + secondOffsetMs)),
       fadeOverridden: true,
       startOffsetMs: secondOffsetMs,
-      easing: act.easing, orientationMode: act.orientationMode,
-      focusXCm: act.focusXCm ?? null, focusYCm: act.focusYCm ?? null,
+      easing: act.easing,
+      orientationOverridden: act.orientationOverridden,
+      travelOrientationMode: act.travelOrientationMode,
+      travelFixedYawDeg: act.travelFixedYawDeg,
+      travelFocusPointId: act.travelFocusPointId ?? null,
+      arrivalOrientationMode: act.arrivalOrientationMode,
+      arrivalFixedYawDeg: act.arrivalFixedYawDeg,
+      arrivalFocusPointId: act.arrivalFocusPointId ?? null,
     })
   }
   return secondId

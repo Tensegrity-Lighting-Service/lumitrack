@@ -17,6 +17,8 @@ import { BlockDetailPanel } from './ui/BlockDetailPanel'
 import { ContextMenu } from './ui/ContextMenu'
 import { showContextMenu } from './ui/contextMenuStore'
 import { buildActorContextMenuSections, buildFocusPointContextMenuSections } from './ui/actorContextMenu'
+import { CompassPicker } from './ui/CompassPicker'
+import { FocusPointSelect } from './ui/FocusPointSelect'
 import {
   DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
   type DragEndEvent, type DragOverEvent, type DragStartEvent,
@@ -1433,6 +1435,7 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
           </button>
         ))}
       </div>
+      <CueOrientationDefaults cue={cue} projectPoints={projectPoints} />
       <div className="activation-list">
         {Object.entries(cue.activations).map(([pointId, act]) => {
           const point = projectPoints.find((p) => p.id === pointId)
@@ -1446,6 +1449,7 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
               selected={pointId === selectedPointId}
               onSelect={() => onSelectPoint(pointId === selectedPointId ? null : pointId)}
               blockContext={blockContext}
+              allPoints={projectPoints}
             />
           )
         })}
@@ -1465,6 +1469,57 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
           <option value="" disabled>{t('cue.activatePoint')}</option>
           {availablePoints.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+      )}
+    </div>
+  )
+}
+
+/** Réglage par défaut du BLOC pour l'orientation (mission "modes
+ * d'orientation", 2026-08-04, même esprit que le timing point 6) —
+ * préremplit toute NOUVELLE activation du bloc et resynchronise
+ * (backend : _apply_cue_orientation_defaults) toute activation existante
+ * non personnalisée dès qu'on change un réglage ici. Repliée par défaut,
+ * même logique que les cartes d'activation (peu utilisée au quotidien). */
+function CueOrientationDefaults({ cue, projectPoints }: { cue: Cue; projectPoints: Point[] }) {
+  const t = useT()
+  const [collapsed, setCollapsed] = useState(true)
+  return (
+    <div className="cue-orientation-defaults">
+      <button
+        className="cue-orientation-defaults-toggle"
+        onClick={() => setCollapsed((v) => !v)}
+      >
+        {collapsed ? '▸' : '▾'} {t('cue.blockOrientationDefaultsTitle')}
+      </button>
+      {!collapsed && (
+        <div className="activation-orientation">
+          <div className="activation-orientation-phase">
+            <h4>{t('cue.travelPhase')}</h4>
+            <OrientationPhaseFields
+              phase="travel"
+              mode={cue.defaultTravelOrientationMode ?? 'fixed'}
+              fixedDeg={cue.defaultTravelFixedYawDeg ?? 0}
+              focusId={cue.defaultTravelFocusPointId ?? null}
+              points={projectPoints}
+              onModeChange={(m) => sidecar.updateCue(cue.id, { defaultTravelOrientationMode: m as 'fixed' | 'path' | 'focus' })}
+              onFixedDegChange={(d) => sidecar.updateCue(cue.id, { defaultTravelFixedYawDeg: d })}
+              onFocusChange={(id) => sidecar.updateCue(cue.id, { defaultTravelFocusPointId: id })}
+            />
+          </div>
+          <div className="activation-orientation-phase">
+            <h4>{t('cue.arrivalPhase')}</h4>
+            <OrientationPhaseFields
+              phase="arrival"
+              mode={cue.defaultArrivalOrientationMode ?? 'hold'}
+              fixedDeg={cue.defaultArrivalFixedYawDeg ?? 0}
+              focusId={cue.defaultArrivalFocusPointId ?? null}
+              points={projectPoints}
+              onModeChange={(m) => sidecar.updateCue(cue.id, { defaultArrivalOrientationMode: m as 'hold' | 'fixed' | 'focus' })}
+              onFixedDegChange={(d) => sidecar.updateCue(cue.id, { defaultArrivalFixedYawDeg: d })}
+              onFocusChange={(id) => sidecar.updateCue(cue.id, { defaultArrivalFocusPointId: id })}
+            />
+          </div>
+        </div>
       )}
     </div>
   )
@@ -1564,7 +1619,49 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   )
 }
 
-function ActivationCard({ cueId, pointId, point, activation, selected, onSelect, blockContext }: {
+/** Champs d'une phase d'orientation (mission "modes d'orientation",
+ * 2026-08-04) — partagé entre l'ActivationCard (par activation) et la
+ * section "orientation par défaut du bloc" du CueInspector, pour ne pas
+ * dupliquer la logique mode/angle/boussole/point de focus. */
+function OrientationPhaseFields({ phase, mode, fixedDeg, focusId, points, onModeChange, onFixedDegChange, onFocusChange }: {
+  phase: 'travel' | 'arrival'
+  mode: string
+  fixedDeg: number
+  focusId: string | null
+  points: Point[]
+  onModeChange: (mode: string) => void
+  onFixedDegChange: (deg: number) => void
+  onFocusChange: (id: string | null) => void
+}) {
+  const t = useT()
+  const modeOptions: Array<[string, string]> = phase === 'travel'
+    ? [['fixed', t('cue.rotationFixed')], ['path', t('cue.rotationPath')], ['focus', t('cue.rotationFocus')]]
+    : [['hold', t('cue.arrivalHold')], ['fixed', t('cue.rotationFixed')], ['focus', t('cue.rotationFocus')]]
+  return (
+    <>
+      <label>{phase === 'travel' ? t('cue.travelMode') : t('cue.arrivalMode')}
+        <select value={mode} onChange={(e) => onModeChange(e.target.value)} title={t('cue.rotationHint')}>
+          {modeOptions.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+        </select>
+      </label>
+      {mode === 'fixed' && (
+        <>
+          <label>{t('cue.yaw')}
+            <NumericInput value={fixedDeg} step={5} onCommit={(v) => onFixedDegChange(v ?? 0)} />
+          </label>
+          <CompassPicker valueDeg={fixedDeg} onPick={onFixedDegChange} />
+        </>
+      )}
+      {mode === 'focus' && (
+        <label>{t('cue.focusPoint')}
+          <FocusPointSelect points={points} value={focusId} onChange={onFocusChange} />
+        </label>
+      )}
+    </>
+  )
+}
+
+function ActivationCard({ cueId, pointId, point, activation, selected, onSelect, blockContext, allPoints }: {
   cueId: string
   pointId: string
   point: Point | undefined
@@ -1572,6 +1669,7 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
   selected: boolean
   onSelect: () => void
   blockContext: BlockContextMessage | null
+  allPoints: Point[]
 }) {
   const t = useT()
   // Repliée par défaut (mission "replier les acteurs", 2026-08-03) : une
@@ -1581,12 +1679,21 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
   const [collapsed, setCollapsed] = useState(true)
   const set = (patch: Partial<{
     targetXCm: number | null; targetYCm: number | null; targetZCm: number | null
-    targetYawDeg: number | null; fadeMs: number; fadeOverridden: boolean
+    fadeMs: number; fadeOverridden: boolean
     startOffsetMs: number; easing: string
-    orientationMode: 'manual' | 'path' | 'focus'
-    focusXCm: number | null; focusYCm: number | null
+    orientationOverridden: boolean
+    travelOrientationMode: 'fixed' | 'path' | 'focus'
+    travelFixedYawDeg: number
+    travelFocusPointId: string | null
+    arrivalOrientationMode: 'hold' | 'fixed' | 'focus'
+    arrivalFixedYawDeg: number
+    arrivalFocusPointId: string | null
   }>) => sidecar.setActivation(cueId, pointId, patch)
-  const mode = activation.orientationMode ?? 'manual'
+  // Toute édition manuelle des champs d'orientation personnalise
+  // l'activation (même principe que fadeOverridden pour le fade, mission
+  // "global vs sélectif" étendue à l'orientation) — sort de la
+  // resynchronisation depuis les défauts du bloc tant qu'elle le reste.
+  const setOrientation = (patch: Parameters<typeof set>[0]) => set({ ...patch, orientationOverridden: true })
   const speed = pointSpeedMs(pointId, cueId, blockContext)
 
   return (
@@ -1626,32 +1733,6 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
           <NumericInput value={activation.targetZCm === null ? null : activation.targetZCm / 100} step={0.1} nullable
             onCommit={(v) => set({ targetZCm: v === null ? null : v * 100 })} />
         </label>
-        <label>{t('cue.rotation')}
-          <select value={mode} onChange={(e) => set({ orientationMode: e.target.value as 'manual' | 'path' | 'focus' })}
-            title={t('cue.rotationHint')}>
-            <option value="manual">{t('cue.rotationManual')}</option>
-            <option value="path">{t('cue.rotationPath')}</option>
-            <option value="focus">{t('cue.rotationFocus')}</option>
-          </select>
-        </label>
-        {mode === 'manual' && (
-          <label>{t('cue.yaw')}
-            <NumericInput value={activation.targetYawDeg} step={5} nullable
-              onCommit={(v) => set({ targetYawDeg: v })} />
-          </label>
-        )}
-        {mode === 'focus' && (
-          <>
-            <label>{t('cue.focusX')}
-              <NumericInput value={activation.focusXCm == null ? null : activation.focusXCm / 100} step={0.1} nullable
-                onCommit={(v) => set({ focusXCm: v === null ? null : v * 100 })} />
-            </label>
-            <label>{t('cue.focusY')}
-              <NumericInput value={activation.focusYCm == null ? null : activation.focusYCm / 100} step={0.1} nullable
-                onCommit={(v) => set({ focusYCm: v === null ? null : v * 100 })} />
-            </label>
-          </>
-        )}
         <label>{t('cue.fade')}
           <NumericInput value={activation.fadeMs / 1000} step={0.1}
             onCommit={(v) => { if (v !== null && v >= 0) set({ fadeMs: v * 1000, fadeOverridden: true }) }} />
@@ -1684,6 +1765,43 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
             {EASING_NAMES.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         </label>
+      </div>}
+      {!collapsed && <div className="activation-orientation" onClick={(e) => e.stopPropagation()}>
+        <div className="activation-orientation-phase">
+          <h4>{t('cue.travelPhase')}</h4>
+          <OrientationPhaseFields
+            phase="travel"
+            mode={activation.travelOrientationMode ?? 'fixed'}
+            fixedDeg={activation.travelFixedYawDeg ?? 0}
+            focusId={activation.travelFocusPointId ?? null}
+            points={allPoints}
+            onModeChange={(m) => setOrientation({ travelOrientationMode: m as 'fixed' | 'path' | 'focus' })}
+            onFixedDegChange={(d) => setOrientation({ travelFixedYawDeg: d })}
+            onFocusChange={(id) => setOrientation({ travelFocusPointId: id })}
+          />
+        </div>
+        <div className="activation-orientation-phase">
+          <h4>{t('cue.arrivalPhase')}</h4>
+          <OrientationPhaseFields
+            phase="arrival"
+            mode={activation.arrivalOrientationMode ?? 'hold'}
+            fixedDeg={activation.arrivalFixedYawDeg ?? 0}
+            focusId={activation.arrivalFocusPointId ?? null}
+            points={allPoints}
+            onModeChange={(m) => setOrientation({ arrivalOrientationMode: m as 'hold' | 'fixed' | 'focus' })}
+            onFixedDegChange={(d) => setOrientation({ arrivalFixedYawDeg: d })}
+            onFocusChange={(id) => setOrientation({ arrivalFocusPointId: id })}
+          />
+        </div>
+        {activation.orientationOverridden && (
+          <button
+            className="inspector-revert-fade"
+            title={t('cue.revertOrientationHint')}
+            onClick={() => set({ orientationOverridden: false })}
+          >
+            {t('cue.revertOrientation')}
+          </button>
+        )}
       </div>}
     </div>
   )

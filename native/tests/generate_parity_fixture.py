@@ -72,6 +72,16 @@ def rand_project(n_points, n_cues):
         return {"dxCm": round(random.uniform(-400, 400), 1),
                 "dyCm": round(random.uniform(-400, 400), 1)}
 
+    def rand_focus_ref():
+        """~15% de références PENDANTES (id inexistant) — exerce le repli
+        sur l'angle fixe de secours quand un point de focus a été
+        supprimé. Sinon, un id de point du projet au hasard (focus ou
+        acteur normal, voire le point lui-même — cas dégénéré fx==x/fy==y
+        couvert aussi)."""
+        if random.random() < 0.15:
+            return "missing-focus-ref"
+        return random.choice([pt.id for pt in p.points])
+
     for c in range(n_cues):
         cue = Cue(id=f"c{c}", name=f"C{c}",
                   start_ms=round(random.uniform(0, 20000), 1),
@@ -80,16 +90,16 @@ def rand_project(n_points, n_cues):
             if random.random() < 0.6:
                 def maybe(lo, hi, prob=0.8):
                     return round(random.uniform(lo, hi), 1) if random.random() < prob else None
-                # Mission "refonte AE/Reaper" (2026-08-01) : ~30 % des
-                # activations sont en mode dérivé (path/focus) — leur
-                # target_yaw_deg reste souvent None, exactement le cas que
-                # la fixture doit couvrir pour le port Rust.
-                mode = random.choices(["manual", "path", "focus"], weights=[0.7, 0.15, 0.15])[0]
+                # Mission "modes d'orientation" (2026-08-04, remplace la v1
+                # du 08-01) : trajet et arrivée sont réglés indépendamment
+                # — la fixture doit couvrir toutes les combinaisons, y
+                # compris des références de focus par phase différentes.
+                travel_mode = random.choices(["fixed", "path", "focus"], weights=[0.5, 0.25, 0.25])[0]
+                arrival_mode = random.choices(["hold", "fixed", "focus"], weights=[0.5, 0.25, 0.25])[0]
                 cue.activations[pt.id] = Activation(
                     target_x_cm=maybe(-500, 5500),
                     target_y_cm=maybe(-500, 3500),
                     target_z_cm=maybe(0, 300, 0.3),
-                    target_yaw_deg=maybe(-360, 720, 0.4) if mode == "manual" else None,
                     fade_ms=round(random.uniform(0, 5000), 1),
                     easing=random.choice(easings),
                     # Décalage de départ (2026-08-03) : ~40 % des activations
@@ -97,13 +107,23 @@ def rand_project(n_points, n_cues):
                     # escalier/vague), le reste garde le comportement
                     # historique (0).
                     start_offset_ms=round(random.uniform(0, 800), 1) if random.random() < 0.4 else 0.0,
-                    orientation_mode=mode,
-                    focus_x_cm=maybe(-500, 5500, 0.7) if mode == "focus" else None,
-                    focus_y_cm=maybe(-500, 3500, 0.7) if mode == "focus" else None,
+                    # ~50% : couvre à la fois une activation de pure
+                    # rotation qui gouverne quand même le lacet (overridden)
+                    # et une qui reste "non touchée" (aucun x/y, non
+                    # overridden — doit être invisible pour l'orientation).
+                    orientation_overridden=random.random() < 0.5,
+                    travel_orientation_mode=travel_mode,
+                    travel_fixed_yaw_deg=round(random.uniform(-360, 720), 1),
+                    travel_focus_point_id=rand_focus_ref() if travel_mode == "focus" else None,
+                    arrival_orientation_mode=arrival_mode,
+                    arrival_fixed_yaw_deg=round(random.uniform(-360, 720), 1),
+                    arrival_focus_point_id=rand_focus_ref() if arrival_mode == "focus" else None,
                     # ~40 % des activations portent des courbes sur un
                     # sous-ensemble d'axes (le reste teste le repli easing).
+                    # Plus d'axe "yaw" (mission "modes d'orientation") : le
+                    # lacet n'est plus jamais résolu via une courbe/easing.
                     curves=({axis: rand_curve()
-                             for axis in random.sample(["x", "y", "z", "yaw"],
+                             for axis in random.sample(["x", "y", "z"],
                                                        random.randint(1, 3))}
                             if random.random() < 0.4 else None),
                     # ~30 % de tracés spatiaux (waypoints/poignées) — le

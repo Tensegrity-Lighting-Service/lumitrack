@@ -1025,16 +1025,59 @@ réduit (pas d'orientation ni de dossier), marqueur scène en losange
 (réutilise `PathMarker`, déjà écran-constant — même vocabulaire visuel
 que les poignées de tracé spatial).
 
-**C. Refonte du modèle d'orientation — pas commencé.** Le plus gros
-chantier : séparer "en trajet"/"à l'arrivée" (3 choix chacun : Fixe avec
-sélecteur boussole 8 directions/Suit la trajectoire ou Ne change pas/
-Focus vers un point choisi), abandon du lacet animé en douceur (ancien
-"manuel"), réglage par défaut à 2 niveaux (Point puis Cue, même esprit
-que le timing point 6), restructuration en 2 passes de
-`resolve_positions`/`resolve_block_context` (un point en mode "focus"
-doit lire la position d'un AUTRE point déjà résolue au même instant).
-Migration des anciens projets (orientationMode/focusXCm/targetYawDeg)
-prévue. Détail complet dans le fichier de plan ci-dessus.
+**C. Refonte du modèle d'orientation — ✅ LIVRÉ (2026-08-04).** Le lacet se
+règle en DEUX phases indépendantes par activation : "en trajet" (Fixe —
+angle en degrés + sélecteur boussole 8 directions, désormais INSTANTANÉ,
+sans aucune animation en douceur — / Suit la trajectoire / Focus vers un
+point de focus choisi) et "à l'arrivée" (Ne change pas — fige ce que le
+trajet avait résolu pile à la fin du fondu, généralisé à tous les modes de
+trajet / Fixe, son propre angle indépendant du trajet / Focus, son propre
+point indépendant lui aussi). L'ancien mode "manual" (lacet animé comme
+x/y/z) disparaît entièrement — `Activation.target_yaw_deg`/
+`orientation_mode`/`focus_x_cm`/`focus_y_cm` retirés, remplacés par 7
+champs (`travel_orientation_mode`, `travel_fixed_yaw_deg`,
+`travel_focus_point_id`, `arrival_orientation_mode`,
+`arrival_fixed_yaw_deg`, `arrival_focus_point_id`,
+`orientation_overridden`). Réglage par défaut à 2 niveaux, même esprit que
+le timing (point 6) : `Point.default_travel_orientation_mode` (renommé de
+`default_orientation_mode`, ne couvre que le trajet) puis 6 nouveaux champs
+`Cue.default_travel_*`/`default_arrival_*` (non mirrorés en Rust, purs
+côté auteur) ; `orientation_overridden` marque la personnalisation d'une
+activation, un bouton "revenir au bloc" la resynchronise. Résolution
+restructurée en 2 passes dans `resolve_positions`/`resolve_block_context`
+(x/y/z de TOUS les points d'abord, puis le lacet de tous) — un point en
+mode "focus" doit lire la position d'un AUTRE point déjà résolue au même
+instant, aucun risque de cycle. `YAW_TURN_MS` (plafond de fondu du lacet,
+devenu obsolète — "fixed" est déjà instantané par construction) supprimé
+en Python et en Rust. Migration automatique des anciens projets
+(orientationMode/focusXCm/focusYCm/targetYawDeg absents) au chargement :
+"manual" → "fixed" (angle repris tel quel), "path"/"focus" → renommage
+direct ; le mode "focus" fait en plus apparaître un nouveau
+`Point(isFocusPoint=true)` par coordonnée `(focusXCm, focusYCm)` distincte
+rencontrée dans le projet (dédupliquées) — **effet visible à noter** :
+d'anciens projets en mode focus verront de nouveaux points apparaître dans
+le roster au premier chargement après cette mise à jour, ce n'est pas une
+perte de données. `orientation_overridden` est un miroir Rust NÉCESSAIRE
+(exception documentée : contrairement à `fade_overridden`, il est lu au
+moment de la résolution via `touches_orientation()`). Frontend :
+`CompassPicker`/`FocusPointSelect` nouveaux, `ActivationCard` réécrite en
+deux sous-sections (trajet/arrivée), nouvelle section repliable
+"Orientation par défaut du bloc" dans `CueInspector`, rotation de groupe
+(`SelectionTransform`) réécrite pour bumper `travelFixedYawDeg`/
+`arrivalFixedYawDeg` indépendamment (gardé seulement quand la phase
+correspondante est en mode "fixed"), `splitCueAtPlayhead` fige désormais
+l'arrivée du bloc tronqué sur le lacet déjà résolu à l'instant de la
+coupe. `BlockAutomation.tsx` (ligne d'automation du lacet sur le bloc,
+restreinte au seul lacet depuis le 08-01) supprimée entièrement — plus
+aucune raison d'être, le lacet n'est plus jamais animé en douceur ; l'axe
+"yaw" retiré du graph editor (`GraphEditor`/`curves.ts`) pour la même
+raison. Mapping boussole→degrés (convention 0°=Est/90°=Nord, cohérente
+avec `atan2(dy,dx)` déjà utilisé partout ailleurs) posé par défaut mais
+**pas encore vérifié en direct dans l'app** — à confirmer visuellement
+(placer un point de focus au nord d'un acteur, lire l'angle résolu) avant
+de considérer le sens des boutons de la boussole comme définitif.
+`GroupTimingPanel` (édition groupée) n'a pas reçu l'équivalent pour
+l'orientation — laissé de côté, priorité basse comme prévu au plan.
 
 **D. Presets de montage de fixture — pas commencé.** Liste de presets
 nommés et éditables au niveau projet (pas un enum codé en dur), assignés

@@ -393,42 +393,123 @@ def test_add_point_and_update_point_accept_is_focus_point():
     assert session.project.point_by_id("actor1").is_focus_point is True
 
 
-def test_default_orientation_mode_prefills_new_activation_only():
-    """Menu contextuel "mode d'orientation par défaut" (DIRECTIVES.md point
-    5) : préremplit une activation TOUTE NEUVE, n'a plus aucun effet une
-    fois l'activation créée — même si le défaut change ensuite."""
+def test_default_travel_orientation_mode_prefills_new_activation_only():
+    """Préremplissage (DIRECTIVES.md point 5/6, renommé de
+    default_orientation_mode le 2026-08-04) : préremplit une activation
+    TOUTE NEUVE, n'a plus aucun effet une fois l'activation créée — même
+    si le défaut change ensuite."""
     session = Session()
     session.project.points = [Point(id="p1", name="P1")]
     session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=2000.0, activations={})]
 
     _run(_handle_message(session, {
-        "type": "update_point", "pointId": "p1", "defaultOrientationMode": "focus",
+        "type": "update_point", "pointId": "p1", "defaultTravelOrientationMode": "focus",
     }))
-    assert session.project.point_by_id("p1").default_orientation_mode == "focus"
+    assert session.project.point_by_id("p1").default_travel_orientation_mode == "focus"
 
     _run(_handle_message(session, {
         "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 10.0,
     }))
-    assert session.project.cue_by_id("c1").activations["p1"].orientation_mode == "focus"
+    assert session.project.cue_by_id("c1").activations["p1"].travel_orientation_mode == "focus"
 
     _run(_handle_message(session, {
-        "type": "update_point", "pointId": "p1", "defaultOrientationMode": "manual",
+        "type": "update_point", "pointId": "p1", "defaultTravelOrientationMode": "fixed",
     }))
     _run(_handle_message(session, {
         "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 20.0,
     }))
-    assert session.project.cue_by_id("c1").activations["p1"].orientation_mode == "focus"
+    assert session.project.cue_by_id("c1").activations["p1"].travel_orientation_mode == "focus"
 
 
 def test_set_activation_explicit_orientation_mode_wins_over_point_default():
     session = Session()
-    session.project.points = [Point(id="p1", name="P1", default_orientation_mode="focus")]
+    session.project.points = [Point(id="p1", name="P1", default_travel_orientation_mode="focus")]
     session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=2000.0, activations={})]
     _run(_handle_message(session, {
         "type": "set_activation", "cueId": "c1", "pointId": "p1",
-        "targetXCm": 10.0, "orientationMode": "path",
+        "targetXCm": 10.0, "travelOrientationMode": "path",
     }))
-    assert session.project.cue_by_id("c1").activations["p1"].orientation_mode == "path"
+    assert session.project.cue_by_id("c1").activations["p1"].travel_orientation_mode == "path"
+
+
+# ------------------ réglage par défaut du BLOC, orientation (2026-08-04) --
+#
+# Même principe à 2 niveaux que le timing (point 6) : Cue.default_travel_*/
+# default_arrival_* préremplit toute NOUVELLE activation du bloc et
+# resynchronise (mission "global vs sélectif") toute activation existante
+# non personnalisée dès que le défaut du bloc change.
+
+def test_cue_orientation_default_prefills_new_activation():
+    session = Session()
+    session.project.points = [Point(id="p1", name="P1")]
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=2000.0)]
+    _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "c1",
+        "defaultTravelOrientationMode": "fixed", "defaultTravelFixedYawDeg": 45.0,
+        "defaultArrivalOrientationMode": "fixed", "defaultArrivalFixedYawDeg": 200.0,
+    }))
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 10.0,
+    }))
+    act = session.project.cue_by_id("c1").activations["p1"]
+    assert act.travel_orientation_mode == "fixed"
+    assert act.travel_fixed_yaw_deg == pytest.approx(45.0)
+    assert act.arrival_orientation_mode == "fixed"
+    assert act.arrival_fixed_yaw_deg == pytest.approx(200.0)
+    assert act.orientation_overridden is False
+
+
+def test_cue_orientation_default_change_resyncs_non_overridden_activations():
+    session = Session()
+    session.project.points = [Point(id="p1", name="P1"), Point(id="p2", name="P2")]
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=2000.0)]
+    _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "c1", "defaultTravelOrientationMode": "fixed",
+        "defaultTravelFixedYawDeg": 10.0,
+    }))
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 0.0,
+    }))
+    # p2 est personnalisé à la main (le champ d'orientation de l'inspecteur
+    # envoie toujours orientationOverridden:true avec sa valeur, comme le
+    # champ de fade le fait déjà pour fadeOverridden) : ne doit jamais
+    # suivre le défaut du bloc.
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p2", "targetXCm": 0.0,
+        "travelOrientationMode": "path", "orientationOverridden": True,
+    }))
+    _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "c1", "defaultTravelFixedYawDeg": 99.0,
+    }))
+    cue = session.project.cue_by_id("c1")
+    assert cue.activations["p1"].travel_fixed_yaw_deg == pytest.approx(99.0)
+    assert cue.activations["p2"].travel_orientation_mode == "path"
+
+
+def test_reverting_orientation_override_resyncs_to_cue_default():
+    session = Session()
+    session.project.points = [Point(id="p1", name="P1")]
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=2000.0)]
+    _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "c1", "defaultTravelOrientationMode": "fixed",
+        "defaultTravelFixedYawDeg": 10.0,
+    }))
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 0.0,
+        "travelOrientationMode": "path", "orientationOverridden": True,
+    }))
+    assert session.project.cue_by_id("c1").activations["p1"].orientation_overridden is True
+
+    # "Revenir au bloc" : orientationOverridden:false seul resynchronise
+    # depuis les défauts ACTUELS du bloc.
+    reply = _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "orientationOverridden": False,
+    }))
+    assert reply is None
+    act = session.project.cue_by_id("c1").activations["p1"]
+    assert act.orientation_overridden is False
+    assert act.travel_orientation_mode == "fixed"
+    assert act.travel_fixed_yaw_deg == pytest.approx(10.0)
 
 
 def test_set_audio_updates_path_duration_and_transport():

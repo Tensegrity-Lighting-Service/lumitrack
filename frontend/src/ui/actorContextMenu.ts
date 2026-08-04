@@ -13,8 +13,12 @@ import { pickColor } from './colorPicker'
 import { t } from '../i18n'
 
 export function buildActorContextMenuSections(point: Point, project: Project): ContextMenuSections {
-  const orientationOptions: Array<['manual' | 'path' | 'focus', string]> = [
-    ['manual', t('cue.rotationManual')],
+  // Mission "modes d'orientation" (2026-08-04) : ce repli ne concerne que
+  // la phase TRAJET — l'arrivée retombe toujours sur "hold" par défaut.
+  // "manual" (lacet animé en douceur) a disparu, remplacé par "fixed"
+  // (instantané) — plus de rotationManual au sens de l'ancien mode.
+  const orientationOptions: Array<['fixed' | 'path' | 'focus', string]> = [
+    ['fixed', t('cue.rotationFixed')],
     ['path', t('cue.rotationPath')],
     ['focus', t('cue.rotationFocus')],
   ]
@@ -35,8 +39,8 @@ export function buildActorContextMenuSections(point: Point, project: Project): C
     ],
     orientationOptions.map(([mode, label]) => ({
       label: t('contextMenu.orientationDefaultPrefix', { label }),
-      checked: (point.defaultOrientationMode ?? 'manual') === mode,
-      onClick: () => sidecar.updatePoint(point.id, { defaultOrientationMode: mode }),
+      checked: (point.defaultTravelOrientationMode ?? 'fixed') === mode,
+      onClick: () => sidecar.updatePoint(point.id, { defaultTravelOrientationMode: mode }),
     })),
     [
       {

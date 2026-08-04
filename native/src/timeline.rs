@@ -8,20 +8,19 @@ use crate::model::{Activation, Project};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Axis { X, Y, Z, Yaw }
+pub enum Axis { X, Y, Z }
 
-pub const AXES: [Axis; 4] = [Axis::X, Axis::Y, Axis::Z, Axis::Yaw];
+pub const AXES: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
 
 impl Axis {
     pub fn key(self) -> &'static str {
-        match self { Axis::X => "x", Axis::Y => "y", Axis::Z => "z", Axis::Yaw => "yaw" }
+        match self { Axis::X => "x", Axis::Y => "y", Axis::Z => "z" }
     }
     fn value(self, act: &Activation) -> Option<f64> {
         match self {
             Axis::X => act.target_x_cm,
             Axis::Y => act.target_y_cm,
             Axis::Z => act.target_z_cm,
-            Axis::Yaw => act.target_yaw_deg,
         }
     }
 }
@@ -95,40 +94,24 @@ fn backstage_slot(project: &Project, point_id: &str) -> Option<(f64, f64)> {
     ))
 }
 
-/// Port de core/timeline.py::YAW_TURN_MS : un acteur porté tourne avant de
-/// partir, il ne pivote pas progressivement pendant tout le trajet
-/// (demande de Florian, 2026-07-31). Fenêtre de fondu propre au lacet,
-/// courte, plafonnée par fade_ms — jamais un cut (toujours eased via
-/// act_axis_progress), juste bien plus bref que le déplacement x/y.
-pub const YAW_TURN_MS: f64 = 400.0;
-
 /// Port de `_axis_keyframes` : un keyframe par cue dont l'activation de ce
-/// point touche cet axe, trié par start_ms (tri stable). Le lacet a sa
-/// propre fenêtre de fondu plafonnée (YAW_TURN_MS) ; les autres axes
-/// gardent le fade_ms complet de l'activation.
+/// point touche cet axe, trié par start_ms (tri stable). N'est plus jamais
+/// appelé pour le lacet (mission "modes d'orientation", 2026-08-04) — voir
+/// `orientation_keyframes`/`resolve_yaw`.
 fn axis_keyframes<'a>(project: &'a Project, point_id: &str, axis: Axis) -> Vec<Keyframe<'a>> {
     let mut kfs: Vec<Keyframe<'a>> = project
         .cues
         .iter()
         .filter_map(|cue| {
             let act = cue.activations.get(point_id)?;
-            let value = match axis.value(act) {
-                Some(v) => v,
-                // Mission "refonte AE/Reaper" : une activation en mode
-                // "path"/"focus" n'a pas de target_yaw_deg explicite mais
-                // touche quand même l'axe lacet (la valeur numérique est
-                // dérivée ailleurs, jamais lue ici).
-                None if axis == Axis::Yaw && act.orientation_mode != "manual" => 0.0,
-                None => return None,
-            };
-            let fade_ms = if axis == Axis::Yaw { act.fade_ms.min(YAW_TURN_MS) } else { act.fade_ms };
+            let value = axis.value(act)?;
             // Décalage de départ (2026-08-03) : cette activation démarre
             // (et gouverne LTP) start_offset_ms après le début nominal du
             // bloc, pas exactement dessus — entrées en escalier/vague.
             let effective_start = cue.start_ms + act.start_offset_ms;
             Some(Keyframe {
                 start_ms: effective_start,
-                fade_end_ms: effective_start + fade_ms,
+                fade_end_ms: effective_start + act.fade_ms,
                 value,
                 easing: act.easing.clone(),
                 curve: act.curves.as_ref()
@@ -202,48 +185,134 @@ fn resolve_axis_with_origin(kfs: &[Keyframe], t_ms: f64, first_origin: Option<f6
 /// déplacement en mode "path".
 pub const PATH_YAW_SAMPLE_MS: f64 = 50.0;
 
-/// Port de `_resolve_yaw` : le lacet gouvernant peut être explicite
-/// ("manual", résolution par axe normale), dérivé de la tangente du
-/// déplacement x/y ("path", gelé une fois le mouvement arrêté pour éviter un
-/// atan2(0,0) dégénéré) ou pointé vers un point fixe du terrain ("focus").
-fn resolve_yaw(project: &Project, point_id: &str, t_ms: f64, x: f64, y: f64) -> f64 {
-    let kfs_yaw = axis_keyframes(project, point_id, Axis::Yaw);
-    let Some(idx) = governing_index(&kfs_yaw, t_ms) else { return 0.0 };
-    let kf = &kfs_yaw[idx];
+/// Port de `touches_orientation` (project.py::Activation) : un déplacement
+/// réel x/y gouverne l'orientation ; une activation de pure rotation (sans
+/// x/y) ne la gouverne que si explicitement personnalisée. target_z_cm
+/// exclu exprès (un changement de hauteur seul ne doit pas reprendre la
+/// main sur le lacet).
+fn touches_orientation(act: &Activation) -> bool {
+    act.target_x_cm.is_some() || act.target_y_cm.is_some() || act.orientation_overridden
+}
+
+struct OrientationKeyframe<'a> {
+    start_ms: f64,
+    fade_end_ms: f64,
+    act: &'a Activation,
+    cue_id: String,
+}
+
+/// Port de `_orientation_keyframes` : un keyframe par cue dont l'activation
+/// de ce point touche l'orientation, trié par start_ms. Plus de plafond
+/// YAW_TURN_MS (mission "modes d'orientation", 2026-08-04) — le mode
+/// "fixed" en trajet est déjà instantané par construction.
+fn orientation_keyframes<'a>(project: &'a Project, point_id: &str) -> Vec<OrientationKeyframe<'a>> {
+    let mut kfs: Vec<OrientationKeyframe<'a>> = project
+        .cues
+        .iter()
+        .filter_map(|cue| {
+            let act = cue.activations.get(point_id)?;
+            if !touches_orientation(act) {
+                return None;
+            }
+            let effective_start = cue.start_ms + act.start_offset_ms;
+            Some(OrientationKeyframe {
+                start_ms: effective_start,
+                fade_end_ms: effective_start + act.fade_ms,
+                act,
+                cue_id: cue.id.clone(),
+            })
+        })
+        .collect();
+    kfs.sort_by(|a, b| a.start_ms.partial_cmp(&b.start_ms).unwrap());
+    kfs
+}
+
+fn orientation_governing_index(kfs: &[OrientationKeyframe], t_ms: f64) -> Option<usize> {
+    let mut idx = None;
+    for (i, kf) in kfs.iter().enumerate() {
+        if kf.start_ms <= t_ms {
+            idx = Some(i);
+        } else {
+            break;
+        }
+    }
+    idx
+}
+
+/// Port de `_resolve_yaw` : lacet en DEUX phases indépendantes (mission
+/// "modes d'orientation", 2026-08-04, remplace le régime unique "manual"/
+/// "path"/"focus" du 2026-08-01) — "en trajet" pendant le fondu de
+/// l'activation gouvernante, "à l'arrivée" une fois le fondu terminé.
+/// `resolved_xy` est la position x/y déjà résolue de TOUS les points à cet
+/// instant (calculée par `resolve_positions` en une première passe) —
+/// nécessaire pour que le mode "focus" puisse viser un autre point sans
+/// dépendre de son propre lacet. `kfs`, si fourni (par
+/// `resolve_block_context`, pour évaluer la valeur qui gouvernait AVANT
+/// qu'une activation "fixed" ne prenne le relais — LTP, comme x/y/z),
+/// remplace le parcours complet des keyframes d'orientation du point.
+fn resolve_yaw(
+    project: &Project, point_id: &str, t_ms: f64, x: f64, y: f64,
+    resolved_xy: &BTreeMap<String, (f64, f64)>,
+    kfs: Option<&[OrientationKeyframe]>,
+) -> f64 {
+    let owned;
+    let kfs: &[OrientationKeyframe] = match kfs {
+        Some(k) => k,
+        None => { owned = orientation_keyframes(project, point_id); &owned }
+    };
+    let Some(idx) = orientation_governing_index(kfs, t_ms) else { return 0.0 };
+    let kf = &kfs[idx];
     let act = kf.act;
-    match act.orientation_mode.as_str() {
-        "focus" => {
-            let fx = act.focus_x_cm.unwrap_or(x);
-            let fy = act.focus_y_cm.unwrap_or(y);
-            if (fx - x).abs() < 1e-6 && (fy - y).abs() < 1e-6 {
-                return kf.value;
-            }
-            (fy - y).atan2(fx - x).to_degrees()
+
+    let focus_angle = |focus_point_id: &Option<String>, fallback_deg: f64| -> f64 {
+        let target = focus_point_id.as_ref().and_then(|id| resolved_xy.get(id));
+        let Some(&(fx, fy)) = target else { return fallback_deg };
+        if (fx - x).abs() < 1e-6 && (fy - y).abs() < 1e-6 {
+            return fallback_deg;
         }
-        "path" => {
-            let kfs_x = axis_keyframes(project, point_id, Axis::X);
-            let kfs_y = axis_keyframes(project, point_id, Axis::Y);
-            let sample_t = if kf.fade_end_ms > kf.start_ms {
-                t_ms.min(kf.fade_end_ms - PATH_YAW_SAMPLE_MS)
-            } else {
-                t_ms
+        (fy - y).atan2(fx - x).to_degrees()
+    };
+
+    let travel_value = |t_for_path: f64| -> f64 {
+        match act.travel_orientation_mode.as_str() {
+            "focus" => focus_angle(&act.travel_focus_point_id, act.travel_fixed_yaw_deg),
+            "path" => {
+                let kfs_x = axis_keyframes(project, point_id, Axis::X);
+                let kfs_y = axis_keyframes(project, point_id, Axis::Y);
+                let sample_t = if kf.fade_end_ms > kf.start_ms {
+                    t_for_path.min(kf.fade_end_ms - PATH_YAW_SAMPLE_MS)
+                } else {
+                    t_for_path
+                }
+                .max(kf.start_ms);
+                let t0 = (sample_t - PATH_YAW_SAMPLE_MS).max(0.0);
+                let t1 = sample_t + PATH_YAW_SAMPLE_MS;
+                let (Some(x0), Some(y0), Some(x1), Some(y1)) =
+                    (resolve_axis(&kfs_x, t0), resolve_axis(&kfs_y, t0),
+                     resolve_axis(&kfs_x, t1), resolve_axis(&kfs_y, t1))
+                else {
+                    return act.travel_fixed_yaw_deg;
+                };
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                if dx.abs() < 1e-6 && dy.abs() < 1e-6 {
+                    return act.travel_fixed_yaw_deg;
+                }
+                dy.atan2(dx).to_degrees()
             }
-            .max(kf.start_ms);
-            let t0 = (sample_t - PATH_YAW_SAMPLE_MS).max(0.0);
-            let t1 = sample_t + PATH_YAW_SAMPLE_MS;
-            let (Some(x0), Some(y0), Some(x1), Some(y1)) =
-                (resolve_axis(&kfs_x, t0), resolve_axis(&kfs_y, t0),
-                 resolve_axis(&kfs_x, t1), resolve_axis(&kfs_y, t1))
-            else {
-                return kf.value;
-            };
-            let (dx, dy) = (x1 - x0, y1 - y0);
-            if dx.abs() < 1e-6 && dy.abs() < 1e-6 {
-                return kf.value;
-            }
-            dy.atan2(dx).to_degrees()
+            // "fixed" (défaut — et repli sûr pour une valeur non reconnue).
+            _ => act.travel_fixed_yaw_deg,
         }
-        _ => resolve_axis(&kfs_yaw, t_ms).unwrap_or(0.0),
+    };
+
+    if t_ms < kf.fade_end_ms {
+        return travel_value(t_ms);
+    }
+    match act.arrival_orientation_mode.as_str() {
+        "fixed" => act.arrival_fixed_yaw_deg,
+        "focus" => focus_angle(&act.arrival_focus_point_id, act.arrival_fixed_yaw_deg),
+        // "hold" (défaut — et repli sûr) : fige ce que le trajet avait
+        // résolu PILE à l'instant où le fondu s'est terminé.
+        _ => travel_value(kf.fade_end_ms),
     }
 }
 
@@ -258,8 +327,16 @@ pub struct Pose {
 /// Port de `resolve_positions` : un point absent du résultat n'a pas de
 /// position connue et ne doit JAMAIS être envoyé en PSN ni dessiné (§13.1.7,
 /// pas de repli (0,0)). z/yaw absents → défauts du point.
+///
+/// Deux passes (mission "modes d'orientation", 2026-08-04) : x/y/z pour
+/// TOUS les points d'abord, puis le lacet de tous — requis car le mode
+/// "focus" doit lire la position déjà résolue d'un AUTRE point au même
+/// instant. Aucun risque de cycle : la position ne dépend jamais du lacet
+/// d'un autre point.
 pub fn resolve_positions(project: &Project, t_ms: f64) -> BTreeMap<String, Pose> {
     let mut result = BTreeMap::new();
+    let mut resolved_xy: BTreeMap<String, (f64, f64)> = BTreeMap::new();
+    let mut needs_yaw: Vec<(String, f64, f64, f64)> = Vec::new();
     for point in &project.points {
         let kfs_x = axis_keyframes(project, &point.id, Axis::X);
         let kfs_y = axis_keyframes(project, &point.id, Axis::Y);
@@ -273,6 +350,7 @@ pub fn resolve_positions(project: &Project, t_ms: f64) -> BTreeMap<String, Pose>
                     x_cm: sx, y_cm: sy,
                     z_cm: point.default_height_cm, yaw_deg: 0.0,
                 });
+                resolved_xy.insert(point.id.clone(), (sx, sy));
             }
             continue;
         };
@@ -309,12 +387,13 @@ pub fn resolve_positions(project: &Project, t_ms: f64) -> BTreeMap<String, Pose>
             }
         }
         let z = resolve_axis(&axis_keyframes(project, &point.id, Axis::Z), t_ms);
-        result.insert(point.id.clone(), Pose {
-            x_cm: x,
-            y_cm: y,
-            z_cm: z.unwrap_or(point.default_height_cm),
-            yaw_deg: resolve_yaw(project, &point.id, t_ms, x, y),
-        });
+        let z = z.unwrap_or(point.default_height_cm);
+        resolved_xy.insert(point.id.clone(), (x, y));
+        needs_yaw.push((point.id.clone(), x, y, z));
+    }
+    for (point_id, x, y, z) in needs_yaw {
+        let yaw_deg = resolve_yaw(project, &point_id, t_ms, x, y, &resolved_xy, None);
+        result.insert(point_id, Pose { x_cm: x, y_cm: y, z_cm: z, yaw_deg });
     }
     result
 }
@@ -403,36 +482,56 @@ pub fn resolve_block_context(
             }
         }
 
-        if act.orientation_mode != "manual" {
-            // "path"/"focus" : le lacet est dérivé de la position, jamais
-            // stocké — la boucle par axe ci-dessus l'a traité comme "non
-            // touché" (target_yaw_deg est bien None). On calcule ici le
-            // lacet réellement affiché au départ/à la cible de ce bloc, à
-            // partir des positions x/y déjà résolues ci-dessus.
-            let sx = axis_start.get(&Axis::X).copied().flatten();
-            let sy = axis_start.get(&Axis::Y).copied().flatten();
-            if let (Some(sx), Some(sy)) = (sx, sy) {
-                axis_start.insert(Axis::Yaw, Some(resolve_yaw(project, &point.id, effective_start, sx, sy)));
+        // Le lacet est toujours dérivé (mission "modes d'orientation",
+        // 2026-08-04 : plus de mode "manual" stocké) — jamais traité par la
+        // boucle par axe ci-dessus (Axis n'a plus de variante Yaw). Un
+        // éventuel point de focus référencé est cherché dans la résolution
+        // GLOBALE du projet à cet instant (`resolved_xy_at`) — sa propre
+        // position ne dépend jamais de ce bloc.
+        let resolved_xy_at = |t: f64| -> BTreeMap<String, (f64, f64)> {
+            resolve_positions(project, t).into_iter()
+                .map(|(pid, pose)| (pid, (pose.x_cm, pose.y_cm)))
+                .collect()
+        };
+        let kfs_orient = orientation_keyframes(project, &point.id);
+        let orient_idx = kfs_orient.iter().position(|kf| kf.cue_id == cue_id);
+        let sx = axis_start.get(&Axis::X).copied().flatten();
+        let sy = axis_start.get(&Axis::Y).copied().flatten();
+        let mut yaw_start: Option<f64> = None;
+        let mut yaw_target: Option<f64> = None;
+        if let (Some(idx), Some(sx), Some(sy)) = (orient_idx, sx, sy) {
+            if idx == 0 || act.travel_orientation_mode != "fixed" {
+                // Mode dérivé (path/focus) ou première apparition : pas de
+                // notion de "valeur précédente" — la valeur EST celle de
+                // cette activation elle-même à cet instant.
+                yaw_start = Some(resolve_yaw(
+                    project, &point.id, effective_start, sx, sy, &resolved_xy_at(effective_start), None));
+            } else {
+                // "fixed" : LTP comme x/y/z — la valeur qui gouvernait JUSTE
+                // AVANT que cette activation ne prenne le relais.
+                yaw_start = Some(resolve_yaw(
+                    project, &point.id, effective_start, sx, sy, &resolved_xy_at(effective_start),
+                    Some(&kfs_orient[..idx])));
             }
-            let tx = axis_target.get(&Axis::X).copied().flatten();
-            let ty = axis_target.get(&Axis::Y).copied().flatten();
-            if let (Some(tx), Some(ty)) = (tx, ty) {
-                axis_target.insert(Axis::Yaw,
-                    Some(resolve_yaw(project, &point.id, effective_start + act.fade_ms, tx, ty)));
-            }
-            sources.insert(Axis::Yaw.key(), None);
         }
+        let tx = axis_target.get(&Axis::X).copied().flatten();
+        let ty = axis_target.get(&Axis::Y).copied().flatten();
+        if let (Some(_), Some(tx), Some(ty)) = (orient_idx, tx, ty) {
+            let t_target = effective_start + act.fade_ms;
+            yaw_target = Some(resolve_yaw(
+                project, &point.id, t_target, tx, ty, &resolved_xy_at(t_target), None));
+        }
+        sources.insert("yaw", None);
 
-        let pose_or_none = |values: &BTreeMap<Axis, Option<f64>>| -> Option<[f64; 4]> {
+        let pose_or_none = |values: &BTreeMap<Axis, Option<f64>>, yaw: Option<f64>| -> Option<[f64; 4]> {
             let x = values[&Axis::X]?;
             let y = values[&Axis::Y]?;
             let z = values[&Axis::Z].unwrap_or(point.default_height_cm);
-            let yaw = values[&Axis::Yaw].unwrap_or(0.0);
-            Some([x, y, z, yaw])
+            Some([x, y, z, yaw.unwrap_or(0.0)])
         };
 
-        let start_pose = pose_or_none(&axis_start);
-        let target_pose = pose_or_none(&axis_target);
+        let start_pose = pose_or_none(&axis_start, yaw_start);
+        let target_pose = pose_or_none(&axis_target, yaw_target);
 
         let mut path = Vec::new();
         if let (Some(s), Some(t)) = (start_pose, target_pose) {
@@ -563,7 +662,10 @@ mod tests {
     /// Oracle : axes indépendants — un cue peut ne toucher que le lacet.
     #[test]
     fn axes_resolve_independently() {
-        let yaw_only = Activation { target_yaw_deg: Some(225.0), fade_ms: 0.0, ..Default::default() };
+        let yaw_only = Activation {
+            orientation_overridden: true, travel_orientation_mode: "fixed".into(),
+            travel_fixed_yaw_deg: 225.0, fade_ms: 0.0, ..Default::default()
+        };
         let p = project(vec![point("p1")], vec![
             cue("A", 0.0, vec![("p1", act(Some(100.0), Some(100.0), 0.0))]),
             cue("B", 1000.0, vec![("p1", yaw_only)]),
@@ -622,69 +724,111 @@ mod tests {
         assert!(resolve_block_context(&p, "nope", 4).is_err());
     }
 
-    /// Oracle : test_core.py::test_yaw_turns_quickly_at_start_of_move_not_spread_over_it
-    /// — le lacet tourne dans sa propre fenêtre courte (YAW_TURN_MS), pas
-    /// étalé sur tout le déplacement x/y.
+    /// Oracle : test_core.py::test_travel_fixed_yaw_is_instantaneous_not_animated
+    /// — mission "modes d'orientation" (2026-08-04) : "fixed" en trajet
+    /// bascule dès le premier instant de la fenêtre, aucune animation.
     #[test]
-    fn yaw_turns_quickly_at_start_of_move_not_spread_over_it() {
+    fn travel_fixed_yaw_is_instantaneous_not_animated() {
         let snap = Activation {
-            target_x_cm: Some(0.0), target_y_cm: Some(0.0), target_yaw_deg: Some(0.0),
+            target_x_cm: Some(0.0), target_y_cm: Some(0.0),
+            travel_orientation_mode: "fixed".into(), travel_fixed_yaw_deg: 0.0,
             fade_ms: 0.0, ..Default::default()
         };
         let mv = Activation {
-            target_x_cm: Some(1000.0), target_y_cm: Some(0.0), target_yaw_deg: Some(90.0),
+            target_x_cm: Some(1000.0), target_y_cm: Some(0.0),
+            travel_orientation_mode: "fixed".into(), travel_fixed_yaw_deg: 90.0,
             fade_ms: 4000.0, ..Default::default()
         };
         let p = project(vec![point("a")], vec![
             cue("c0", 0.0, vec![("a", snap)]),
             cue("c1", 1000.0, vec![("a", mv)]),
         ]);
-        let mid_turn = resolve_positions(&p, 1000.0 + YAW_TURN_MS / 2.0);
-        assert!((mid_turn["a"].yaw_deg - 45.0).abs() < 1e-9);
-        assert!((mid_turn["a"].x_cm - 50.0).abs() < 1e-9); // 5% de 1000, pas 45%
-
-        let mid_move = resolve_positions(&p, 1000.0 + 2000.0);
-        assert!((mid_move["a"].yaw_deg - 90.0).abs() < 1e-9);
-        assert!((mid_move["a"].x_cm - 500.0).abs() < 1e-9);
+        let just_after_start = resolve_positions(&p, 1001.0);
+        assert!((just_after_start["a"].yaw_deg - 90.0).abs() < 1e-9);
+        assert!((just_after_start["a"].x_cm - 0.25).abs() < 1e-9);
     }
 
-    /// Oracle : test_core.py::test_yaw_turn_never_outlasts_a_shorter_move
+    /// Oracle : test_core.py::test_arrival_hold_freezes_the_travel_value_at_fade_end
     #[test]
-    fn yaw_turn_never_outlasts_a_shorter_move() {
+    fn arrival_hold_freezes_the_travel_value_at_fade_end() {
         let snap = Activation {
-            target_x_cm: Some(0.0), target_y_cm: Some(0.0), target_yaw_deg: Some(0.0),
+            target_x_cm: Some(0.0), target_y_cm: Some(0.0),
+            travel_orientation_mode: "fixed".into(), travel_fixed_yaw_deg: 0.0,
             fade_ms: 0.0, ..Default::default()
         };
         let mv = Activation {
-            target_x_cm: Some(100.0), target_y_cm: Some(0.0), target_yaw_deg: Some(90.0),
-            fade_ms: 100.0, ..Default::default()
+            target_x_cm: Some(100.0), target_y_cm: Some(0.0),
+            travel_orientation_mode: "fixed".into(), travel_fixed_yaw_deg: 90.0,
+            arrival_orientation_mode: "hold".into(),
+            fade_ms: 1000.0, ..Default::default()
         };
         let p = project(vec![point("a")], vec![
             cue("c0", 0.0, vec![("a", snap)]),
             cue("c1", 1000.0, vec![("a", mv)]),
         ]);
-        let at_end = resolve_positions(&p, 1100.0);
-        assert!((at_end["a"].yaw_deg - 90.0).abs() < 1e-9);
-        assert!((at_end["a"].x_cm - 100.0).abs() < 1e-9);
+        let long_after = resolve_positions(&p, 10_000.0);
+        assert!((long_after["a"].yaw_deg - 90.0).abs() < 1e-9);
     }
 
-    /// Oracle : test_core.py::test_yaw_turn_is_eased_not_an_instant_cut
+    /// Oracle : test_core.py::test_arrival_fixed_is_independent_of_travel_fixed
     #[test]
-    fn yaw_turn_is_eased_not_an_instant_cut() {
+    fn arrival_fixed_is_independent_of_travel_fixed() {
         let snap = Activation {
-            target_x_cm: Some(0.0), target_y_cm: Some(0.0), target_yaw_deg: Some(0.0),
+            target_x_cm: Some(0.0), target_y_cm: Some(0.0),
+            travel_orientation_mode: "fixed".into(), travel_fixed_yaw_deg: 0.0,
             fade_ms: 0.0, ..Default::default()
         };
         let mv = Activation {
-            target_x_cm: Some(1000.0), target_y_cm: Some(0.0), target_yaw_deg: Some(90.0),
-            fade_ms: 4000.0, ..Default::default()
+            target_x_cm: Some(100.0), target_y_cm: Some(0.0),
+            travel_orientation_mode: "fixed".into(), travel_fixed_yaw_deg: 90.0,
+            arrival_orientation_mode: "fixed".into(), arrival_fixed_yaw_deg: 200.0,
+            fade_ms: 1000.0, ..Default::default()
         };
         let p = project(vec![point("a")], vec![
             cue("c0", 0.0, vec![("a", snap)]),
             cue("c1", 1000.0, vec![("a", mv)]),
         ]);
-        let just_after_start = resolve_positions(&p, 1050.0);
-        let yaw = just_after_start["a"].yaw_deg;
-        assert!(yaw > 0.0 && yaw < 90.0);
+        let during_travel = resolve_positions(&p, 1500.0);
+        let after_arrival = resolve_positions(&p, 3000.0);
+        assert!((during_travel["a"].yaw_deg - 90.0).abs() < 1e-9);
+        assert!((after_arrival["a"].yaw_deg - 200.0).abs() < 1e-9);
+    }
+
+    /// Oracle : test_core.py::test_orientation_mode_focus_points_at_fixed_target
+    #[test]
+    fn focus_points_at_a_synthesized_focus_point() {
+        let mut focus_pt = point("f");
+        focus_pt.is_focus_point = true;
+        let a = Activation {
+            target_x_cm: Some(0.0), target_y_cm: Some(0.0),
+            travel_orientation_mode: "focus".into(), travel_focus_point_id: Some("f".into()),
+            fade_ms: 0.0, ..Default::default()
+        };
+        let f = act(Some(0.0), Some(1000.0), 0.0);
+        let p = project(vec![point("a"), focus_pt], vec![
+            cue("c0", 0.0, vec![("a", a), ("f", f)]),
+        ]);
+        let pose = resolve_positions(&p, 500.0);
+        assert!((pose["a"].yaw_deg - 90.0).abs() < 1e-6);
+    }
+
+    /// Oracle : test_core.py::test_focus_resolution_is_order_independent_across_points
+    /// — B (la cible du focus) est déclaré APRÈS A qui le vise : la
+    /// restructuration en 2 passes ne doit pas dépendre de l'ordre.
+    #[test]
+    fn focus_resolution_is_order_independent_across_points() {
+        let a = Activation {
+            target_x_cm: Some(0.0), target_y_cm: Some(0.0),
+            travel_orientation_mode: "focus".into(), travel_focus_point_id: Some("b".into()),
+            fade_ms: 0.0, ..Default::default()
+        };
+        let mut focus_pt = point("b");
+        focus_pt.is_focus_point = true;
+        let b = act(Some(1000.0), Some(0.0), 0.0);
+        let p = project(vec![point("a"), focus_pt], vec![
+            cue("c0", 0.0, vec![("a", a), ("b", b)]),
+        ]);
+        let pose = resolve_positions(&p, 0.0);
+        assert!((pose["a"].yaw_deg - 0.0).abs() < 1e-6);
     }
 }

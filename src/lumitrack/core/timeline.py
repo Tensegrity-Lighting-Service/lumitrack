@@ -303,18 +303,7 @@ _AXIS_FIELDS = {
     "x": "target_x_cm",
     "y": "target_y_cm",
     "z": "target_z_cm",
-    "yaw": "target_yaw_deg",
 }
-
-# Un acteur porté tourne avant de partir, il ne pivote pas progressivement
-# pendant tout le trajet ("comme dans la vraie vie, un acteur se tourne
-# avant de prendre de courir" — demande de Florian, 2026-07-31). Le lacet a
-# donc sa PROPRE fenêtre de fondu, courte, au tout début de celle de
-# l'activation — pas un cut (toujours eased/courbé via axis_progress), mais
-# bien plus bref que le déplacement x/y qui peut durer plusieurs secondes.
-# Plafonnée par fade_ms : une activation plus courte que ça ne fait jamais
-# tourner le lacet plus longtemps que le mouvement lui-même.
-YAW_TURN_MS = 400.0
 
 
 def _axis_keyframes(project: Project, point_id: str, axis: str):
@@ -324,15 +313,9 @@ def _axis_keyframes(project: Project, point_id: str, axis: str):
     its per-axis curve (graph editor) or named easing; the cue id (index 4)
     lets `resolve_block_context` name which cue a start value tracks from.
 
-    The yaw axis's own fade window is capped to YAW_TURN_MS (see above) —
-    every other axis keeps the activation's full fade_ms.
-
-    A yaw governed by "path"/"focus" mode (2026-08-01) is derived, not
-    stored — such an activation still "touches" the yaw axis for LTP
-    governance purposes even with target_yaw_deg left at None, since the
-    MODE is what activates the window, not a numeric value (see
-    resolve_positions, which branches on the governing activation's
-    orientation_mode instead of trusting `value` for yaw)."""
+    Only called for x/y/z now (mission "modes d'orientation", 2026-08-04) —
+    yaw is resolved entirely separately by `_orientation_keyframes`/
+    `_resolve_yaw`, since it's never a simple stored target anymore."""
     field_name = _AXIS_FIELDS[axis]
     kfs = []
     for cue in project.cues:
@@ -341,17 +324,13 @@ def _axis_keyframes(project: Project, point_id: str, axis: str):
             continue
         value = getattr(act, field_name)
         if value is None:
-            if axis == "yaw" and act.orientation_mode != "manual":
-                value = 0.0  # jamais lu : la valeur numérique est dérivée.
-            else:
-                continue
-        fade_ms = min(act.fade_ms, YAW_TURN_MS) if axis == "yaw" else act.fade_ms
+            continue
         # Décalage de départ (mission "global vs sélectif", 2026-08-03) :
         # cette activation démarre (et gouverne LTP) start_offset_ms après
         # le début nominal du bloc, pas exactement dessus — entrées en
         # escalier/vague. 0 par défaut = comportement historique inchangé.
         effective_start = cue.start_ms + act.start_offset_ms
-        kfs.append((effective_start, effective_start + fade_ms, value, act, cue.id, axis))
+        kfs.append((effective_start, effective_start + act.fade_ms, value, act, cue.id, axis))
     kfs.sort(key=lambda k: k[0])
     return kfs
 
@@ -418,60 +397,104 @@ def _governing_index(kfs, t_ms: float) -> int:
 PATH_YAW_SAMPLE_MS = 50.0
 
 
-def _resolve_yaw(project: Project, point_id: str, t_ms: float, x: float, y: float) -> float:
-    """Lacet à l'instant t, selon le régime de l'activation qui gouverne cet
-    axe (Activation.orientation_mode, mission "refonte AE/Reaper"
-    2026-08-01) : "manual" anime une valeur comme n'importe quel axe (v1
-    historique) ; "path" suit la tangente de la trajectoire x/y résolue
-    (approximée en ligne droite même si un tracé courbe existe entre départ
-    et cible — simplification v1, la tangente réelle du tracé de Bézier
-    serait le raffinement naturel si le besoin s'en fait sentir) ; "focus"
-    vise en continu le point fixe focus_x_cm/focus_y_cm. Ni "path" ni
-    "focus" ne lisent target_yaw_deg (dérivé, jamais stocké — voir
-    _axis_keyframes)."""
-    kfs_yaw = _axis_keyframes(project, point_id, "yaw")
-    idx = _governing_index(kfs_yaw, t_ms)
+def _orientation_keyframes(project: Project, point_id: str):
+    """-> [(start_ms, fade_end_ms, activation, cue_id), ...] sorted by
+    start_ms, one entry per Cue whose Activation for this point "touches
+    orientation" (Activation.touches_orientation() — moves x/y, or was
+    explicitly personalized via orientation_overridden even with no
+    movement at all). Mission "modes d'orientation" (2026-08-04, remplace
+    la v1 du 08-01) : plus de plafond YAW_TURN_MS ici — le mode "fixed" en
+    trajet est déjà instantané par construction, ce plafond n'a plus de
+    raison d'être."""
+    kfs = []
+    for cue in project.cues:
+        act = cue.activations.get(point_id)
+        if act is None or not act.touches_orientation():
+            continue
+        effective_start = cue.start_ms + act.start_offset_ms
+        kfs.append((effective_start, effective_start + act.fade_ms, act, cue.id))
+    kfs.sort(key=lambda k: k[0])
+    return kfs
+
+
+def _resolve_yaw(project: Project, point_id: str, t_ms: float, x: float, y: float,
+                  resolved_xy: dict, kfs: Optional[list] = None) -> float:
+    """Lacet à l'instant t, en DEUX phases indépendantes (mission "modes
+    d'orientation", 2026-08-04, remplace le régime unique "manual"/"path"/
+    "focus" du 2026-08-01) : "en trajet" pendant le fondu de l'activation
+    gouvernante, "à l'arrivée" une fois le fondu terminé. `resolved_xy` est
+    la position x/y déjà résolue de TOUS les points à cet instant (calculée
+    par `resolve_positions` en une première passe) — nécessaire pour que le
+    mode "focus" puisse viser un autre point sans dépendre de son propre
+    lacet (aucun risque de cycle : la position ne dépend jamais du lacet
+    d'un autre point). `kfs`, si fourni (par `resolve_block_context`, pour
+    évaluer la valeur qui gouvernait AVANT qu'une activation "fixed" ne
+    prenne le relais — LTP, comme x/y/z), remplace le parcours complet des
+    keyframes d'orientation du point."""
+    if kfs is None:
+        kfs = _orientation_keyframes(project, point_id)
+    idx = _governing_index(kfs, t_ms)
     if idx < 0:
         return 0.0
-    start, fade_end, value, act, _cue_id, _axis = kfs_yaw[idx]
-    mode = act.orientation_mode
+    start, fade_end, act, _cue_id = kfs[idx]
 
-    if mode == "focus":
-        fx = act.focus_x_cm if act.focus_x_cm is not None else x
-        fy = act.focus_y_cm if act.focus_y_cm is not None else y
+    def focus_angle(focus_point_id: Optional[str], fallback_deg: float) -> float:
+        target = resolved_xy.get(focus_point_id) if focus_point_id else None
+        if target is None:
+            return fallback_deg
+        fx, fy = target
         if abs(fx - x) < 1e-6 and abs(fy - y) < 1e-6:
-            return value if value is not None else 0.0
+            return fallback_deg
         return math.degrees(math.atan2(fy - y, fx - x))
 
-    if mode == "path":
-        kfs_x = _axis_keyframes(project, point_id, "x")
-        kfs_y = _axis_keyframes(project, point_id, "y")
-        # Pendant le maintien (après la fin du virage), on gèle la
-        # dernière direction de marche plutôt que de rééchantillonner un
-        # delta nul (l'acteur est immobile, sa position ne bouge plus).
-        sample_t = min(t_ms, fade_end - PATH_YAW_SAMPLE_MS) if fade_end > start else t_ms
-        sample_t = max(sample_t, start)
-        t0 = max(0.0, sample_t - PATH_YAW_SAMPLE_MS)
-        t1 = sample_t + PATH_YAW_SAMPLE_MS
-        x0, y0 = _resolve_axis(kfs_x, t0), _resolve_axis(kfs_y, t0)
-        x1, y1 = _resolve_axis(kfs_x, t1), _resolve_axis(kfs_y, t1)
-        if x0 is None or y0 is None or x1 is None or y1 is None:
-            return value if value is not None else 0.0
-        dx, dy = x1 - x0, y1 - y0
-        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
-            return value if value is not None else 0.0
-        return math.degrees(math.atan2(dy, dx))
+    def travel_value(t_for_path: float) -> float:
+        if act.travel_orientation_mode == "focus":
+            return focus_angle(act.travel_focus_point_id, act.travel_fixed_yaw_deg)
+        if act.travel_orientation_mode == "path":
+            # Tangente de la trajectoire x/y résolue (approximée en ligne
+            # droite même si un tracé courbe existe entre départ et cible —
+            # simplification v1, inchangée depuis 2026-08-01).
+            sample_t = min(t_for_path, fade_end - PATH_YAW_SAMPLE_MS) if fade_end > start else t_for_path
+            sample_t = max(sample_t, start)
+            kfs_x = _axis_keyframes(project, point_id, "x")
+            kfs_y = _axis_keyframes(project, point_id, "y")
+            t0 = max(0.0, sample_t - PATH_YAW_SAMPLE_MS)
+            t1 = sample_t + PATH_YAW_SAMPLE_MS
+            x0, y0 = _resolve_axis(kfs_x, t0), _resolve_axis(kfs_y, t0)
+            x1, y1 = _resolve_axis(kfs_x, t1), _resolve_axis(kfs_y, t1)
+            if x0 is None or y0 is None or x1 is None or y1 is None:
+                return act.travel_fixed_yaw_deg
+            dx, dy = x1 - x0, y1 - y0
+            if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+                return act.travel_fixed_yaw_deg
+            return math.degrees(math.atan2(dy, dx))
+        # "fixed" (défaut — et repli sûr pour une valeur non reconnue).
+        return act.travel_fixed_yaw_deg
 
-    # "manual" (ou une valeur future inconnue : repli sur le comportement
-    # historique plutôt que planter).
-    resolved = _resolve_axis(kfs_yaw, t_ms)
-    return resolved if resolved is not None else 0.0
+    if t_ms < fade_end:
+        return travel_value(t_ms)
+    if act.arrival_orientation_mode == "fixed":
+        return act.arrival_fixed_yaw_deg
+    if act.arrival_orientation_mode == "focus":
+        return focus_angle(act.arrival_focus_point_id, act.arrival_fixed_yaw_deg)
+    # "hold" (défaut — et repli sûr) : fige ce que le trajet avait résolu
+    # PILE à l'instant où le fondu s'est terminé — généralise à tous les
+    # modes de trajet ce que "path" faisait déjà seul avant le split.
+    return travel_value(fade_end)
 
 
 def resolve_positions(project: Project, t_ms: float) -> dict:
     """-> {point_id: Pose}. A point absent from the result has no known x/y
-    at this instant and must never be sent to PSN or drawn on the scene."""
+    at this instant and must never be sent to PSN or drawn on the scene.
+
+    Two passes (mission "modes d'orientation", 2026-08-04) : x/y/z for
+    EVERY point first, THEN yaw for every point — required since "focus"
+    mode must read another point's already-resolved x/y at this same
+    instant. No cycle risk: a point's position never depends on any other
+    point's yaw."""
     result = {}
+    resolved_xy: dict = {}
+    needs_yaw = []  # (point_id, x, y, z)
     for point in project.points:
         kfs_x = _axis_keyframes(project, point.id, "x")
         kfs_y = _axis_keyframes(project, point.id, "y")
@@ -488,6 +511,7 @@ def resolve_positions(project: Project, t_ms: float) -> dict:
                 x_cm=slot[0], y_cm=slot[1],
                 z_cm=point.default_height_cm, yaw_deg=0.0,
             )
+            resolved_xy[point.id] = (slot[0], slot[1])
             continue
         # Tracé spatial (motion path) : quand le MÊME cue gouverne x ET y,
         # que son activation porte un tracé courbe et qu'on est en plein
@@ -510,10 +534,13 @@ def resolve_positions(project: Project, t_ms: float) -> dict:
                 eased = axis_progress(act, "x", progress)
                 x, y = path_position(origin, act, target, eased)
         z = _resolve_axis(_axis_keyframes(project, point.id, "z"), t_ms)
-        result[point.id] = Pose(
-            x_cm=x, y_cm=y,
-            z_cm=z if z is not None else point.default_height_cm,
-            yaw_deg=_resolve_yaw(project, point.id, t_ms, x, y),
+        z_resolved = z if z is not None else point.default_height_cm
+        resolved_xy[point.id] = (x, y)
+        needs_yaw.append((point.id, x, y, z_resolved))
+    for point_id, x, y, z in needs_yaw:
+        result[point_id] = Pose(
+            x_cm=x, y_cm=y, z_cm=z,
+            yaw_deg=_resolve_yaw(project, point_id, t_ms, x, y, resolved_xy),
         )
     return result
 
@@ -593,18 +620,43 @@ def resolve_block_context(project: Project, cue_id: str,
                 sources[axis] = kfs[index - 1][4]
             axis_target[axis] = value
 
-        if act.orientation_mode != "manual":
-            # "path"/"focus" : le lacet est dérivé de la position, jamais
-            # stocké — la boucle générique ci-dessus l'a traité comme "non
-            # touché" (target_yaw_deg est bien None). On calcule ici le
-            # lacet réellement affiché au départ/à la cible de CE bloc, à
-            # partir des positions x/y déjà résolues juste au-dessus.
-            if axis_start.get("x") is not None and axis_start.get("y") is not None:
-                axis_start["yaw"] = _resolve_yaw(project, point.id, effective_start, axis_start["x"], axis_start["y"])
-            if axis_target.get("x") is not None and axis_target.get("y") is not None:
-                axis_target["yaw"] = _resolve_yaw(
-                    project, point.id, effective_start + act.fade_ms, axis_target["x"], axis_target["y"])
-            sources["yaw"] = None
+        # Le lacet est toujours dérivé (mission "modes d'orientation",
+        # 2026-08-04 : plus de mode "manual" stocké) — jamais traité par la
+        # boucle générique ci-dessus (absent de _AXIS_FIELDS). On calcule ici
+        # le lacet réellement affiché au départ/à la cible de CE bloc, à
+        # partir des positions x/y déjà résolues juste au-dessus. Un
+        # éventuel point de focus référencé est cherché dans la résolution
+        # GLOBALE du projet à cet instant (`_resolved_xy_at`) — sa propre
+        # position ne dépend jamais de ce bloc.
+        def _resolved_xy_at(t: float) -> dict:
+            return {pid: (pose.x_cm, pose.y_cm) for pid, pose in resolve_positions(project, t).items()}
+
+        axis_start["yaw"] = None
+        axis_target["yaw"] = None
+        kfs_orient = _orientation_keyframes(project, point.id)
+        orient_idx = next((i for i, kf in enumerate(kfs_orient) if kf[3] == cue_id), None)
+        if (orient_idx is not None and axis_start.get("x") is not None
+                and axis_start.get("y") is not None):
+            if orient_idx == 0 or act.travel_orientation_mode != "fixed":
+                # Mode dérivé (path/focus) ou première apparition : pas de
+                # notion de "valeur précédente" — la valeur EST celle de
+                # cette activation elle-même à cet instant (comportement
+                # inchangé depuis 2026-08-01 pour path/focus).
+                axis_start["yaw"] = _resolve_yaw(
+                    project, point.id, effective_start, axis_start["x"], axis_start["y"],
+                    _resolved_xy_at(effective_start))
+            else:
+                # "fixed" : LTP comme x/y/z — la valeur qui gouvernait JUSTE
+                # AVANT que cette activation ne prenne le relais.
+                axis_start["yaw"] = _resolve_yaw(
+                    project, point.id, effective_start, axis_start["x"], axis_start["y"],
+                    _resolved_xy_at(effective_start), kfs=kfs_orient[:orient_idx])
+        if (orient_idx is not None and axis_target.get("x") is not None
+                and axis_target.get("y") is not None):
+            axis_target["yaw"] = _resolve_yaw(
+                project, point.id, effective_start + act.fade_ms, axis_target["x"], axis_target["y"],
+                _resolved_xy_at(effective_start + act.fade_ms))
+        sources["yaw"] = None
 
         def pose_or_none(values):
             if values["x"] is None or values["y"] is None:

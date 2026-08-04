@@ -24,6 +24,7 @@ import os
 import shutil
 import sys
 import tempfile
+import uuid
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -67,10 +68,12 @@ class Point:
     # Préremplissage des NOUVELLES activations de cet acteur (menu contextuel
     # roster/scène, DIRECTIVES.md point 5) — n'a aucune autorité sur les
     # activations déjà réglées, purement une commodité de saisie. Ne touche
-    # jamais la résolution de lecture (Activation.orientation_mode reste la
-    # seule valeur qui compte une fois l'activation créée) : pas de miroir
-    # Rust nécessaire.
-    default_orientation_mode: str = "manual"
+    # jamais la résolution de lecture (Activation.travel_orientation_mode
+    # reste la seule valeur qui compte une fois l'activation créée) : pas de
+    # miroir Rust nécessaire. Renommé de default_orientation_mode (2026-08-04,
+    # mission "modes d'orientation") : c'est maintenant un repli pour la
+    # phase TRAJET uniquement (l'arrivée retombe toujours sur "hold").
+    default_travel_orientation_mode: str = "fixed"
     # Point de focus (mission "modes d'orientation", 2026-08-04) : un simple
     # repère de visée, pas un acteur réel — pas d'orientation propre, jamais
     # émis en PSN (core/engine.py::Broadcaster.build_trackers), jamais placé
@@ -96,19 +99,27 @@ class Point:
             "defaultHeightCm": self.default_height_cm,
             "homeZoneId": self.home_zone_id,
             "rosterGroupId": self.roster_group_id,
-            "defaultOrientationMode": self.default_orientation_mode,
+            "defaultTravelOrientationMode": self.default_travel_orientation_mode,
             "isFocusPoint": self.is_focus_point,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Point":
+        mode = d.get("defaultTravelOrientationMode")
+        if mode is None:
+            # Old format (pre-2026-08-04): defaultOrientationMode was
+            # 'manual'|'path'|'focus' for a single (unsplit) travel/arrival
+            # setting. 'manual' (smoothly-animated yaw) has no equivalent
+            # anymore -> becomes the new instantaneous 'fixed'.
+            old = d.get("defaultOrientationMode", "manual")
+            mode = "fixed" if old == "manual" else old
         return cls(
             id=d["id"], name=d.get("name", ""), number=d.get("number"),
             color=d.get("color", "#4F6DF5"), psn_tracker_id=d.get("psnTrackerId"),
             default_height_cm=float(d.get("defaultHeightCm", DEFAULT_HEIGHT_CM)),
             home_zone_id=d.get("homeZoneId"),
             roster_group_id=d.get("rosterGroupId"),
-            default_orientation_mode=d.get("defaultOrientationMode", "manual"),
+            default_travel_orientation_mode=mode,
             is_focus_point=bool(d.get("isFocusPoint", False)),
         )
 
@@ -121,7 +132,6 @@ class Activation:
     target_x_cm: Optional[float] = None
     target_y_cm: Optional[float] = None
     target_z_cm: Optional[float] = None
-    target_yaw_deg: Optional[float] = None
     fade_ms: float = 1000.0
     easing: str = "linear"
     # Mission "global vs sélectif" (2026-08-03) : marque un fade_ms modifié
@@ -141,19 +151,42 @@ class Activation:
     # démarrer AVANT le bloc qui le contient — sortirait de la cohérence
     # des tracks LTP, qui suppose un bloc = une fenêtre bien à lui).
     start_offset_ms: float = 0.0
-    # Mission "refonte AE/Reaper" (2026-08-01) : le lacet gouverné par cette
-    # activation peut suivre trois régimes — "manual" (valeur animée comme
-    # n'importe quel axe, comportement historique), "path" (tangente de la
-    # trajectoire spatiale résolue de CE point à cet instant — un acteur se
-    # tourne dans le sens où il marche), "focus" (vise en continu le point
-    # fixe focus_x_cm/focus_y_cm). Résolu dans timeline.py::resolve_positions
-    # (miroir Rust : native/src/timeline.rs) — jamais dans le frontend
-    # (§13.1.7). "path"/"focus" n'ont pas besoin de target_yaw_deg : l'axe
-    # est "touché" par le MODE, pas par la présence d'une valeur explicite
-    # (voir _axis_keyframes).
-    orientation_mode: str = "manual"
-    focus_x_cm: Optional[float] = None
-    focus_y_cm: Optional[float] = None
+    # Mission "modes d'orientation" (2026-08-04, remplace la v1 du 08-01) :
+    # le lacet se règle en DEUX phases indépendantes plutôt qu'un seul mode
+    # pour toute l'activation — "en trajet" (pendant le fondu) et "à
+    # l'arrivée" (pendant le maintien). L'ancien mode "manual" (lacet animé
+    # en douceur comme x/y/z, via target_yaw_deg) disparaît entièrement :
+    # tout devient discret (Florian, confirmé explicitement — "non tout
+    # devient discret"). Résolu dans timeline.py::_resolve_yaw (miroir
+    # Rust : native/src/timeline.rs) — jamais dans le frontend (§13.1.7).
+    #
+    # En trajet — "fixed" (angle unique, JAMAIS animé/interpolé, contraste
+    # avec l'ancien "manual" qui l'était) ; "path" (tangente de la
+    # trajectoire spatiale résolue de CE point à cet instant, comportement
+    # inchangé) ; "focus" (vise en continu un POINT DE FOCUS choisi —
+    # travel_focus_point_id référence un Point.is_focus_point, plus des
+    # coordonnées brutes).
+    travel_orientation_mode: str = "fixed"
+    travel_fixed_yaw_deg: float = 0.0
+    travel_focus_point_id: Optional[str] = None
+    # À l'arrivée — "hold" ("ne change pas" : fige ce que le trajet avait
+    # résolu pile à l'instant où le fondu se termine — généralise l'ancien
+    # comportement de "path", qui gelait déjà la dernière direction de
+    # marche pendant le maintien, à TOUS les modes de trajet) ; "fixed" (son
+    # propre angle, INDÉPENDANT de celui du trajet) ; "focus" (son propre
+    # point de focus, lui aussi indépendant de celui du trajet — confirmé
+    # par Florian : les deux phases ne partagent jamais la même référence).
+    arrival_orientation_mode: str = "hold"
+    arrival_fixed_yaw_deg: float = 0.0
+    arrival_focus_point_id: Optional[str] = None
+    # Mission "global vs sélectif" étendue à l'orientation (2026-08-04,
+    # même principe que fade_overridden) : marque une personnalisation
+    # manuelle qui sort du réglage par défaut du bloc (Cue.default_travel_*/
+    # default_arrival_*) tant qu'elle reste personnalisée. Contrairement à
+    # fade_overridden, CE champ EST lu au moment de la résolution (via
+    # touches_orientation() ci-dessous, pour le cas d'une activation de pure
+    # rotation sans x/y) — miroir Rust nécessaire, exception documentée.
+    orientation_overridden: bool = False
     # Graph editor (mission 2026-07-29, spec = KeysView de Friction) :
     # courbes d'easing personnalisées PAR AXE. {"x"|"y"|"z"|"yaw": [node]}.
     # node = {"t": 0..1, "v": progrès, "inT"/"inV"/"outT"/"outV": poignées
@@ -178,17 +211,31 @@ class Activation:
 
     def touches(self) -> bool:
         return any(v is not None for v in
-                   (self.target_x_cm, self.target_y_cm, self.target_z_cm, self.target_yaw_deg))
+                   (self.target_x_cm, self.target_y_cm, self.target_z_cm))
+
+    def touches_orientation(self) -> bool:
+        """A real x/y move governs the yaw resolution; a pure-rotation
+        activation (no movement at all) only governs it if the user
+        explicitly personalized it (see orientation_overridden). target_z_cm
+        deliberately excluded: a height-only change shouldn't steal facing
+        control from whatever activation last set it."""
+        return (self.target_x_cm is not None or self.target_y_cm is not None
+                or self.orientation_overridden)
 
     def to_dict(self) -> dict:
         return {
             "targetXCm": self.target_x_cm, "targetYCm": self.target_y_cm,
-            "targetZCm": self.target_z_cm, "targetYawDeg": self.target_yaw_deg,
+            "targetZCm": self.target_z_cm,
             "fadeMs": self.fade_ms, "easing": self.easing,
             "fadeOverridden": self.fade_overridden,
             "startOffsetMs": self.start_offset_ms,
-            "orientationMode": self.orientation_mode,
-            "focusXCm": self.focus_x_cm, "focusYCm": self.focus_y_cm,
+            "orientationOverridden": self.orientation_overridden,
+            "travelOrientationMode": self.travel_orientation_mode,
+            "travelFixedYawDeg": self.travel_fixed_yaw_deg,
+            "travelFocusPointId": self.travel_focus_point_id,
+            "arrivalOrientationMode": self.arrival_orientation_mode,
+            "arrivalFixedYawDeg": self.arrival_fixed_yaw_deg,
+            "arrivalFocusPointId": self.arrival_focus_point_id,
             "curves": self.curves,
             "pathPoints": self.path_points,
             "startHandle": self.start_handle,
@@ -199,12 +246,17 @@ class Activation:
     def from_dict(cls, d: dict) -> "Activation":
         return cls(
             target_x_cm=d.get("targetXCm"), target_y_cm=d.get("targetYCm"),
-            target_z_cm=d.get("targetZCm"), target_yaw_deg=d.get("targetYawDeg"),
+            target_z_cm=d.get("targetZCm"),
             fade_ms=float(d.get("fadeMs", 1000.0)), easing=d.get("easing", "linear"),
             fade_overridden=bool(d.get("fadeOverridden", False)),
             start_offset_ms=max(0.0, float(d.get("startOffsetMs", 0.0))),
-            orientation_mode=d.get("orientationMode", "manual"),
-            focus_x_cm=d.get("focusXCm"), focus_y_cm=d.get("focusYCm"),
+            orientation_overridden=bool(d.get("orientationOverridden", False)),
+            travel_orientation_mode=d.get("travelOrientationMode", "fixed"),
+            travel_fixed_yaw_deg=float(d.get("travelFixedYawDeg", 0.0)),
+            travel_focus_point_id=d.get("travelFocusPointId"),
+            arrival_orientation_mode=d.get("arrivalOrientationMode", "hold"),
+            arrival_fixed_yaw_deg=float(d.get("arrivalFixedYawDeg", 0.0)),
+            arrival_focus_point_id=d.get("arrivalFocusPointId"),
             curves=d.get("curves"),
             path_points=d.get("pathPoints"),
             start_handle=d.get("startHandle"),
@@ -235,6 +287,22 @@ class Cue:
     # automatiquement. Migration : projets sans "lane" -> empaquetage
     # glouton une seule fois au chargement (from_dict).
     lane: int = 0
+    # Réglage par défaut du BLOC pour l'orientation (mission "modes
+    # d'orientation", 2026-08-04) — même esprit que le timing (point 6
+    # DIRECTIVES.md) : None = pas encore réglé, chaque nouvelle activation
+    # du bloc retombe alors sur Point.default_travel_orientation_mode/
+    # "hold". Une fois réglé ici, sert de préremplissage pour toute
+    # NOUVELLE activation du bloc et resynchronise (sidecar
+    # ._apply_cue_orientation_defaults) toute activation existante avec
+    # orientation_overridden=False. N'affecte jamais la résolution
+    # elle-même (Activation porte les valeurs qui comptent) : pas de
+    # miroir Rust, comme duration_ms/auto_duration.
+    default_travel_orientation_mode: Optional[str] = None
+    default_travel_fixed_yaw_deg: Optional[float] = None
+    default_travel_focus_point_id: Optional[str] = None
+    default_arrival_orientation_mode: Optional[str] = None
+    default_arrival_fixed_yaw_deg: Optional[float] = None
+    default_arrival_focus_point_id: Optional[str] = None
 
     def activation_end_ms(self) -> float:
         """Latest moment any activation in this cue is still fading."""
@@ -472,6 +540,12 @@ class Project:
                     "id": c.id, "name": c.name, "color": c.color,
                     "startMs": c.start_ms, "durationMs": c.duration_ms,
                     "lane": c.lane, "autoDuration": c.auto_duration,
+                    "defaultTravelOrientationMode": c.default_travel_orientation_mode,
+                    "defaultTravelFixedYawDeg": c.default_travel_fixed_yaw_deg,
+                    "defaultTravelFocusPointId": c.default_travel_focus_point_id,
+                    "defaultArrivalOrientationMode": c.default_arrival_orientation_mode,
+                    "defaultArrivalFixedYawDeg": c.default_arrival_fixed_yaw_deg,
+                    "defaultArrivalFocusPointId": c.default_arrival_focus_point_id,
                     "activations": {
                         pid: a.to_dict() for pid, a in c.activations.items()
                     },
@@ -520,9 +594,65 @@ class Project:
         proj.backstage_zones = list(d.get("backstageZones") or [])
         proj.roster_groups = list(d.get("rosterGroups") or [])
         proj.points = [Point.from_dict(p) for p in d.get("points", [])]
+
+        # Migration "modes d'orientation" (2026-08-04) : avant le split
+        # trajet/arrivée, une activation stockait orientationMode (manual/
+        # path/focus) + targetYawDeg + focusXCm/focusYCm directement.
+        # Détectée par l'absence de la clé "travelOrientationMode". "focus"
+        # doit en plus faire apparaître un vrai Point(is_focus_point=True)
+        # par paire (focusXCm, focusYCm) DISTINCTE rencontrée dans tout le
+        # projet (dédupliquées), avec une activation figée dans un cue
+        # synthétique à t=0 pour lui donner une position réelle (règle
+        # "première apparition" déjà existante côté résolution). Effet
+        # visible à signaler à l'utilisateur : d'anciens projets en mode
+        # focus verront de nouveaux points apparaître dans le roster.
+        focus_point_ids: dict = {}
+
+        def migrated_focus_point_id(fx: float, fy: float) -> str:
+            key = (round(fx, 3), round(fy, 3))
+            pid = focus_point_ids.get(key)
+            if pid is not None:
+                return pid
+            pid = str(uuid.uuid4())
+            letter = chr(ord('A') + len(focus_point_ids)) if len(focus_point_ids) < 26 \
+                else str(len(focus_point_ids))
+            proj.points.append(Point(id=pid, name=f"Focus {letter}", is_focus_point=True))
+            proj.cues.append(Cue(
+                id=str(uuid.uuid4()), name=f"Focus {letter} (position)",
+                start_ms=0.0, duration_ms=0.0, color="#D8D8E2",
+                activations={pid: Activation(
+                    target_x_cm=fx, target_y_cm=fy, fade_ms=0.0,
+                    orientation_overridden=True,
+                )},
+            ))
+            focus_point_ids[key] = pid
+            return pid
+
+        def migrate_legacy_activation(a: dict) -> dict:
+            a = dict(a)
+            old_mode = a.get("orientationMode", "manual")
+            a["orientationOverridden"] = True
+            a["arrivalOrientationMode"] = "hold"
+            if old_mode == "path":
+                a["travelOrientationMode"] = "path"
+            elif old_mode == "focus":
+                fx, fy = a.get("focusXCm"), a.get("focusYCm")
+                if fx is not None and fy is not None:
+                    a["travelOrientationMode"] = "focus"
+                    a["travelFocusPointId"] = migrated_focus_point_id(float(fx), float(fy))
+                else:
+                    a["travelOrientationMode"] = "fixed"
+                    a["travelFixedYawDeg"] = 0.0
+            else:  # "manual" (or unknown) -> the new instantaneous "fixed"
+                a["travelOrientationMode"] = "fixed"
+                a["travelFixedYawDeg"] = a.get("targetYawDeg") or 0.0
+            return a
+
         for c in d.get("cues", []):
             activations = {
-                pid: Activation.from_dict(a) for pid, a in c.get("activations", {}).items()
+                pid: Activation.from_dict(
+                    a if "travelOrientationMode" in a else migrate_legacy_activation(a))
+                for pid, a in c.get("activations", {}).items()
             }
             proj.cues.append(Cue(
                 id=c["id"], name=c.get("name", ""),
@@ -532,6 +662,12 @@ class Project:
                 color=c.get("color", "#4F6DF5"),
                 lane=int(c["lane"]) if c.get("lane") is not None else -1,
                 auto_duration=bool(c.get("autoDuration", False)),
+                default_travel_orientation_mode=c.get("defaultTravelOrientationMode"),
+                default_travel_fixed_yaw_deg=c.get("defaultTravelFixedYawDeg"),
+                default_travel_focus_point_id=c.get("defaultTravelFocusPointId"),
+                default_arrival_orientation_mode=c.get("defaultArrivalOrientationMode"),
+                default_arrival_fixed_yaw_deg=c.get("defaultArrivalFixedYawDeg"),
+                default_arrival_focus_point_id=c.get("defaultArrivalFocusPointId"),
             ))
         proj.ensure_backstage()
         proj.sort_cues()

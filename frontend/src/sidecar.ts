@@ -137,7 +137,7 @@ class SidecarClient {
     name?: string; number?: number | null; color?: string
     psnTrackerId?: number | null; defaultHeightCm?: number
     homeZoneId?: string | null; rosterGroupId?: string | null
-    defaultOrientationMode?: 'manual' | 'path' | 'focus'
+    defaultTravelOrientationMode?: 'fixed' | 'path' | 'focus'
     isFocusPoint?: boolean
   }) {
     this.send({ type: 'update_point', pointId, ...patch })
@@ -184,7 +184,15 @@ class SidecarClient {
   setBackstageZones(zones: BackstageZone[]) {
     this.send({ type: 'set_backstage_zones', zones })
   }
-  updateCue(cueId: string, patch: { name?: string; startMs?: number; durationMs?: number; color?: string; lane?: number; autoDuration?: boolean }) {
+  updateCue(cueId: string, patch: {
+    name?: string; startMs?: number; durationMs?: number; color?: string; lane?: number; autoDuration?: boolean
+    defaultTravelOrientationMode?: 'fixed' | 'path' | 'focus' | null
+    defaultTravelFixedYawDeg?: number | null
+    defaultTravelFocusPointId?: string | null
+    defaultArrivalOrientationMode?: 'hold' | 'fixed' | 'focus' | null
+    defaultArrivalFixedYawDeg?: number | null
+    defaultArrivalFocusPointId?: string | null
+  }) {
     this.send({ type: 'update_cue', cueId, ...patch })
   }
   deleteCue(cueId: string) {
@@ -196,11 +204,16 @@ class SidecarClient {
   // [] est retiré (retour à l'easing nommé), null efface tout.
   setActivation(cueId: string, pointId: string, patch: {
     targetXCm?: number | null; targetYCm?: number | null
-    targetZCm?: number | null; targetYawDeg?: number | null
+    targetZCm?: number | null
     fadeMs?: number; fadeOverridden?: boolean; startOffsetMs?: number; easing?: string
-    orientationMode?: 'manual' | 'path' | 'focus'
-    focusXCm?: number | null; focusYCm?: number | null
-    curves?: Partial<Record<'x' | 'y' | 'z' | 'yaw', unknown[]>> | null
+    orientationOverridden?: boolean
+    travelOrientationMode?: 'fixed' | 'path' | 'focus'
+    travelFixedYawDeg?: number
+    travelFocusPointId?: string | null
+    arrivalOrientationMode?: 'hold' | 'fixed' | 'focus'
+    arrivalFixedYawDeg?: number
+    arrivalFocusPointId?: string | null
+    curves?: Partial<Record<'x' | 'y' | 'z', unknown[]>> | null
     pathPoints?: unknown[] | null
     startHandle?: { dxCm: number; dyCm: number } | null
     targetHandle?: { dxCm: number; dyCm: number } | null

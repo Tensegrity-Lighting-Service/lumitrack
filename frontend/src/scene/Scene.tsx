@@ -1229,13 +1229,15 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
   const { camera } = useThree()
 
   type Member = {
-    pointId: string; baseX: number; baseY: number; baseYaw: number | null
-    /** "path"/"focus" : le lacet est dérivé de la position par le backend —
-     * une rotation de groupe ne doit jamais lui écrire un targetYawDeg
-     * (demande de Florian, 2026-08-01 : "une transformation rotation d'un
-     * groupe ne doit pas changer" le pivot d'un acteur gouverné par la
-     * règle path/focus). */
-    yawIsManual: boolean
+    pointId: string; baseX: number; baseY: number
+    /** null si cette phase n'est pas en mode "fixed" — "path"/"focus" sont
+     * dérivés de la position par le backend, une rotation de groupe ne
+     * doit jamais leur écrire d'angle (demande de Florian, 2026-08-01 :
+     * "une transformation rotation d'un groupe ne doit pas changer" le
+     * pivot d'un acteur gouverné par path/focus ; étendu à l'indépendance
+     * trajet/arrivée le 2026-08-04). */
+    baseTravelYaw: number | null
+    baseArrivalYaw: number | null
   }
   const membersNow = (): Member[] => {
     const cue = project.cues.find((c) => c.id === selectedCueId)
@@ -1246,9 +1248,12 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       const baseX = act?.targetXCm ?? pose?.[0]
       const baseY = act?.targetYCm ?? pose?.[1]
       if (baseX === undefined || baseX === null || baseY === undefined || baseY === null) continue
+      const travelMode = act?.travelOrientationMode ?? 'fixed'
+      const arrivalMode = act?.arrivalOrientationMode ?? 'hold'
       out.push({
-        pointId: id, baseX, baseY, baseYaw: act?.targetYawDeg ?? pose?.[3] ?? null,
-        yawIsManual: (act?.orientationMode ?? 'manual') === 'manual',
+        pointId: id, baseX, baseY,
+        baseTravelYaw: travelMode === 'fixed' ? (act?.travelFixedYawDeg ?? 0) : null,
+        baseArrivalYaw: arrivalMode === 'fixed' ? (act?.arrivalFixedYawDeg ?? 0) : null,
       })
     }
     return out
@@ -1344,10 +1349,15 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     for (const m of drag.members) {
       const qLocal = new THREE.Vector3(...stageToLocal(m.baseX, m.baseY, 0))
       const qNew = qLocal.clone().applyMatrix4(effectiveDelta)
+      const rotating = drag.kind === 'rotate'
       sidecar.setActivation(selectedCueId, m.pointId, {
         targetXCm: qNew.x / CM_TO_M, targetYCm: qNew.z / CM_TO_M,
-        ...(drag.kind === 'rotate' && m.baseYaw !== null && m.yawIsManual
-          ? { targetYawDeg: m.baseYaw + thetaDegLive } : {}),
+        ...(rotating && (m.baseTravelYaw !== null || m.baseArrivalYaw !== null)
+          ? { orientationOverridden: true } : {}),
+        ...(rotating && m.baseTravelYaw !== null
+          ? { travelFixedYawDeg: m.baseTravelYaw + thetaDegLive } : {}),
+        ...(rotating && m.baseArrivalYaw !== null
+          ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDegLive } : {}),
       })
     }
   }
@@ -1377,7 +1387,9 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
         ...(r >= 1e-6
           ? { pathPoints: arc.pathPoints, startHandle: arc.startHandle, targetHandle: arc.targetHandle }
           : {}),
-        ...(m.baseYaw !== null && m.yawIsManual ? { targetYawDeg: m.baseYaw + thetaDeg } : {}),
+        ...(m.baseTravelYaw !== null || m.baseArrivalYaw !== null ? { orientationOverridden: true } : {}),
+        ...(m.baseTravelYaw !== null ? { travelFixedYawDeg: m.baseTravelYaw + thetaDeg } : {}),
+        ...(m.baseArrivalYaw !== null ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDeg } : {}),
       })
     }
   }

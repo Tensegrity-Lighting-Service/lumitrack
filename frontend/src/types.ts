@@ -15,9 +15,11 @@ export interface Point {
   /** Sous-groupe du roster (purement organisationnel, §12.2 non concerné) —
    * null = sans groupe. Au plus un groupe par acteur. */
   rosterGroupId: string | null
-  /** Préremplit UNIQUEMENT les nouvelles activations de cet acteur — aucune
-   * autorité sur celles déjà réglées (DIRECTIVES.md point 5). */
-  defaultOrientationMode: 'manual' | 'path' | 'focus'
+  /** Préremplit UNIQUEMENT les nouvelles activations de cet acteur (phase
+   * TRAJET seulement — l'arrivée retombe toujours sur "hold") — aucune
+   * autorité sur celles déjà réglées (DIRECTIVES.md point 5/6). Renommé de
+   * defaultOrientationMode le 2026-08-04. */
+  defaultTravelOrientationMode: 'fixed' | 'path' | 'focus'
   /** Simple repère de visée, pas un acteur réel — pas d'orientation propre,
    * jamais émis en PSN, jamais placé en coulisse (mission "modes
    * d'orientation", 2026-08-04). */
@@ -73,7 +75,6 @@ export interface Activation {
   targetXCm: number | null
   targetYCm: number | null
   targetZCm: number | null
-  targetYawDeg: number | null
   fadeMs: number
   /** "global vs sélectif" (2026-08-03) : fade_ms modifié à la main — sort du
    * recalcul de la durée automatique du bloc tant qu'il reste personnalisé. */
@@ -83,12 +84,25 @@ export interface Activation {
    * comportement historique. Entrées en escalier/vague. */
   startOffsetMs: number
   easing: string
-  orientationMode: 'manual' | 'path' | 'focus'
-  /** Cible du mode "focus" (terrain, cm) ; null tant qu'aucun point choisi. */
-  focusXCm?: number | null
-  focusYCm?: number | null
-  /** Courbes par axe (graph editor) ; axe absent = easing nommé. */
-  curves?: Partial<Record<'x' | 'y' | 'z' | 'yaw', CurveNode[]>> | null
+  /** Mission "modes d'orientation" (2026-08-04, remplace orientationMode/
+   * targetYawDeg/focusXCm/focusYCm) : le lacet se règle en DEUX phases
+   * indépendantes — "en trajet" pendant le fondu, "à l'arrivée" pendant le
+   * maintien. Plus de mode animé en douceur ("manual") : tout est discret. */
+  travelOrientationMode: 'fixed' | 'path' | 'focus'
+  travelFixedYawDeg: number
+  /** Id d'un Point(isFocusPoint=true) ; null si mode "focus" pas encore réglé. */
+  travelFocusPointId: string | null
+  arrivalOrientationMode: 'hold' | 'fixed' | 'focus'
+  arrivalFixedYawDeg: number
+  arrivalFocusPointId: string | null
+  /** "global vs sélectif" étendu à l'orientation : marque une
+   * personnalisation qui sort des défauts d'orientation du bloc (Cue,
+   * mission "modes d'orientation") tant qu'elle reste personnalisée. */
+  orientationOverridden: boolean
+  /** Courbes par axe (graph editor) ; axe absent = easing nommé. Plus
+   * d'axe "yaw" depuis la mission "modes d'orientation" — le lacet n'est
+   * plus jamais résolu via une courbe/easing. */
+  curves?: Partial<Record<'x' | 'y' | 'z', CurveNode[]>> | null
   /** Tracé spatial : tout absent/null = ligne droite. */
   pathPoints?: PathPoint[] | null
   startHandle?: PathHandle | null
@@ -106,6 +120,16 @@ export interface Cue {
   /** Quand actif, durationMs suit la distance/vitesse de référence du
    * projet au lieu d'être réglé à la main (recalculé par le backend). */
   autoDuration: boolean
+  /** Réglage par défaut du BLOC pour l'orientation (mission "modes
+   * d'orientation", 2026-08-04, même esprit que le timing point 6) : null =
+   * pas encore réglé, chaque nouvelle activation du bloc retombe alors sur
+   * Point.defaultTravelOrientationMode/"hold". */
+  defaultTravelOrientationMode: 'fixed' | 'path' | 'focus' | null
+  defaultTravelFixedYawDeg: number | null
+  defaultTravelFocusPointId: string | null
+  defaultArrivalOrientationMode: 'hold' | 'fixed' | 'focus' | null
+  defaultArrivalFixedYawDeg: number | null
+  defaultArrivalFocusPointId: string | null
   activations: Record<string, Activation>
 }
 

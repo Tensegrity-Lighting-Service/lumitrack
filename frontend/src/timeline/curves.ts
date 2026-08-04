@@ -19,16 +19,19 @@ export interface CurveNode {
   mode: HandleMode
 }
 
-export type Axis = 'x' | 'y' | 'z' | 'yaw'
-export const AXES: Axis[] = ['x', 'y', 'z', 'yaw']
+// Plus d'axe "yaw" (mission "modes d'orientation", 2026-08-04) : le lacet
+// n'est plus jamais résolu via une courbe/easing — il est toujours dérivé
+// (fixed/path/focus) désormais, voir core/timeline.py::_resolve_yaw.
+export type Axis = 'x' | 'y' | 'z'
+export const AXES: Axis[] = ['x', 'y', 'z']
 export const AXIS_COLORS: Record<Axis, string> = {
-  x: '#f5734f', y: '#4ff58c', z: '#4fa8f5', yaw: '#b06fe0',
+  x: '#f5734f', y: '#4ff58c', z: '#4fa8f5',
 }
-export const AXIS_LABELS: Record<Axis, string> = { x: 'X', y: 'Y', z: 'Z', yaw: 'Lacet' }
+export const AXIS_LABELS: Record<Axis, string> = { x: 'X', y: 'Y', z: 'Z' }
 /** Clés i18n (t()) pour l'affichage — AXIS_LABELS ci-dessus reste utilisé
  * tel quel où le FR en dur suffit encore (pas de composant React). */
 export const AXIS_LABEL_KEYS: Record<Axis, string> = {
-  x: 'graph.axisX', y: 'graph.axisY', z: 'graph.axisZ', yaw: 'graph.axisYaw',
+  x: 'graph.axisX', y: 'graph.axisY', z: 'graph.axisZ',
 }
 
 export function node(t: number, v: number, partial?: Partial<CurveNode>): CurveNode {

@@ -20,7 +20,6 @@ import type { BlockContextMessage, Cue, Pose, Project } from '../types'
 import { sidecar } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
-import { BlockAutomation } from './BlockAutomation'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
 import { showContextMenu } from '../ui/contextMenuStore'
@@ -879,15 +878,6 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                       <span className="cue-block-count">{count}</span>
                     </div>
                     <div className="cue-block-body" />
-                    {count > 0 && (
-                      <BlockAutomation
-                        cue={cue}
-                        selected={cue.id === selectedCueId}
-                        selectedPointId={selectedPointId}
-                        widthPx={Math.max(4, dur * effPxPerMs)}
-                        heightPx={LANE_H - 6}
-                      />
-                    )}
                     <div className="cue-resize cue-resize-l" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-l')} />
                     <div className="cue-resize cue-resize-r" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-r')} />
                   </div>

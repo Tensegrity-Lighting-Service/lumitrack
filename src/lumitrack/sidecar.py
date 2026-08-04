@@ -96,21 +96,30 @@ def _demo_project() -> Project:
     ]
     cue_a = Cue(id=str(uuid.uuid4()), name="Entree", start_ms=0, duration_ms=4000, color="#4F6DF5")
     cue_a.activations = {
-        "p1": Activation(target_x_cm=1000, target_y_cm=1000, target_yaw_deg=0, fade_ms=4000),
-        "p2": Activation(target_x_cm=3000, target_y_cm=1000, target_yaw_deg=90, fade_ms=4000),
-        "p3": Activation(target_x_cm=5000, target_y_cm=1000, target_yaw_deg=180, fade_ms=4000),
+        "p1": Activation(target_x_cm=1000, target_y_cm=1000, fade_ms=4000,
+                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=0),
+        "p2": Activation(target_x_cm=3000, target_y_cm=1000, fade_ms=4000,
+                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=90),
+        "p3": Activation(target_x_cm=5000, target_y_cm=1000, fade_ms=4000,
+                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=180),
     }
     cue_b = Cue(id=str(uuid.uuid4()), name="Rassemblement", start_ms=4000, duration_ms=4000, color="#F5734F")
     cue_b.activations = {
-        "p1": Activation(target_x_cm=2500, target_y_cm=2500, target_yaw_deg=45, fade_ms=3000),
-        "p2": Activation(target_x_cm=3000, target_y_cm=2500, target_yaw_deg=45, fade_ms=3000),
-        "p3": Activation(target_x_cm=3500, target_y_cm=2500, target_yaw_deg=45, fade_ms=3000),
+        "p1": Activation(target_x_cm=2500, target_y_cm=2500, fade_ms=3000,
+                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=45),
+        "p2": Activation(target_x_cm=3000, target_y_cm=2500, fade_ms=3000,
+                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=45),
+        "p3": Activation(target_x_cm=3500, target_y_cm=2500, fade_ms=3000,
+                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=45),
     }
     # Overlaps cue_b on purpose: demonstrates that overlapping cues need
     # their own timeline lane rather than sharing one row (§12.1).
     cue_c = Cue(id=str(uuid.uuid4()), name="Contre-jour", start_ms=5000, duration_ms=2000, color="#B06FE0")
     cue_c.activations = {
-        "p2": Activation(target_yaw_deg=225, fade_ms=1500),
+        # Pure rotation, no x/y move: needs orientation_overridden=True so
+        # touches_orientation() still governs the yaw axis (see project.py).
+        "p2": Activation(fade_ms=1500, orientation_overridden=True,
+                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=225),
     }
     project.cues = [cue_a, cue_b, cue_c]
     project.transform_origin_x_cm = project.stage_width_cm / 2
@@ -299,6 +308,29 @@ def _apply_auto_duration(project: Project, cue: Cue) -> None:
     cue.duration_ms = max(finish_times, default=MIN_AUTO_DURATION_MS)
 
 
+def _sync_activation_orientation_defaults(cue: Cue, act: Activation) -> None:
+    """Recopie les défauts d'orientation ACTUELS du bloc sur une activation
+    (mission "modes d'orientation", 2026-08-04) — un défaut resté None
+    (jamais réglé côté bloc) ne touche pas l'activation sur cette phase."""
+    if cue.default_travel_orientation_mode is not None:
+        act.travel_orientation_mode = cue.default_travel_orientation_mode
+        act.travel_fixed_yaw_deg = cue.default_travel_fixed_yaw_deg or 0.0
+        act.travel_focus_point_id = cue.default_travel_focus_point_id
+    if cue.default_arrival_orientation_mode is not None:
+        act.arrival_orientation_mode = cue.default_arrival_orientation_mode
+        act.arrival_fixed_yaw_deg = cue.default_arrival_fixed_yaw_deg or 0.0
+        act.arrival_focus_point_id = cue.default_arrival_focus_point_id
+
+
+def _apply_cue_orientation_defaults(cue: Cue) -> None:
+    """Resynchronise toute activation NON personnalisée du bloc (miroir de
+    _apply_auto_duration pour le fade) — déclenché par update_cue dès qu'un
+    default* d'orientation change."""
+    for act in cue.activations.values():
+        if not act.orientation_overridden:
+            _sync_activation_orientation_defaults(cue, act)
+
+
 async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
     """Apply one client command. Returns a reply message (error/ack) to send
     only to the requester, or None — in which case the caller broadcasts a
@@ -476,8 +508,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             point.roster_group_id = msg["rosterGroupId"]
         if "defaultHeightCm" in msg and msg["defaultHeightCm"] is not None:
             point.default_height_cm = float(msg["defaultHeightCm"])
-        if "defaultOrientationMode" in msg:
-            point.default_orientation_mode = msg["defaultOrientationMode"]
+        if "defaultTravelOrientationMode" in msg:
+            point.default_travel_orientation_mode = msg["defaultTravelOrientationMode"]
         if "isFocusPoint" in msg:
             point.is_focus_point = bool(msg["isFocusPoint"])
         return None
@@ -616,6 +648,25 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # — trompeur, la case semblerait ne rien faire).
             if cue.auto_duration:
                 _apply_auto_duration(session.project, cue)
+        orientation_default_keys = (
+            "defaultTravelOrientationMode", "defaultTravelFixedYawDeg",
+            "defaultTravelFocusPointId", "defaultArrivalOrientationMode",
+            "defaultArrivalFixedYawDeg", "defaultArrivalFocusPointId",
+        )
+        if "defaultTravelOrientationMode" in msg:
+            cue.default_travel_orientation_mode = msg["defaultTravelOrientationMode"]
+        if "defaultTravelFixedYawDeg" in msg:
+            cue.default_travel_fixed_yaw_deg = msg["defaultTravelFixedYawDeg"]
+        if "defaultTravelFocusPointId" in msg:
+            cue.default_travel_focus_point_id = msg["defaultTravelFocusPointId"]
+        if "defaultArrivalOrientationMode" in msg:
+            cue.default_arrival_orientation_mode = msg["defaultArrivalOrientationMode"]
+        if "defaultArrivalFixedYawDeg" in msg:
+            cue.default_arrival_fixed_yaw_deg = msg["defaultArrivalFixedYawDeg"]
+        if "defaultArrivalFocusPointId" in msg:
+            cue.default_arrival_focus_point_id = msg["defaultArrivalFocusPointId"]
+        if any(k in msg for k in orientation_default_keys):
+            _apply_cue_orientation_defaults(cue)
         session.project.sort_cues()
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
@@ -650,16 +701,26 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # constante arbitraire. (Durée automatique active : laissé au
             # recalcul par distance/vitesse ci-dessous, comme d'habitude.)
             act.fade_ms = max(MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
-        if is_new_activation and "orientationMode" not in msg:
-            # Préremplissage depuis le Point (DIRECTIVES.md point 5, menu
-            # contextuel "mode d'orientation par défaut") — n'a d'effet que
-            # sur une activation TOUTE NEUVE, jamais sur une déjà réglée.
-            point = session.project.point_by_id(point_id)
-            if point is not None:
-                act.orientation_mode = point.default_orientation_mode
+        orientation_keys = (
+            "travelOrientationMode", "travelFixedYawDeg", "travelFocusPointId",
+            "arrivalOrientationMode", "arrivalFixedYawDeg", "arrivalFocusPointId",
+        )
+        if is_new_activation and not any(k in msg for k in orientation_keys):
+            # Préremplissage (DIRECTIVES.md point 5/6, "réglage par défaut"
+            # à 2 niveaux) — n'a d'effet que sur une activation TOUTE
+            # NEUVE, jamais sur une déjà réglée : d'abord les défauts du
+            # BLOC s'ils sont réglés, sinon le repli du Point (trajet
+            # seulement — l'arrivée retombe toujours sur "hold").
+            if (cue.default_travel_orientation_mode is not None
+                    or cue.default_arrival_orientation_mode is not None):
+                _sync_activation_orientation_defaults(cue, act)
+            else:
+                point = session.project.point_by_id(point_id)
+                if point is not None:
+                    act.travel_orientation_mode = point.default_travel_orientation_mode
         for field_name, json_key in (
             ("target_x_cm", "targetXCm"), ("target_y_cm", "targetYCm"),
-            ("target_z_cm", "targetZCm"), ("target_yaw_deg", "targetYawDeg"),
+            ("target_z_cm", "targetZCm"),
         ):
             if json_key in msg:
                 setattr(act, field_name, msg[json_key])
@@ -680,12 +741,26 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
                 act.fade_ms = max(MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
         if "easing" in msg:
             act.easing = msg["easing"]
-        if "orientationMode" in msg:
-            act.orientation_mode = msg["orientationMode"] or "manual"
-        if "focusXCm" in msg:
-            act.focus_x_cm = msg["focusXCm"]
-        if "focusYCm" in msg:
-            act.focus_y_cm = msg["focusYCm"]
+        if "orientationOverridden" in msg:
+            act.orientation_overridden = bool(msg["orientationOverridden"])
+            # "Revenir au bloc" (bouton inspecteur) envoie
+            # orientationOverridden:false seul — resynchronise depuis les
+            # défauts actuels du bloc, comme le fait _apply_auto_duration
+            # pour le fade juste au-dessus.
+            if not act.orientation_overridden and not any(k in msg for k in orientation_keys):
+                _sync_activation_orientation_defaults(cue, act)
+        if "travelOrientationMode" in msg:
+            act.travel_orientation_mode = msg["travelOrientationMode"] or "fixed"
+        if "travelFixedYawDeg" in msg:
+            act.travel_fixed_yaw_deg = float(msg["travelFixedYawDeg"] or 0.0)
+        if "travelFocusPointId" in msg:
+            act.travel_focus_point_id = msg["travelFocusPointId"]
+        if "arrivalOrientationMode" in msg:
+            act.arrival_orientation_mode = msg["arrivalOrientationMode"] or "hold"
+        if "arrivalFixedYawDeg" in msg:
+            act.arrival_fixed_yaw_deg = float(msg["arrivalFixedYawDeg"] or 0.0)
+        if "arrivalFocusPointId" in msg:
+            act.arrival_focus_point_id = msg["arrivalFocusPointId"]
         # Tracé spatial (motion path) : listes/dicts écrits tels quels,
         # null efface (retour à la ligne droite).
         if "pathPoints" in msg:

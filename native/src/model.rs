@@ -42,8 +42,6 @@ pub struct Activation {
     pub target_y_cm: Option<f64>,
     #[serde(default)]
     pub target_z_cm: Option<f64>,
-    #[serde(default)]
-    pub target_yaw_deg: Option<f64>,
     #[serde(default = "default_fade_ms")]
     pub fade_ms: f64,
     #[serde(default = "default_easing")]
@@ -60,18 +58,29 @@ pub struct Activation {
     pub start_handle: Option<crate::path::Handle>,
     #[serde(default)]
     pub target_handle: Option<crate::path::Handle>,
-    /// Mission "refonte AE/Reaper" (2026-08-01) : le lacet gouverné par
-    /// cette activation peut suivre trois régimes — "manual" (target_yaw_deg
-    /// explicite, historique), "path" (tangente du déplacement x/y) ou
-    /// "focus" (pointe vers focus_x_cm/focus_y_cm, ou vers l'acteur lui-même
-    /// si absent). target_yaw_deg reste None pour "path"/"focus" — jamais lu,
-    /// la valeur numérique est dérivée.
-    #[serde(default = "default_orientation_mode")]
-    pub orientation_mode: String,
+    /// Mission "modes d'orientation" (2026-08-04, remplace la v1 du 08-01) :
+    /// le lacet se règle en DEUX phases indépendantes — "en trajet" pendant
+    /// le fondu, "à l'arrivée" pendant le maintien. Plus de mode "manual"
+    /// animé en douceur : tout devient discret. Voir core/project.py
+    /// (Activation) pour la doc complète de chaque champ.
+    #[serde(default = "default_travel_orientation_mode")]
+    pub travel_orientation_mode: String,
     #[serde(default)]
-    pub focus_x_cm: Option<f64>,
+    pub travel_fixed_yaw_deg: f64,
     #[serde(default)]
-    pub focus_y_cm: Option<f64>,
+    pub travel_focus_point_id: Option<String>,
+    #[serde(default = "default_arrival_orientation_mode")]
+    pub arrival_orientation_mode: String,
+    #[serde(default)]
+    pub arrival_fixed_yaw_deg: f64,
+    #[serde(default)]
+    pub arrival_focus_point_id: Option<String>,
+    /// Mission "global vs sélectif" étendue à l'orientation (2026-08-04) :
+    /// contrairement à fade_overridden (repère d'édition pur), CE champ EST
+    /// lu au moment de la résolution (touches_orientation, cas de rotation
+    /// pure sans x/y) — miroir nécessaire, exception documentée.
+    #[serde(default)]
+    pub orientation_overridden: bool,
     /// Mission "global vs sélectif", décalage de départ (2026-08-03) :
     /// cette activation démarre (et gouverne LTP) start_offset_ms après le
     /// début nominal du bloc — entrées en escalier/vague. 0 = comportement
@@ -84,7 +93,8 @@ pub struct Activation {
 
 fn default_fade_ms() -> f64 { 1000.0 }
 fn default_easing() -> String { "linear".to_string() }
-fn default_orientation_mode() -> String { "manual".to_string() }
+fn default_travel_orientation_mode() -> String { "fixed".to_string() }
+fn default_arrival_orientation_mode() -> String { "hold".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

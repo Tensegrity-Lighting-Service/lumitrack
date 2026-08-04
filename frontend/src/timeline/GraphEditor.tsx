@@ -31,7 +31,6 @@ function axisHasTarget(act: Activation, axis: Axis): boolean {
     case 'x': return act.targetXCm !== null
     case 'y': return act.targetYCm !== null
     case 'z': return act.targetZCm !== null
-    case 'yaw': return act.targetYawDeg !== null
   }
 }
 

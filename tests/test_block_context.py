@@ -102,8 +102,9 @@ def test_untouched_axis_holds_its_tracked_value():
     target == wherever the point already is, so there's no spatial path."""
     project = _project_with(
         _cue("A", 0, {"p1": {"target_x_cm": 100.0, "target_y_cm": 200.0,
-                             "target_yaw_deg": 0.0}}),
-        _cue("B", 4000, {"p1": {"target_yaw_deg": 225.0}}),
+                             "travel_orientation_mode": "fixed", "travel_fixed_yaw_deg": 0.0}}),
+        _cue("B", 4000, {"p1": {"orientation_overridden": True,
+                             "travel_orientation_mode": "fixed", "travel_fixed_yaw_deg": 225.0}}),
     )
     entry = resolve_block_context(project, "B")["entries"]["p1"]
     assert entry["startPose"][:2] == [100.0, 200.0]
@@ -118,7 +119,8 @@ def test_point_with_no_known_position_gets_no_poses():
     """Activation touches only yaw and the point has never been positioned:
     never invent a position (mirrors the PSN rule)."""
     project = _project_with(
-        _cue("A", 0, {"p1": {"target_yaw_deg": 90.0}}),
+        _cue("A", 0, {"p1": {"orientation_overridden": True,
+                             "travel_orientation_mode": "fixed", "travel_fixed_yaw_deg": 90.0}}),
     )
     entry = resolve_block_context(project, "A")["entries"]["p1"]
     assert entry["startPose"] is None

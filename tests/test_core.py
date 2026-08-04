@@ -170,84 +170,89 @@ def test_z_and_yaw_are_independent_animatable_tracks():
     project.cues = [
         Cue(id="c1", name="c1", start_ms=0, duration_ms=1000,
             activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_z_cm=100,
-                                          target_yaw_deg=90, fade_ms=1000)}),
+                                          fade_ms=1000,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=90)}),
         # Only rotates further; x/y/z keep tracking the previous cue's values.
         Cue(id="c2", name="c2", start_ms=1000, duration_ms=1000,
-            activations={"a": Activation(target_yaw_deg=450, fade_ms=1000)}),
+            activations={"a": Activation(fade_ms=1000, orientation_overridden=True,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=450)}),
     ]
-    # Milieu de la fenêtre de lacet de c2 (YAW_TURN_MS=400, pas fade_ms=1000
-    # — voir test_yaw_turns_quickly_at_start_of_move ci-dessous), pas milieu
-    # du fade x/y/z : la même fraction de progression (50 %) est atteinte
-    # bien plus tôt sur le lacet que sur la position.
+    # z est encore à mi-fondu (fade_ms=1000, on est 200ms après le début de
+    # c2) alors que le lacet "fixed" a déjà basculé — z/yaw restent des
+    # pistes indépendantes même si le lacet n'est plus jamais animé en
+    # douceur (mission "modes d'orientation", 2026-08-04).
     mid = resolve_positions(project, 1200)["a"]
     assert (mid.x_cm, mid.y_cm, mid.z_cm) == pytest.approx((0.0, 0.0, 100.0))
-    assert mid.yaw_deg == pytest.approx(270.0)  # multi-turn value, not wrapped
+    assert mid.yaw_deg == pytest.approx(450.0)  # multi-turn value, not wrapped
 
 
-# ------------------------------------------------- lacet en debut de trajet
+# ---------------------------------------------- lacet "fixed" instantané ---
 #
-# "Un acteur se tourne avant de prendre de courir, il ne tourne pas jusqu'à
-# son arrivée" (Florian, 2026-07-31) : le lacet tourne au tout début du
-# mouvement (fenêtre courte, YAW_TURN_MS), pas étalé sur toute la durée du
-# déplacement x/y — mais toujours eased, jamais un cut instantané.
+# Mission "modes d'orientation" (2026-08-04, remplace la v1 du 07-31) :
+# l'ancien mode "manual" animait le lacet en douceur comme x/y/z, avec une
+# fenêtre courte (YAW_TURN_MS) pour simuler un virage rapide. Florian a
+# confirmé "non tout devient discret" — le nouveau mode "fixed" en trajet
+# n'anime plus DU TOUT : il bascule à sa valeur dès le premier instant de
+# la fenêtre de l'activation, aussi près du début qu'on regarde.
 
-def test_yaw_turns_quickly_at_start_of_move_not_spread_over_it():
+def test_travel_fixed_yaw_is_instantaneous_not_animated():
     project = Project()
     project.points = [Point(id="a", name="A")]
     project.cues = [
         Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
-            activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_yaw_deg=0, fade_ms=0)}),
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=0)}),
         # Déplacement long (4s) avec un virage de 90°.
         Cue(id="c1", name="c1", start_ms=1000, duration_ms=4000,
-            activations={"a": Activation(target_x_cm=1000, target_y_cm=0,
-                                          target_yaw_deg=90, fade_ms=4000)}),
+            activations={"a": Activation(target_x_cm=1000, target_y_cm=0, fade_ms=4000,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=90)}),
     ]
-    from lumitrack.core.timeline import YAW_TURN_MS
-    # Milieu de la fenêtre de lacet (200 ms sur les 400 ms de YAW_TURN_MS) :
-    # le virage est déjà à moitié fait alors que le déplacement x/y vient à
-    # peine de commencer (200/4000 = 5 %).
-    mid_turn = resolve_positions(project, 1000 + YAW_TURN_MS / 2)["a"]
-    assert mid_turn.yaw_deg == pytest.approx(45.0)
-    assert mid_turn.x_cm == pytest.approx(50.0)  # 5 % de 1000, pas 45 %
-
-    # Après la fenêtre de lacet mais bien avant l'arrivée : le lacet tient
-    # déjà sa cible, le déplacement continue seul.
-    mid_move = resolve_positions(project, 1000 + 2000)["a"]
-    assert mid_move.yaw_deg == pytest.approx(90.0)
-    assert mid_move.x_cm == pytest.approx(500.0)
+    # 1ms après le début du bloc : le lacet est déjà à sa cible, le
+    # déplacement x/y vient tout juste de commencer (0.025 % de 1000).
+    just_after_start = resolve_positions(project, 1001)["a"]
+    assert just_after_start.yaw_deg == pytest.approx(90.0)
+    assert just_after_start.x_cm == pytest.approx(0.25)
 
 
-def test_yaw_turn_never_outlasts_a_shorter_move():
-    """Un déplacement plus court que YAW_TURN_MS ne fait jamais tourner le
-    lacet plus longtemps que le mouvement lui-même — plafonné par fade_ms."""
+def test_arrival_hold_freezes_the_travel_value_at_fade_end():
+    """"Ne change pas" à l'arrivée (défaut) fige ce que le trajet avait
+    résolu PILE à la fin du fondu, pour le mode "fixed" comme pour tous les
+    autres — généralise l'ancien comportement, propre à "path" seul avant
+    le split trajet/arrivée."""
     project = Project()
     project.points = [Point(id="a", name="A")]
     project.cues = [
         Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
-            activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_yaw_deg=0, fade_ms=0)}),
-        Cue(id="c1", name="c1", start_ms=1000, duration_ms=100,
-            activations={"a": Activation(target_x_cm=100.0, target_y_cm=0,
-                                          target_yaw_deg=90, fade_ms=100)}),
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=1000,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=90,
+                                          arrival_orientation_mode="hold")}),
     ]
-    at_end = resolve_positions(project, 1100)["a"]
-    assert at_end.yaw_deg == pytest.approx(90.0)
-    assert at_end.x_cm == pytest.approx(100.0)
+    long_after_arrival = resolve_positions(project, 10_000)["a"]
+    assert long_after_arrival.yaw_deg == pytest.approx(90.0)
 
 
-def test_yaw_turn_is_eased_not_an_instant_cut():
-    """Toujours un fondu, jamais un saut brut — au premier quart de la
-    fenêtre de lacet, l'angle a bougé mais n'a pas encore atteint la cible."""
+def test_arrival_fixed_is_independent_of_travel_fixed():
+    """L'angle "à l'arrivée" en mode Fixe est SON PROPRE angle, indépendant
+    de celui du trajet (confirmé par Florian : les deux phases ne
+    partagent jamais la même référence)."""
     project = Project()
     project.points = [Point(id="a", name="A")]
     project.cues = [
         Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
-            activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_yaw_deg=0, fade_ms=0)}),
-        Cue(id="c1", name="c1", start_ms=1000, duration_ms=4000,
-            activations={"a": Activation(target_x_cm=1000, target_y_cm=0,
-                                          target_yaw_deg=90, fade_ms=4000)}),
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=1000,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=90,
+                                          arrival_orientation_mode="fixed", arrival_fixed_yaw_deg=200)}),
     ]
-    just_after_start = resolve_positions(project, 1050)["a"]
-    assert 0.0 < just_after_start.yaw_deg < 90.0
+    during_travel = resolve_positions(project, 1500)["a"]
+    after_arrival = resolve_positions(project, 3000)["a"]
+    assert during_travel.yaw_deg == pytest.approx(90.0)
+    assert after_arrival.yaw_deg == pytest.approx(200.0)
 
 
 # --------------------------------- décalage de départ, escalier (2026-08-03) --
@@ -350,27 +355,15 @@ def test_start_offset_roundtrips_and_never_negative():
     assert clamped.cues[0].activations["a"].start_offset_ms == 0.0
 
 
-# ------------------------------------------ modes de rotation (2026-08-01) --
+# ------------------------------------------ modes de rotation (2026-08-04) --
 #
 # "je veux pouvoir choisir entre 3 mode ... suivre courbe de trajectoire,
-# orientation fixe ou focus" (Florian) : orientation_mode="manual" garde le
-# comportement historique (target_yaw_deg explicite) ; "path" dérive le
-# lacet de la tangente du déplacement x/y ; "focus" pointe vers un point
-# fixe du terrain. Les deux modes dérivés n'écrivent jamais target_yaw_deg.
-
-def test_orientation_mode_manual_is_unaffected():
-    project = Project()
-    project.points = [Point(id="a", name="A")]
-    project.cues = [
-        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
-            activations={"a": Activation(target_x_cm=0, target_y_cm=0, target_yaw_deg=0, fade_ms=0)}),
-        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
-            activations={"a": Activation(target_x_cm=100, target_y_cm=0,
-                                          target_yaw_deg=30, fade_ms=1000)}),
-    ]
-    pose = resolve_positions(project, 2000)["a"]
-    assert pose.yaw_deg == pytest.approx(30.0)
-
+# orientation fixe ou focus" (Florian) — remplacé le 2026-08-04 par un
+# réglage en DEUX phases indépendantes (voir project.py::Activation) :
+# "en trajet" (fixed/path/focus) et "à l'arrivée" (hold/fixed/focus).
+# "path" dérive le lacet de la tangente du déplacement x/y ; "focus" pointe
+# vers un Point(is_focus_point=True) désigné par id, indépendamment par
+# phase.
 
 def test_orientation_mode_path_follows_movement_tangent():
     project = Project()
@@ -378,29 +371,29 @@ def test_orientation_mode_path_follows_movement_tangent():
     project.cues = [
         Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
             activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
-                                          orientation_mode="path")}),
+                                          travel_orientation_mode="path")}),
         # Déplacement en ligne droite le long de +Y : la tangente pointe à 90°.
         Cue(id="c1", name="c1", start_ms=1000, duration_ms=2000,
             activations={"a": Activation(target_x_cm=0, target_y_cm=1000, fade_ms=2000,
-                                          orientation_mode="path")}),
+                                          travel_orientation_mode="path")}),
     ]
     mid = resolve_positions(project, 2000)["a"]
     assert mid.yaw_deg == pytest.approx(90.0, abs=1.0)
 
 
 def test_orientation_mode_path_freezes_direction_once_stopped():
-    """Une fois le déplacement terminé (hold), le lacet garde la dernière
-    direction plutôt que de dégénérer (l'acteur est immobile, donc la
-    tangente instantanée serait indéfinie)."""
+    """Une fois le déplacement terminé, "ne change pas" à l'arrivée (défaut)
+    garde la dernière direction de marche plutôt que de dégénérer (l'acteur
+    est immobile, donc la tangente instantanée serait indéfinie)."""
     project = Project()
     project.points = [Point(id="a", name="A")]
     project.cues = [
         Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
             activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
-                                          orientation_mode="path")}),
+                                          travel_orientation_mode="path")}),
         Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
             activations={"a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=1000,
-                                          orientation_mode="path")}),
+                                          travel_orientation_mode="path")}),
     ]
     long_after_arrival = resolve_positions(project, 10_000)["a"]
     assert long_after_arrival.yaw_deg == pytest.approx(0.0, abs=1.0)
@@ -408,12 +401,14 @@ def test_orientation_mode_path_freezes_direction_once_stopped():
 
 def test_orientation_mode_focus_points_at_fixed_target():
     project = Project()
-    project.points = [Point(id="a", name="A")]
+    project.points = [Point(id="a", name="A"),
+                       Point(id="f", name="Focus", is_focus_point=True)]
     project.cues = [
-        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
-            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
-                                          orientation_mode="focus",
-                                          focus_x_cm=0, focus_y_cm=1000)}),
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0, activations={
+            "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                             travel_orientation_mode="focus", travel_focus_point_id="f"),
+            "f": Activation(target_x_cm=0, target_y_cm=1000, fade_ms=0),
+        }),
     ]
     pose = resolve_positions(project, 500)["a"]
     assert pose.yaw_deg == pytest.approx(90.0, abs=1e-6)
@@ -423,23 +418,87 @@ def test_orientation_mode_focus_tracks_actor_as_it_moves():
     """Le focus reste fixe dans l'espace : à mesure que l'acteur avance, le
     lacet nécessaire pour continuer à regarder ce point change."""
     project = Project()
-    project.points = [Point(id="a", name="A")]
+    project.points = [Point(id="a", name="A"),
+                       Point(id="f", name="Focus", is_focus_point=True)]
     project.cues = [
-        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
-            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
-                                          orientation_mode="focus",
-                                          focus_x_cm=1000, focus_y_cm=0)}),
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0, activations={
+            "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                             travel_orientation_mode="focus", travel_focus_point_id="f"),
+            "f": Activation(target_x_cm=1000, target_y_cm=0, fade_ms=0),
+        }),
         # L'acteur avance vers +Y : le focus (droit devant au départ) se
         # retrouve de plus en plus sur le côté.
         Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
             activations={"a": Activation(target_x_cm=0, target_y_cm=1000, fade_ms=1000,
-                                          orientation_mode="focus",
-                                          focus_x_cm=1000, focus_y_cm=0)}),
+                                          travel_orientation_mode="focus", travel_focus_point_id="f")}),
     ]
     start = resolve_positions(project, 1000)["a"]
     end = resolve_positions(project, 2000)["a"]
     assert start.yaw_deg == pytest.approx(0.0, abs=1e-6)
     assert end.yaw_deg == pytest.approx(-45.0, abs=1.0)
+
+
+def test_travel_and_arrival_focus_points_are_independent():
+    """Les deux phases ne partagent jamais la même référence de focus —
+    confirmé explicitement par Florian ("indépendant par phase")."""
+    project = Project()
+    project.points = [
+        Point(id="a", name="A"),
+        Point(id="f1", name="Focus Est", is_focus_point=True),
+        Point(id="f2", name="Focus Nord", is_focus_point=True),
+    ]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0, activations={
+            "f1": Activation(target_x_cm=1000, target_y_cm=0, fade_ms=0),
+            "f2": Activation(target_x_cm=0, target_y_cm=1000, fade_ms=0),
+        }),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000, activations={
+            "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=1000,
+                             travel_orientation_mode="focus", travel_focus_point_id="f1",
+                             arrival_orientation_mode="focus", arrival_focus_point_id="f2"),
+        }),
+    ]
+    during_travel = resolve_positions(project, 1500)["a"]
+    after_arrival = resolve_positions(project, 3000)["a"]
+    assert during_travel.yaw_deg == pytest.approx(0.0, abs=1e-6)   # face f1 (est)
+    assert after_arrival.yaw_deg == pytest.approx(90.0, abs=1e-6)  # face f2 (nord)
+
+
+def test_focus_reference_falls_back_to_fixed_angle_when_point_missing():
+    """Un point de focus supprimé (id pendant) ne doit jamais planter la
+    résolution — repli propre sur l'angle fixe de secours de la phase."""
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          travel_orientation_mode="focus",
+                                          travel_focus_point_id="does-not-exist",
+                                          travel_fixed_yaw_deg=42.0)}),
+    ]
+    pose = resolve_positions(project, 0)["a"]
+    assert pose.yaw_deg == pytest.approx(42.0)
+
+
+def test_focus_resolution_is_order_independent_across_points():
+    """Point B (la cible du focus) est déclaré APRÈS le point A qui le
+    vise dans project.points — la restructuration en 2 passes (x/y de TOUS
+    les points d'abord, puis le lacet de tous) ne doit pas dépendre de
+    l'ordre de la liste."""
+    project = Project()
+    project.points = [
+        Point(id="a", name="A"),
+        Point(id="b", name="B", is_focus_point=True),
+    ]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0, activations={
+            "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                             travel_orientation_mode="focus", travel_focus_point_id="b"),
+            "b": Activation(target_x_cm=1000, target_y_cm=0, fade_ms=0),
+        }),
+    ]
+    pose = resolve_positions(project, 0)["a"]
+    assert pose.yaw_deg == pytest.approx(0.0, abs=1e-6)
 
 
 # ------------------------------------------- duree automatique (2026-08-01) --
@@ -811,16 +870,24 @@ def test_point_and_roster_groups_roundtrip_through_dict():
     assert back.point_by_id("a").roster_group_id == "g1"
 
 
-def test_point_default_orientation_mode_defaults_and_roundtrips():
-    """Préremplissage des nouvelles activations (DIRECTIVES.md point 5, menu
-    contextuel "mode d'orientation par défaut") — un vieux projet sans ce
-    champ doit rester en "manual", comportement historique."""
-    assert Point(id="a", name="A").default_orientation_mode == "manual"
+def test_point_default_travel_orientation_mode_defaults_and_roundtrips():
+    """Préremplissage des nouvelles activations (DIRECTIVES.md point 5/6) —
+    renommé de default_orientation_mode (mission "modes d'orientation",
+    2026-08-04) : c'est maintenant un repli pour la phase TRAJET
+    uniquement. Un vieux projet en "manual" (lacet animé, disparu) migre
+    vers "fixed", la nouvelle valeur instantanée équivalente."""
+    assert Point(id="a", name="A").default_travel_orientation_mode == "fixed"
     project = Project()
-    project.points = [Point(id="a", name="A", default_orientation_mode="focus")]
+    project.points = [Point(id="a", name="A", default_travel_orientation_mode="focus")]
     back = Project.from_dict(project.to_dict())
-    assert back.point_by_id("a").default_orientation_mode == "focus"
-    assert Point.from_dict({"id": "b", "name": "B"}).default_orientation_mode == "manual"
+    assert back.point_by_id("a").default_travel_orientation_mode == "focus"
+    assert Point.from_dict({"id": "b", "name": "B"}).default_travel_orientation_mode == "fixed"
+    # Ancien format (avant le split trajet/arrivée) : defaultOrientationMode
+    # au lieu de defaultTravelOrientationMode.
+    legacy_manual = Point.from_dict({"id": "c", "name": "C", "defaultOrientationMode": "manual"})
+    assert legacy_manual.default_travel_orientation_mode == "fixed"
+    legacy_path = Point.from_dict({"id": "d", "name": "D", "defaultOrientationMode": "path"})
+    assert legacy_path.default_travel_orientation_mode == "path"
 
 
 def _bundled_project(tmp_path, audio_bytes=b"fake-audio-bytes"):
@@ -1324,3 +1391,98 @@ def test_focus_point_default_and_roundtrip():
     p2 = Project.from_dict(p.to_dict())
     assert p2.points[0].is_focus_point is True
     assert p2.points[1].is_focus_point is False
+
+
+# --------------------- migration : anciens projets sans le split (2026-08-04) --
+#
+# Avant la mission "modes d'orientation", une activation stockait
+# orientationMode ("manual"/"path"/"focus") + targetYawDeg + focusXCm/
+# focusYCm directement. Project.from_dict détecte ce format via l'absence
+# de la clé "travelOrientationMode".
+
+def _legacy_project_dict(activations_by_cue: dict) -> dict:
+    """Un dict de projet minimal AU FORMAT D'AVANT LE SPLIT (pas de
+    to_dict() actuel, qui n'écrirait plus jamais orientationMode)."""
+    return {
+        "format": "lumitrack-project", "version": 2, "name": "legacy",
+        "points": [{"id": "a", "name": "A"}],
+        "cues": [
+            {"id": cid, "name": cid, "startMs": 0.0, "durationMs": 1000.0,
+             "activations": acts}
+            for cid, acts in activations_by_cue.items()
+        ],
+    }
+
+
+def test_migration_manual_becomes_instantaneous_fixed():
+    from lumitrack.core.project import Project, PROJECT_FORMAT
+    d = _legacy_project_dict({
+        "c1": {"a": {"targetXCm": 0.0, "targetYCm": 0.0, "targetYawDeg": 30.0, "fadeMs": 0.0}},
+    })
+    d["format"] = PROJECT_FORMAT
+    proj = Project.from_dict(d)
+    act = proj.cues[0].activations["a"]
+    assert act.travel_orientation_mode == "fixed"
+    assert act.travel_fixed_yaw_deg == pytest.approx(30.0)
+    assert act.arrival_orientation_mode == "hold"
+    assert act.orientation_overridden is True
+
+
+def test_migration_path_mode_carries_over_directly():
+    from lumitrack.core.project import Project, PROJECT_FORMAT
+    d = _legacy_project_dict({
+        "c1": {"a": {"targetXCm": 0.0, "targetYCm": 0.0, "orientationMode": "path", "fadeMs": 0.0}},
+    })
+    d["format"] = PROJECT_FORMAT
+    proj = Project.from_dict(d)
+    act = proj.cues[0].activations["a"]
+    assert act.travel_orientation_mode == "path"
+    assert act.arrival_orientation_mode == "hold"
+    assert act.orientation_overridden is True
+
+
+def test_migration_focus_synthesizes_a_new_focus_point():
+    """Un ancien projet en mode focus fait apparaître un nouveau
+    Point(is_focus_point=True) dans le roster au chargement — effet
+    visible, signalé, pas une perte de données."""
+    from lumitrack.core.project import Project, PROJECT_FORMAT
+    d = _legacy_project_dict({
+        "c1": {"a": {"targetXCm": 0.0, "targetYCm": 0.0,
+                     "orientationMode": "focus", "focusXCm": 500.0, "focusYCm": 500.0,
+                     "fadeMs": 0.0}},
+    })
+    d["format"] = PROJECT_FORMAT
+    proj = Project.from_dict(d)
+    act = proj.cue_by_id("c1").activations["a"]
+    assert act.travel_orientation_mode == "focus"
+    assert act.travel_focus_point_id is not None
+    focus_point = proj.point_by_id(act.travel_focus_point_id)
+    assert focus_point is not None
+    assert focus_point.is_focus_point is True
+    # Le point synthétisé a une vraie position dès t=0 (règle "première
+    # apparition") : résolvable immédiatement, pas seulement référencé.
+    from lumitrack.core.timeline import resolve_positions
+    pose = resolve_positions(proj, 0.0)[focus_point.id]
+    assert (pose.x_cm, pose.y_cm) == pytest.approx((500.0, 500.0))
+
+
+def test_migration_deduplicates_identical_focus_coordinates():
+    """Deux activations visant EXACTEMENT le même point (500,500) doivent
+    partager le MÊME point de focus synthétisé, pas en créer deux."""
+    from lumitrack.core.project import Project, PROJECT_FORMAT
+    d = _legacy_project_dict({
+        "c1": {"a": {"targetXCm": 0.0, "targetYCm": 0.0,
+                     "orientationMode": "focus", "focusXCm": 500.0, "focusYCm": 500.0,
+                     "fadeMs": 0.0}},
+    })
+    d["points"].append({"id": "b", "name": "B"})
+    d["cues"][0]["activations"]["b"] = {
+        "targetXCm": 100.0, "targetYCm": 100.0,
+        "orientationMode": "focus", "focusXCm": 500.0, "focusYCm": 500.0,
+        "fadeMs": 0.0,
+    }
+    d["format"] = PROJECT_FORMAT
+    proj = Project.from_dict(d)
+    focus_ids = {act.travel_focus_point_id for act in proj.cue_by_id("c1").activations.values()}
+    assert len(focus_ids) == 1
+    assert sum(1 for p in proj.points if p.is_focus_point) == 1
