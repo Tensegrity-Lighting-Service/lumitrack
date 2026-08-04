@@ -30,3 +30,8 @@ Thumbs.db
 # App artefacts
 *.spsn.bak
 media_cache/
+
+# Sauvegardes locales de projets (.lumitrack + media/archive) — données
+# utilisateur, pas du code source ; peut contenir des fichiers volumineux
+# (audio/vidéo) qui dépassent la limite GitHub de 100 Mo par fichier.
+Sauvegarde/
