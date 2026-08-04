@@ -6,7 +6,7 @@
 // re-renders from them — every edit is sent as a command and only takes
 // effect once the sidecar echoes back a fresh `project` snapshot.
 import { useSyncExternalStore } from 'react'
-import type { BackstageZone, BlockContextMessage, BundleArchiveMessage, IfacesMessage, Project, PsnPreviewMessage, RosterGroup, ServerMessage, TickMessage, TrajectoriesMessage } from './types'
+import type { BackstageZone, BlockContextMessage, BundleArchiveMessage, FixtureMountPreset, IfacesMessage, Project, PsnPreviewMessage, RosterGroup, ServerMessage, TickMessage, TrajectoriesMessage } from './types'
 
 const SIDECAR_PORT = 17845
 const RECONNECT_DELAY_MS = 1000
@@ -139,6 +139,7 @@ class SidecarClient {
     homeZoneId?: string | null; rosterGroupId?: string | null
     defaultTravelOrientationMode?: 'fixed' | 'path' | 'focus'
     isFocusPoint?: boolean
+    mountPresetId?: string | null
   }) {
     this.send({ type: 'update_point', pointId, ...patch })
   }
@@ -168,6 +169,12 @@ class SidecarClient {
    * suppression) — même principe que setBackstageZones. */
   setRosterGroups(groups: RosterGroup[]) {
     this.send({ type: 'set_roster_groups', groups })
+  }
+  /** Catalogue complet des presets de montage de fixture (mission "modes
+   * d'orientation", phase D, 2026-08-04) — même principe que
+   * setRosterGroups/setBackstageZones. */
+  setFixtureMountPresets(presets: FixtureMountPreset[]) {
+    this.send({ type: 'set_fixture_mount_presets', presets })
   }
   updateStageMap(patch: { originXM?: number; originZM?: number; rotationDeg?: number; widthCm?: number; heightCm?: number; gridSizeCm?: number; terrainRotationDeg?: number }) {
     this.send({ type: 'update_stage_map', ...patch })

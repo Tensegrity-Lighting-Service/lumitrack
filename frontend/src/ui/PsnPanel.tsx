@@ -145,7 +145,11 @@ export function PsnPanel({ project, onClose }: {
           <h3>{t('psn.trackers')}</h3>
           <table className="psn-table">
             <thead>
-              <tr><th>{t('psn.tableActor')}</th><th>{t('psn.tableNumber')}</th><th>{t('psn.tablePsnId')}</th><th>{t('psn.tableEmittedId')}</th></tr>
+              <tr>
+                <th>{t('psn.tableActor')}</th><th>{t('psn.tableNumber')}</th>
+                <th>{t('psn.tablePsnId')}</th><th>{t('psn.tableEmittedId')}</th>
+                <th>{t('psn.tableMountPreset')}</th>
+              </tr>
             </thead>
             <tbody>
               {project.points.map((pt, index) => {
@@ -162,12 +166,93 @@ export function PsnPanel({ project, onClose }: {
                         onCommit={(v) => sidecar.updatePoint(pt.id, { psnTrackerId: v })} />
                     </td>
                     <td className="psn-mono">{resolved}</td>
+                    <td>
+                      <select
+                        value={pt.mountPresetId ?? ''}
+                        onChange={(e) => sidecar.updatePoint(pt.id, { mountPresetId: e.target.value || null })}
+                      >
+                        <option value="">{t('psn.mountPresetNone')}</option>
+                        {project.fixtureMountPresets.map((preset) => (
+                          <option key={preset.id} value={preset.id}>{preset.name}</option>
+                        ))}
+                      </select>
+                    </td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
           <p className="psn-note">{t('psn.trackersNote')}</p>
+        </section>
+
+        <section>
+          <h3>{t('psn.mountPresetsTitle')}</h3>
+          <table className="psn-table">
+            <thead>
+              <tr>
+                <th>{t('psn.mountPresetName')}</th>
+                <th>{t('psn.mountPresetPitch')}</th>
+                <th>{t('psn.mountPresetTracksYaw')}</th>
+                <th>{t('psn.mountPresetRoll')}</th>
+                <th>{t('psn.mountPresetTracksYaw')}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {project.fixtureMountPresets.map((preset) => {
+                const update = (patch: Partial<typeof preset>) => sidecar.setFixtureMountPresets(
+                  project.fixtureMountPresets.map((p) => (p.id === preset.id ? { ...p, ...patch } : p)))
+                return (
+                  <tr key={preset.id}>
+                    <td>
+                      <input
+                        value={preset.name}
+                        onChange={(e) => update({ name: e.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <NumericInput value={preset.basePitchDeg} step={5}
+                        onCommit={(v) => update({ basePitchDeg: v ?? 0 })} />
+                    </td>
+                    <td>
+                      <input type="checkbox" checked={preset.pitchTracksYaw}
+                        onChange={(e) => update({ pitchTracksYaw: e.target.checked })} />
+                    </td>
+                    <td>
+                      <NumericInput value={preset.baseRollDeg} step={5}
+                        onCommit={(v) => update({ baseRollDeg: v ?? 0 })} />
+                    </td>
+                    <td>
+                      <input type="checkbox" checked={preset.rollTracksYaw}
+                        onChange={(e) => update({ rollTracksYaw: e.target.checked })} />
+                    </td>
+                    <td>
+                      <button
+                        className="psn-preset-delete"
+                        title={t('psn.mountPresetDelete')}
+                        onClick={() => sidecar.setFixtureMountPresets(
+                          project.fixtureMountPresets.filter((p) => p.id !== preset.id))}
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <button
+            onClick={() => sidecar.setFixtureMountPresets([
+              ...project.fixtureMountPresets,
+              {
+                id: crypto.randomUUID(), name: t('psn.mountPresetDefaultName'),
+                basePitchDeg: 0, baseRollDeg: 0, pitchTracksYaw: false, rollTracksYaw: false,
+              },
+            ])}
+          >
+            {t('psn.mountPresetAdd')}
+          </button>
+          <p className="psn-note">{t('psn.mountPresetsNote')}</p>
         </section>
 
         <section>

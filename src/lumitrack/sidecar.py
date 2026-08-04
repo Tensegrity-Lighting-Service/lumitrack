@@ -512,6 +512,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             point.default_travel_orientation_mode = msg["defaultTravelOrientationMode"]
         if "isFocusPoint" in msg:
             point.is_focus_point = bool(msg["isFocusPoint"])
+        if "mountPresetId" in msg:
+            point.mount_preset_id = msg["mountPresetId"]
         return None
 
     if msg_type == "delete_point":
@@ -529,6 +531,14 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         # simple, sans dérive possible entre deux appels partiels.
         session.project.roster_groups = list(msg.get("groups") or [])
         session.project.prune_roster_groups()
+        return None
+
+    if msg_type == "set_fixture_mount_presets":
+        # Catalogue complet des presets de montage en un seul message
+        # (mission "modes d'orientation", phase D, 2026-08-04) — même
+        # principe que set_roster_groups/set_backstage_zones.
+        session.project.fixture_mount_presets = list(msg.get("presets") or [])
+        session.project.prune_mount_presets()
         return None
 
     if msg_type == "psn_start":

@@ -891,6 +891,12 @@
 .psn-table .swatch { margin-right: 6px; }
 .psn-mono { font-family: ui-monospace, monospace; }
 .psn-up { color: #4ff58c; }
+.psn-preset-delete {
+  font-size: 11px; padding: 1px 6px;
+  background: #1f1f27; color: #b9b9c6; border: 1px solid #30303c;
+  border-radius: 4px; cursor: pointer;
+}
+.psn-preset-delete:hover { background: #2a2a35; }
 
 /* ---- Panneau détail du bloc — DOCKÉ, pas modal (2026-08-03) ----
    Revu le même jour ("c'est pas une timeline, on ne sait pas dépasser le

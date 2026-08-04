@@ -369,6 +369,23 @@ def test_set_roster_groups_broadcasts_and_prunes_detached_points():
     assert session.project.point_by_id("p1").roster_group_id is None
 
 
+def test_set_fixture_mount_presets_broadcasts_and_prunes_detached_points():
+    session = Session()
+    _run(_handle_message(session, {"type": "update_point", "pointId": "p1", "mountPresetId": "vert"}))
+    reply = _run(_handle_message(session, {
+        "type": "set_fixture_mount_presets",
+        "presets": [{"id": "vert", "name": "Vertical", "basePitchDeg": 90.0, "baseRollDeg": 0.0,
+                     "pitchTracksYaw": False, "rollTracksYaw": False}],
+    }))
+    assert reply is None
+    assert session.project.fixture_mount_presets[0]["id"] == "vert"
+    assert session.project.point_by_id("p1").mount_preset_id == "vert"
+
+    # Supprimer le preset détache l'acteur plutôt que de laisser un id mort.
+    _run(_handle_message(session, {"type": "set_fixture_mount_presets", "presets": []}))
+    assert session.project.point_by_id("p1").mount_preset_id is None
+
+
 def test_add_point_accepts_a_roster_group_id():
     session = Session()
     _run(_handle_message(session, {

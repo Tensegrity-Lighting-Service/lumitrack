@@ -82,6 +82,15 @@ class Point:
     # pures), CE champ affecte la résolution (backstage_slot) — miroir Rust
     # nécessaire (native/src/model.rs::Point).
     is_focus_point: bool = False
+    # Preset de montage de fixture (mission "modes d'orientation", phase D,
+    # 2026-08-04) : PAR ACTEUR, pas un choix unique pour tout le projet — un
+    # vrai plateau mélange des montages différents en même temps (tubes tenus
+    # à l'horizontale, quelques-uns montés à la verticale, dans le MÊME
+    # show). None = aucune correction (comportement identique à avant cette
+    # fonctionnalité). Référence Project.fixture_mount_presets par id — pure
+    # donnée d'émission PSN (core/engine.py), jamais lue par la résolution de
+    # lecture (timeline.py) : pas de miroir Rust nécessaire.
+    mount_preset_id: Optional[str] = None
 
     def resolved_tracker_id(self, fallback_index: int) -> int:
         if self.psn_tracker_id is not None:
@@ -101,6 +110,7 @@ class Point:
             "rosterGroupId": self.roster_group_id,
             "defaultTravelOrientationMode": self.default_travel_orientation_mode,
             "isFocusPoint": self.is_focus_point,
+            "mountPresetId": self.mount_preset_id,
         }
 
     @classmethod
@@ -121,6 +131,7 @@ class Point:
             roster_group_id=d.get("rosterGroupId"),
             default_travel_orientation_mode=mode,
             is_focus_point=bool(d.get("isFocusPoint", False)),
+            mount_preset_id=d.get("mountPresetId"),
         )
 
 
@@ -327,6 +338,15 @@ class Project:
     # Purement organisationnel, l'ordre du roster reste porté par `points`
     # lui-même (l'ordre de la liste = l'ordre affiché).
     roster_groups: list = field(default_factory=list)
+    # Presets de montage de fixture (mission "modes d'orientation", phase D,
+    # 2026-08-04) : catalogue PROJET, éditable/ajoutable (pas un enum codé en
+    # dur — "vertical"/"horizontal"/"posé au sol" ne sont que des LIGNES
+    # créées par l'utilisateur). Complète ce que le graphe d'animation ne
+    # gère pas (tangage/roulis), dérivé du lacet déjà résolu au moment de
+    # l'émission PSN (core/engine.py::apply_mount_preset) — jamais une
+    # nouvelle timeline d'animation. [{id, name, basePitchDeg, baseRollDeg,
+    # pitchTracksYaw, rollTracksYaw}].
+    fixture_mount_presets: list = field(default_factory=list)
     floor_image_path: Optional[str] = None
     terrain_gltf_path: Optional[str] = None
     audio_path: Optional[str] = None
@@ -438,6 +458,16 @@ class Project:
             if pt.roster_group_id not in valid_ids:
                 pt.roster_group_id = None
 
+    def prune_mount_presets(self):
+        """Après un set_fixture_mount_presets qui supprime un preset : les
+        acteurs qui l'utilisaient redeviennent "sans correction" (émission
+        PSN identique à un projet qui n'utilise jamais cette fonctionnalité),
+        jamais orphelins d'un id de preset qui n'existe plus."""
+        valid_ids = {p["id"] for p in self.fixture_mount_presets}
+        for pt in self.points:
+            if pt.mount_preset_id not in valid_ids:
+                pt.mount_preset_id = None
+
     def cue_by_id(self, cid: str) -> Optional[Cue]:
         for c in self.cues:
             if c.id == cid:
@@ -534,6 +564,7 @@ class Project:
             "actorDiameterCm": self.actor_diameter_cm,
             "backstageZones": self.backstage_zones,
             "rosterGroups": self.roster_groups,
+            "fixtureMountPresets": self.fixture_mount_presets,
             "points": [p.to_dict() for p in self.points],
             "cues": [
                 {
@@ -593,6 +624,7 @@ class Project:
         )
         proj.backstage_zones = list(d.get("backstageZones") or [])
         proj.roster_groups = list(d.get("rosterGroups") or [])
+        proj.fixture_mount_presets = list(d.get("fixtureMountPresets") or [])
         proj.points = [Point.from_dict(p) for p in d.get("points", [])]
 
         # Migration "modes d'orientation" (2026-08-04) : avant le split

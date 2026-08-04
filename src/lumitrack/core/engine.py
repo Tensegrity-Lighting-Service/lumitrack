@@ -94,6 +94,30 @@ class Transport:
         )
 
 
+def apply_mount_preset(preset: Optional[dict], yaw_deg: float) -> tuple:
+    """-> (pitch_deg, roll_deg), dérivés du lacet déjà résolu par la
+    timeline (mission "modes d'orientation", phase D, 2026-08-04) — complète
+    les axes que le graphe d'animation ne gère pas du tout (tangage/
+    roulis), au moment de l'émission PSN uniquement, jamais une nouvelle
+    timeline d'animation. `preset` = une entrée de
+    Project.fixture_mount_presets ou None (aucune correction, émission
+    identique à un projet qui n'utilise jamais cette fonctionnalité).
+
+    Base de départ raisonnable, PAS une vérité géométrique garantie (l'ordre
+    de composition de rotations 3D dépend de la convention) — à régler en
+    direct face au vrai tube/à la vraie console, pas quelque chose qu'une
+    revue de code peut valider seule."""
+    if preset is None:
+        return 0.0, 0.0
+    pitch = float(preset.get("basePitchDeg", 0.0))
+    roll = float(preset.get("baseRollDeg", 0.0))
+    if preset.get("pitchTracksYaw"):
+        pitch += yaw_deg
+    if preset.get("rollTracksYaw"):
+        roll += yaw_deg
+    return pitch, roll
+
+
 class PsnBroadcaster:
     """Background thread turning transport time into PSN packets."""
 
@@ -193,12 +217,27 @@ class PsnBroadcaster:
             # ORI = vecteur axe-angle : le lacet tourne autour de l'axe
             # VERTICAL de la convention de sortie (spec 2.03 : Y-up).
             up_y = getattr(transform, "up_axis", "y") == "y"
+            # Preset de montage de fixture (mission "modes d'orientation",
+            # phase D, 2026-08-04) : complète tangage/roulis, dérivés du
+            # lacet déjà résolu — jamais lu par la résolution elle-même.
+            mount_preset = None
+            if point.mount_preset_id:
+                mount_preset = next(
+                    (p for p in project.fixture_mount_presets if p["id"] == point.mount_preset_id),
+                    None)
+            pitch_deg, roll_deg = apply_mount_preset(mount_preset, pose.yaw_deg)
+            pitch_rad = math.radians(pitch_deg)
+            roll_rad = math.radians(roll_deg)
             trackers.append(Tracker(
                 id=point.resolved_tracker_id(index),
                 name=point.name or f"Point {index + 1}",
                 x_m=x_m, y_m=y_m, z_m=z_m,
-                ori_y=yaw_rad if up_y else 0.0,
-                ori_z=0.0 if up_y else yaw_rad,
+                # Le tangage va toujours dans ori_x (jamais permuté par
+                # up_axis) ; le roulis prend l'axe vertical restant, celui
+                # que le lacet n'occupe pas.
+                ori_x=pitch_rad,
+                ori_y=yaw_rad if up_y else roll_rad,
+                ori_z=roll_rad if up_y else yaw_rad,
             ))
         return trackers
 

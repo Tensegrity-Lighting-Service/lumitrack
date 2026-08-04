@@ -979,7 +979,7 @@ un système de points de focus RÉUTILISABLES et nommés (comme les zones
 backstage) plutôt que des coordonnées libres par activation, si le besoin
 s'en fait sentir à l'usage.
 
-## Mission "modes d'orientation + points de focus + presets de montage" (2026-08-04) — EN COURS
+## Mission "modes d'orientation + points de focus + presets de montage" (2026-08-04) — ✅ LIVRÉE (4/4 chantiers)
 
 Discutée en profondeur avec Florian avant tout code (plan approuvé,
 `C:\Users\decle\.claude\plans\lazy-spinning-koala.md`), à partir d'un
@@ -1079,14 +1079,34 @@ de considérer le sens des boutons de la boussole comme définitif.
 `GroupTimingPanel` (édition groupée) n'a pas reçu l'équivalent pour
 l'orientation — laissé de côté, priorité basse comme prévu au plan.
 
-**D. Presets de montage de fixture — pas commencé.** Liste de presets
-nommés et éditables au niveau projet (pas un enum codé en dur), assignés
-PAR ACTEUR (un vrai plateau mélange des montages différents en même
-temps) ; dérive tangage/roulis depuis le lacet déjà résolu, au moment de
-l'émission PSN uniquement (aucune nouvelle timeline d'animation). Formule
-de composition 3D signalée comme base de départ à régler en direct face
-au vrai matériel, pas quelque chose qu'une revue de code peut valider
-seule.
+**D. Presets de montage de fixture — ✅ LIVRÉ (2026-08-04).**
+`Project.fixture_mount_presets: list` — catalogue PROJET éditable/
+ajoutable (pas un enum codé en dur : "vertical"/"horizontal"/"posé au
+sol" ne sont que des lignes créées par l'utilisateur), même schéma que
+`roster_groups`/`backstage_zones` : `{id, name, basePitchDeg, baseRollDeg,
+pitchTracksYaw, rollTracksYaw}`. `Point.mount_preset_id` — PAR ACTEUR,
+pas un choix unique pour tout le projet (un vrai plateau mélange des
+montages différents en même temps), `None` = aucune correction (émission
+PSN identique à avant cette fonctionnalité). Nouvelle fonction pure
+`core/engine.py::apply_mount_preset(preset, yaw_deg) -> (pitch_deg,
+roll_deg)`, câblée dans `PsnBroadcaster.build_trackers` juste avant
+l'empaquetage : le tangage va toujours dans `ori_x` (jamais permuté par
+`up_axis`), le roulis prend l'axe vertical restant (celui que le lacet
+n'occupe pas). Dérivé du lacet DÉJÀ RÉSOLU au moment de l'émission PSN
+uniquement — aucune nouvelle timeline d'animation, aucun effet sur la
+résolution de lecture ni la scène, donc **aucun miroir Rust** (seul
+`native/src/psn.rs` mirrore l'encodage bas niveau du paquet, jamais ce
+calcul). Nouveau handler sidecar `set_fixture_mount_presets` (même
+principe que `set_roster_groups`) + `update_point` étendu pour
+`mountPresetId` ; `Project.prune_mount_presets()` détache les acteurs
+d'un preset supprimé plutôt que de laisser un id mort. Frontend :
+nouvelle section "Presets de montage" dans `PsnPanel` (ajouter/renommer/
+supprimer une ligne, cases à cocher "suit le lacet" par axe) + colonne
+"Preset de montage" dans le tableau des trackers existant. **Composition
+tangage/roulis signalée comme base de départ, PAS une vérité géométrique
+garantie** (l'ordre de composition de rotations 3D dépend de la
+convention) — à régler en direct face au vrai tube Astera/à la vraie
+console, pas quelque chose qu'une revue de code peut valider seule.
 
 ## Régression signalée, pas encore diagnostiquée (2026-08-04)
 

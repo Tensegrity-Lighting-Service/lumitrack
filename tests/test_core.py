@@ -1466,6 +1466,27 @@ def test_migration_focus_synthesizes_a_new_focus_point():
     assert (pose.x_cm, pose.y_cm) == pytest.approx((500.0, 500.0))
 
 
+def test_prune_mount_presets_detaches_points_from_a_deleted_preset():
+    project = Project()
+    project.points = [Point(id="a", name="A", mount_preset_id="vertical"),
+                       Point(id="b", name="B", mount_preset_id="horizontal")]
+    project.fixture_mount_presets = [{"id": "vertical", "name": "Vertical"}]  # horizontal supprimé
+    project.prune_mount_presets()
+    assert project.point_by_id("a").mount_preset_id == "vertical"  # preset valide, intact
+    assert project.point_by_id("b").mount_preset_id is None  # preset disparu, détaché
+
+
+def test_point_and_fixture_mount_presets_roundtrip_through_dict():
+    project = Project()
+    project.points = [Point(id="a", name="A", mount_preset_id="vertical")]
+    project.fixture_mount_presets = [{"id": "vertical", "name": "Vertical",
+                                       "basePitchDeg": 90.0, "baseRollDeg": 0.0,
+                                       "pitchTracksYaw": False, "rollTracksYaw": True}]
+    back = Project.from_dict(project.to_dict())
+    assert back.fixture_mount_presets == project.fixture_mount_presets
+    assert back.point_by_id("a").mount_preset_id == "vertical"
+
+
 def test_migration_deduplicates_identical_focus_coordinates():
     """Deux activations visant EXACTEMENT le même point (500,500) doivent
     partager le MÊME point de focus synthétisé, pas en créer deux."""

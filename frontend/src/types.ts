@@ -24,6 +24,10 @@ export interface Point {
    * jamais émis en PSN, jamais placé en coulisse (mission "modes
    * d'orientation", 2026-08-04). */
   isFocusPoint: boolean
+  /** Preset de montage de fixture (mission "modes d'orientation", phase D,
+   * 2026-08-04) — PAR ACTEUR, référence FixtureMountPreset.id. null =
+   * aucune correction (émission PSN identique à avant cette fonctionnalité). */
+  mountPresetId: string | null
 }
 
 /** Sous-groupe du roster — juste un nom, l'ordre/l'appartenance vivent sur
@@ -31,6 +35,20 @@ export interface Point {
 export interface RosterGroup {
   id: string
   name: string
+}
+
+/** Preset de montage de fixture (mission "modes d'orientation", phase D,
+ * 2026-08-04) — catalogue PROJET, éditable/ajoutable (pas un enum codé en
+ * dur). Complète tangage/roulis, dérivés du lacet déjà résolu au moment de
+ * l'émission PSN (core/engine.py::apply_mount_preset) — jamais une nouvelle
+ * timeline d'animation. */
+export interface FixtureMountPreset {
+  id: string
+  name: string
+  basePitchDeg: number
+  baseRollDeg: number
+  pitchTracksYaw: boolean
+  rollTracksYaw: boolean
 }
 
 /** Zone backstage : rectangle nommé en coordonnées scène (souvent hors de
@@ -167,6 +185,7 @@ export interface Project {
   actorDiameterCm: number
   backstageZones: BackstageZone[]
   rosterGroups: RosterGroup[]
+  fixtureMountPresets: FixtureMountPreset[]
   points: Point[]
   cues: Cue[]
 }
