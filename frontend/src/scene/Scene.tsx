@@ -2070,29 +2070,14 @@ function SceneContent({
       // séparé et déjà en place — ne rien faire ici pour ce cas).
       if (e.type !== 'contextmenu') return
       e.preventDefault()
-      const selectedCue = selectedCueId ? project.cues.find((c) => c.id === selectedCueId) : null
-      const availablePoints = selectedCue
-        ? project.points.filter((p) => !selectedCue.activations[p.id])
-        : []
-      const clientX = e.clientX
-      const clientY = e.clientY
-      const placeItems = !selectedCue
-        ? [{ label: t('contextMenu.placeActorNoBlock'), disabled: true, onClick: () => {} }]
-        : availablePoints.length === 0
-          ? [{ label: t('contextMenu.placeActorAllActivated'), disabled: true, onClick: () => {} }]
-          : availablePoints.map((p) => ({
-              label: t('contextMenu.placeActor', { name: p.name }),
-              onClick: () => { dropHandleRef.current?.placeActorsAt([p.id], clientX, clientY, false) },
-            }))
       openContextMenu(e.clientX, e.clientY, [
-        placeItems,
         [
           { label: gridOpacity > 0 ? t('contextMenu.gridOff') : t('contextMenu.gridOn'), onClick: onToggleGrid },
           { label: t('contextMenu.fitToWindow'), onClick: onFitToWindow },
         ],
       ])
     },
-  }), [gl, camera, raycaster, selectedCueId, onSelectPoint, onSelectPoints, project, dropHandleRef, gridOpacity, onToggleGrid, onFitToWindow])
+  }), [gl, camera, raycaster, selectedCueId, onSelectPoint, onSelectPoints, gridOpacity, onToggleGrid, onFitToWindow])
 
   // Suppr retire le waypoint sélectionné AVANT que le raccourci global ne
   // supprime le bloc (phase capture + stopPropagation) ; Échap désélectionne

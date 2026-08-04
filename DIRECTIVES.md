@@ -877,7 +877,7 @@ panneau de propriétés suit la sélection du calque). Nouvelle version :
 | Cible | Actions |
 |---|---|
 | Acteur (scène/roster) | Renommer, couleur, mode d'orientation par défaut, assigner un dossier, dupliquer, supprimer, aller à sa zone backstage |
-| Terrain/scène (vide) | Placer un acteur ici (popup, liste d'acteurs existants — pas création), grille on/off, ajuster à la fenêtre |
+| Terrain/scène (vide) | Grille on/off, ajuster à la fenêtre |
 | Bloc (timeline) | Renommer, dupliquer, supprimer, couleur, durée auto/manuelle, diviser au playhead, copier le timing vers d'autres acteurs |
 | Piste vide (timeline) | Nouveau bloc ici (reprend une plage sélectionnée si il y en a une, point 9), coller un bloc copié |
 | Piste audio | Importer, retirer |
@@ -903,6 +903,13 @@ Une action **reportée** (non construite, pas seulement désactivée) :
 de caméra (cadrer un rectangle de zone précis, pas le terrain entier) —
 pas construit, même prudence que le point 3 (code caméra risqué sans
 retour visuel possible).
+
+**"Placer un acteur ici" (menu terrain vide) retiré (2026-08-04)** :
+jugé "pas bon" par Florian — supprimé plutôt que corrigé. Le
+glisser-déposer roster→scène (`placeActorsAt`, drag pointerdown/
+pointermove/pointerup) reste le seul chemin pour poser un acteur sur le
+terrain ; le menu contextuel du terrain vide ne propose plus que
+grille on/off et ajuster à la fenêtre.
 "Diviser au playhead" (menu Bloc) : **✅ LIVRÉ (2026-08-03)**, voir le
 point 4 plus bas — la table ci-dessus est donc désormais complète à une
 action près.
