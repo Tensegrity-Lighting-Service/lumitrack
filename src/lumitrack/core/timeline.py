@@ -453,15 +453,23 @@ def _resolve_yaw(project: Project, point_id: str, t_ms: float, x: float, y: floa
         if act.travel_orientation_mode == "path":
             # Tangente de la trajectoire x/y résolue (approximée en ligne
             # droite même si un tracé courbe existe entre départ et cible —
-            # simplification v1, inchangée depuis 2026-08-01).
+            # simplification v1, inchangée depuis 2026-08-01). L'origine
+            # backstage est passée à _resolve_axis (fix 2026-08-04,
+            # "suivre la trajectoire ne marche pas") : sans elle, une
+            # PREMIÈRE apparition snape sur sa cible — delta nul sur toute
+            # l'entrée, et le lacet retombait sur l'angle fixe (0°) alors
+            # que l'acteur marche bel et bien depuis sa place backstage.
             sample_t = min(t_for_path, fade_end - PATH_YAW_SAMPLE_MS) if fade_end > start else t_for_path
             sample_t = max(sample_t, start)
             kfs_x = _axis_keyframes(project, point_id, "x")
             kfs_y = _axis_keyframes(project, point_id, "y")
+            slot = backstage_slot(project, point_id)
             t0 = max(0.0, sample_t - PATH_YAW_SAMPLE_MS)
             t1 = sample_t + PATH_YAW_SAMPLE_MS
-            x0, y0 = _resolve_axis(kfs_x, t0), _resolve_axis(kfs_y, t0)
-            x1, y1 = _resolve_axis(kfs_x, t1), _resolve_axis(kfs_y, t1)
+            x0 = _resolve_axis(kfs_x, t0, slot[0] if slot else None)
+            y0 = _resolve_axis(kfs_y, t0, slot[1] if slot else None)
+            x1 = _resolve_axis(kfs_x, t1, slot[0] if slot else None)
+            y1 = _resolve_axis(kfs_y, t1, slot[1] if slot else None)
             if x0 is None or y0 is None or x1 is None or y1 is None:
                 return act.travel_fixed_yaw_deg
             dx, dy = x1 - x0, y1 - y0

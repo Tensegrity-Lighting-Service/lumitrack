@@ -1139,6 +1139,17 @@ raycastant aux coordonnées du pointeur). Vérifié en navigateur : le drop
 crée bien le bloc "Entrée" + l'activation (bloc de test annulé par undo
 ensuite).
 
+**Deuxième cause, découverte en testant les points de focus (même
+session)** : la reconstruction du point de drop par `activatorEvent
+.clientX/Y + event.delta` sortait des coordonnées FAUSSES dès que le
+roster était SCROLLÉ au moment de saisir la ligne (dnd-kit intègre une
+compensation de scroll dans `delta` — clientY sortait négatif de ~la
+hauteur scrollée, le drop échouait au test de bornes du canvas en
+silence). Avec 80 acteurs le roster est toujours scrollé pour les lignes
+basses. Corrigé : position RÉELLE du pointeur suivie par un listener
+global (`lastPointer`), utilisée à la fois pour le drop scène et pour
+`isInsertingAfter` (indicateur d'insertion du roster, même distorsion).
+
 **"L'app ne se lance plus" (classe de cause identifiée)** : AUCUN error
 boundary dans tout l'arbre React — la moindre exception de rendu
 démontait TOUTE l'app en écran blanc sans message. Trois lanceurs
@@ -1153,3 +1164,54 @@ la stack au lieu d'un écran blanc) ET autour du chargement du terrain
 (un GLB introuvable dégrade en sol générique au lieu de tuer le Canvas).
 Si "ne se lance plus" se reproduit dans la vraie fenêtre Tauri, l'écran
 affichera maintenant l'erreur exacte à transmettre.
+
+## Session corrections en direct (2026-08-04, soir) — ✅ LIVRÉ
+
+Batch de retours de Florian testant l'app en direct, chacun reproduit/
+vérifié en navigateur (Playwright + Edge headless sur le dev stack) :
+
+- **Glisser un GROUPE sur le terrain place tous ses acteurs** — le nom de
+  l'en-tête coupait la propagation du pointerdown (protection du
+  double-clic de renommage devenue inutile : le PointerSensor exige 4 px
+  de mouvement, un double-clic immobile ne déclenche jamais un glisser),
+  rendant l'en-tête quasi inglissable. Dépôt multiple (groupe OU
+  multi-sélection) : grille compacte centrée sur le point de dépôt
+  (espacement = diamètre acteur ×1,25, plancher 60 cm) au lieu d'empiler
+  tous les acteurs sur la même coordonnée.
+- **"+ Dossier" renommé "+ Groupe"** (EN "+ Add group") — vocabulaire
+  "groupe" partout dans l'UI (menu contextuel "Aucun groupe", libellés de
+  suppression) ; "dossier" ne reste que dans les commentaires de code.
+- **Plus de barre de défilement horizontale dans le roster**
+  (`overflow-x: hidden` + boutons d'en-tête en `flex-wrap`).
+- **Un point de focus se positionne en le glissant sur le terrain**
+  ("le point de focus ne marche pas, il n'a pas de position") : un point
+  fraîchement créé n'a AUCUNE position (jamais d'activation, exclu du
+  backstage) — invisible et invisible pour le mode focus. La ligne du
+  roster est désormais glissable ; le dépôt écrit la position dans un cue
+  dédié "<nom> (position)" de durée nulle à t=0 (même mécanique que la
+  migration), mis à jour au dépôt suivant au lieu d'empiler.
+- **Bug de hooks dans SelectionTransform** (attrapé par le nouvel
+  ErrorBoundary : "Rendered more hooks than during the previous render") :
+  le useEffect filet-de-sécurité vivait APRÈS le `return null` anticipé —
+  déplacé avant, via une ref vers le handler défini plus bas.
+- **Tableau des trackers PSN trié par ID émis** ("les acteurs des groupes
+  ont disparu de la liste") : ranger un groupe dans le roster réordonne
+  `project.points`, et le tableau suivait cet ordre — les groupés se
+  retrouvaient relégués en fin de liste. L'ID émis est stable, le tableau
+  (et le moniteur) trient dessus.
+- **Presets de montage recadrés PAR ACTIVATION** ("pas un preset au
+  niveau PSN, mais au niveau des acteurs dans les blocs avec option ne
+  rien changer") : `Activation.mount_preset_id` (None = "ne rien
+  changer", le canal suit le preset gouvernant précédent, LTP ; "" =
+  "aucun preset", efface ; sinon id) remplace `Point.mount_preset_id`.
+  Nouveau `engine.governing_mount_preset()` (LTP au temps t, émission
+  uniquement). Sélecteur dans l'ActivationCard ; la colonne par acteur du
+  panneau PSN disparaît, le catalogue de presets y reste. Libellés du
+  catalogue en vocabulaire d'axes PSN (rX/rY/rZ, préférence de Florian)
+  plutôt que tangage/roulis.
+- **Mode "Suivre la trajectoire" réparé sur une entrée backstage**
+  ("on est bien en suivre la trajectoire mais cela ne marche pas") :
+  l'échantillonnage de la tangente appelait `_resolve_axis` SANS
+  l'origine backstage — une première apparition snapait sur sa cible,
+  delta nul, lacet à 0° pendant toute l'entrée. Corrigé Python + Rust
+  (fixture de parité régénérée), test de régression ajouté.

@@ -24,10 +24,6 @@ export interface Point {
    * jamais émis en PSN, jamais placé en coulisse (mission "modes
    * d'orientation", 2026-08-04). */
   isFocusPoint: boolean
-  /** Preset de montage de fixture (mission "modes d'orientation", phase D,
-   * 2026-08-04) — PAR ACTEUR, référence FixtureMountPreset.id. null =
-   * aucune correction (émission PSN identique à avant cette fonctionnalité). */
-  mountPresetId: string | null
 }
 
 /** Sous-groupe du roster — juste un nom, l'ordre/l'appartenance vivent sur
@@ -117,6 +113,13 @@ export interface Activation {
    * personnalisation qui sort des défauts d'orientation du bloc (Cue,
    * mission "modes d'orientation") tant qu'elle reste personnalisée. */
   orientationOverridden: boolean
+  /** Preset de montage de fixture, PAR ACTIVATION (recadrage 2026-08-04 :
+   * "au niveau des acteurs dans les blocs, avec option ne rien changer") :
+   * null = "ne rien changer" (le bloc ne touche pas le canal, le preset
+   * gouvernant précédent continue, LTP) ; '' = "aucun preset" (efface la
+   * correction) ; sinon FixtureMountPreset.id. Résolu à l'émission PSN
+   * uniquement. */
+  mountPresetId: string | null
   /** Courbes par axe (graph editor) ; axe absent = easing nommé. Plus
    * d'axe "yaw" depuis la mission "modes d'orientation" — le lacet n'est
    * plus jamais résolu via une courbe/easing. */

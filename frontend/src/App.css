@@ -132,6 +132,11 @@
   border-right: 1px solid #2b2f38;
   padding: 10px;
   overflow-y: auto;
+  /* Jamais de barre de défilement HORIZONTALE (gênant, signalé
+     2026-08-04) : overflow-y seul fait calculer overflow-x à `auto`, et
+     les boutons nowrap de l'en-tête débordaient à largeur réduite. Les
+     noms longs sont déjà tronqués par ellipsis, rien d'utile à scroller. */
+  overflow-x: hidden;
 }
 .roster ul { list-style: none; margin: 0; padding: 0; }
 .roster li {
@@ -685,6 +690,9 @@
 .roster-head {
   display: flex; align-items: center; gap: 6px;
   padding-right: 8px;
+  /* Les boutons passent à la ligne plutôt que de déborder (cause de
+     l'ancienne barre de défilement horizontale du roster). */
+  flex-wrap: wrap;
 }
 .roster-head h2 { margin-right: 0; }
 .roster-spacer { flex: 1; }

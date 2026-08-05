@@ -148,12 +148,18 @@ export function PsnPanel({ project, onClose }: {
               <tr>
                 <th>{t('psn.tableActor')}</th><th>{t('psn.tableNumber')}</th>
                 <th>{t('psn.tablePsnId')}</th><th>{t('psn.tableEmittedId')}</th>
-                <th>{t('psn.tableMountPreset')}</th>
               </tr>
             </thead>
             <tbody>
-              {project.points.map((pt, index) => {
-                const resolved = pt.psnTrackerId ?? pt.number ?? index
+              {/* Tri par ID ÉMIS, pas par ordre du roster (fix 2026-08-04,
+                  "les acteurs des groupes ont disparu de la liste") : ranger
+                  un groupe dans le roster réordonne project.points, et les
+                  acteurs groupés se retrouvaient relégués en fin de tableau
+                  — l'ID émis, lui, est stable (number/psnTrackerId). */}
+              {project.points
+                .map((pt, index) => ({ pt, resolved: pt.psnTrackerId ?? pt.number ?? index }))
+                .sort((a, b) => a.resolved - b.resolved)
+                .map(({ pt, resolved }) => {
                 return (
                   <tr key={pt.id}>
                     <td>
@@ -166,17 +172,6 @@ export function PsnPanel({ project, onClose }: {
                         onCommit={(v) => sidecar.updatePoint(pt.id, { psnTrackerId: v })} />
                     </td>
                     <td className="psn-mono">{resolved}</td>
-                    <td>
-                      <select
-                        value={pt.mountPresetId ?? ''}
-                        onChange={(e) => sidecar.updatePoint(pt.id, { mountPresetId: e.target.value || null })}
-                      >
-                        <option value="">{t('psn.mountPresetNone')}</option>
-                        {project.fixtureMountPresets.map((preset) => (
-                          <option key={preset.id} value={preset.id}>{preset.name}</option>
-                        ))}
-                      </select>
-                    </td>
                   </tr>
                 )
               })}
@@ -268,7 +263,8 @@ export function PsnPanel({ project, onClose }: {
               </tr>
             </thead>
             <tbody>
-              {(preview?.trackers ?? []).map((trk) => (
+              {/* Même tri stable par ID que le tableau des trackers. */}
+              {[...(preview?.trackers ?? [])].sort((a, b) => a.id - b.id).map((trk) => (
                 <tr key={trk.id}>
                   <td>{trk.id}</td>
                   <td>{trk.name}</td>

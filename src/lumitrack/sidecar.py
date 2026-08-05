@@ -512,8 +512,6 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             point.default_travel_orientation_mode = msg["defaultTravelOrientationMode"]
         if "isFocusPoint" in msg:
             point.is_focus_point = bool(msg["isFocusPoint"])
-        if "mountPresetId" in msg:
-            point.mount_preset_id = msg["mountPresetId"]
         return None
 
     if msg_type == "delete_point":
@@ -771,6 +769,11 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             act.arrival_fixed_yaw_deg = float(msg["arrivalFixedYawDeg"] or 0.0)
         if "arrivalFocusPointId" in msg:
             act.arrival_focus_point_id = msg["arrivalFocusPointId"]
+        if "mountPresetId" in msg:
+            # null = "ne rien changer" (le bloc ne touche pas le canal),
+            # "" = "aucun preset" (efface), sinon id de preset — voir
+            # Activation.mount_preset_id.
+            act.mount_preset_id = msg["mountPresetId"]
         # Tracé spatial (motion path) : listes/dicts écrits tels quels,
         # null efface (retour à la ligne droite).
         if "pathPoints" in msg:

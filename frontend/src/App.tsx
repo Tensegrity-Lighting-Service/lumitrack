@@ -21,7 +21,7 @@ import { CompassPicker } from './ui/CompassPicker'
 import { FocusPointSelect } from './ui/FocusPointSelect'
 import {
   DndContext, DragOverlay, PointerSensor, pointerWithin, rectIntersection,
-  useDroppable, useSensor, useSensors,
+  useDraggable, useDroppable, useSensor, useSensors,
   type CollisionDetection, type DragEndEvent, type DragOverEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
@@ -59,6 +59,22 @@ function SceneDropZone({ children }: { children: React.ReactNode }) {
   return <main className="scene-view" ref={setNodeRef}>{children}</main>
 }
 
+/** Position RÉELLE du pointeur, suivie par un listener global (fix
+ * 2026-08-04, "le point de focus n'a pas de position") : reconstruire le
+ * point de drop avec `activatorEvent.clientX/Y + event.delta` donnait des
+ * coordonnées fausses dès que le roster était SCROLLÉ au moment de saisir
+ * la ligne (dnd-kit intègre la compensation de scroll dans `delta` —
+ * clientY sortait NÉGATIF de ~la hauteur scrollée, le drop échouait au
+ * test de bornes du canvas sans rien faire). Le pointeur, lui, ne ment
+ * jamais. */
+const lastPointer = { x: 0, y: 0 }
+if (typeof window !== 'undefined') {
+  window.addEventListener('pointermove', (e) => {
+    lastPointer.x = e.clientX
+    lastPointer.y = e.clientY
+  }, { capture: true, passive: true })
+}
+
 /** Le curseur au-dessus de la moitié basse d'une ligne = insertion APRÈS
  * elle, moitié haute = AVANT — même convention que la plupart des listes
  * triables (Trello, Notion, etc.). `active.rect.current` n'a de valeur
@@ -66,15 +82,12 @@ function SceneDropZone({ children }: { children: React.ReactNode }) {
 function isInsertingAfter(event: DragOverEvent | DragEndEvent): boolean {
   const overRect = event.over?.rect
   if (!overRect) return false
-  // Position Y RÉELLE du curseur (activatorEvent = celui qui a démarré le
-  // geste, delta = déplacement cumulé depuis) — pas le rectangle "translaté"
-  // de l'élément actif, qui traîne derrière le curseur d'un décalage fixe
-  // égal à l'endroit où l'acteur a été saisi. Comparer CE rectangle-là
-  // décale le point de bascule avant/après du milieu réel de la cible, d'où
-  // le "il faut dépasser et revenir en arrière" signalé par Florian.
-  const activator = event.activatorEvent as (PointerEvent | MouseEvent) | undefined
-  const clientY = (activator?.clientY ?? 0) + event.delta.y
-  return clientY > overRect.top + overRect.height / 2
+  // Position Y RÉELLE du curseur (lastPointer, listener global) — ni le
+  // rectangle "translaté" de l'élément actif (traîne derrière le curseur
+  // d'un décalage fixe égal au point de saisie — "il faut dépasser et
+  // revenir en arrière", signalé par Florian), ni activatorEvent + delta
+  // (faussé par le scroll du roster, voir lastPointer).
+  return lastPointer.y > overRect.top + overRect.height / 2
 }
 
 /** Dialogue "Enregistrer sous…" : toujours affiché, crée/écrase un fichier
@@ -87,7 +100,7 @@ async function pickSaveAsPath(projectName: string): Promise<string | null> {
   })
   return typeof path === 'string' ? path : null
 }
-import type { Activation, BackstageZone, BlockContextMessage, Cue, Point, Project, RosterGroup } from './types'
+import type { Activation, BackstageZone, BlockContextMessage, Cue, FixtureMountPreset, Point, Project, RosterGroup } from './types'
 
 // Payload porté par chaque item dnd-kit du roster (acteur ou dossier) —
 // lu dans App.handleDragStart/handleDragEnd pour savoir quoi déplacer et
@@ -316,15 +329,25 @@ function firstFreeLetter(existingNames: string[]): string {
 
 /** Ligne de point de focus du roster — version allégée de RosterPointRow :
  * pas de statut mouvant/offstage (un repère de visée n'a pas de "vie"
- * propre au sens acteur), pas de glisser-déposer dnd-kit (liste séparée,
- * pas de dossiers ni de réordonnancement pour l'instant). */
+ * propre au sens acteur), pas de tri/dossiers. GLISSABLE vers la scène
+ * (2026-08-04, "le point de focus ne marche pas, il n'a pas de position") :
+ * un point de focus fraîchement créé n'a AUCUNE position (jamais
+ * d'activation, exclu du backstage) — invisible dans la scène et donc
+ * invisible pour le mode focus. Le déposer sur le terrain lui en donne une
+ * (placeActorsAt : cue dédié à t=0, même mécanique que la migration). */
 function FocusPointRow({ point, selected, onSelect }: {
   point: Point
   selected: boolean
   onSelect: (e: React.MouseEvent) => void
 }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `point:${point.id}`,
+    data: { type: 'point', pointId: point.id } satisfies RosterDragData,
+  })
   return (
     <li
+      ref={setNodeRef}
+      style={{ opacity: isDragging ? 0.4 : undefined }}
       className={selected ? 'selected' : ''}
       onClick={onSelect}
       onContextMenu={(e) => {
@@ -332,6 +355,8 @@ function FocusPointRow({ point, selected, onSelect }: {
         if (!selected) onSelect(e)
         showContextMenu(e, buildFocusPointContextMenuSections(point))
       }}
+      {...attributes}
+      {...listeners}
     >
       <span className="swatch focus-point-swatch" style={{ background: point.color }} />
       <span className="point-name">{point.name}</span>
@@ -397,9 +422,15 @@ function RosterGroupHead({ group, memberCount, collapsed, renaming, onToggleColl
           }}
         />
       ) : (
+        /* PAS de stopPropagation sur le pointerdown du nom (retiré
+           2026-08-04) : il rendait l'en-tête quasi inglissable — le nom
+           est LA zone de saisie naturelle pour glisser un groupe (vers la
+           scène pour placer tous ses acteurs, ou pour réordonner). Le
+           double-clic de renommage ne risque rien : le PointerSensor de
+           dnd-kit exige 4 px de mouvement avant d'activer un glisser, un
+           double-clic immobile n'en déclenche jamais un. */
         <span
           className="roster-group-name"
-          onPointerDown={(e) => e.stopPropagation()}
           onDoubleClick={(e) => { e.stopPropagation(); onStartRename() }}
           title={t('roster.renameFolderHint')}
         >
@@ -636,10 +667,9 @@ function App() {
 
     if (overId === 'scene') {
       if (ids.length === 0) return
-      const activator = event.activatorEvent as (PointerEvent | MouseEvent) | undefined
-      const clientX = (activator?.clientX ?? 0) + event.delta.x
-      const clientY = (activator?.clientY ?? 0) + event.delta.y
-      sceneRef.current?.placeActorsAt(ids, clientX, clientY, altHeldRef.current)
+      // Position réelle du pointeur au relâchement (voir lastPointer) —
+      // jamais activatorEvent + delta, faussé par le scroll du roster.
+      sceneRef.current?.placeActorsAt(ids, lastPointer.x, lastPointer.y, altHeldRef.current)
       return
     }
     if (overId === 'ungrouped') {
@@ -1175,6 +1205,7 @@ function App() {
           <CueInspector
             cue={selectedCue}
             projectPoints={project.points}
+            mountPresets={project.fixtureMountPresets}
             selectedPointId={selectedPointId}
             onSelectPoint={setSelectedPointId}
             blockContext={blockContext}
@@ -1397,9 +1428,10 @@ function StagePlacementPanel({ project }: { project: Project }) {
   )
 }
 
-function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, blockContext, onOpenBlockDetail }: {
+function CueInspector({ cue, projectPoints, mountPresets, selectedPointId, onSelectPoint, blockContext, onOpenBlockDetail }: {
   cue: Cue
   projectPoints: Point[]
+  mountPresets: FixtureMountPreset[]
   selectedPointId: string | null
   onSelectPoint: (id: string | null) => void
   blockContext: BlockContextMessage | null
@@ -1490,6 +1522,7 @@ function CueInspector({ cue, projectPoints, selectedPointId, onSelectPoint, bloc
               onSelect={() => onSelectPoint(pointId === selectedPointId ? null : pointId)}
               blockContext={blockContext}
               allPoints={projectPoints}
+              mountPresets={mountPresets}
             />
           )
         })}
@@ -1701,7 +1734,7 @@ function OrientationPhaseFields({ phase, mode, fixedDeg, focusId, points, onMode
   )
 }
 
-function ActivationCard({ cueId, pointId, point, activation, selected, onSelect, blockContext, allPoints }: {
+function ActivationCard({ cueId, pointId, point, activation, selected, onSelect, blockContext, allPoints, mountPresets }: {
   cueId: string
   pointId: string
   point: Point | undefined
@@ -1710,6 +1743,7 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
   onSelect: () => void
   blockContext: BlockContextMessage | null
   allPoints: Point[]
+  mountPresets: FixtureMountPreset[]
 }) {
   const t = useT()
   // Repliée par défaut (mission "replier les acteurs", 2026-08-03) : une
@@ -1728,6 +1762,7 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
     arrivalOrientationMode: 'hold' | 'fixed' | 'focus'
     arrivalFixedYawDeg: number
     arrivalFocusPointId: string | null
+    mountPresetId: string | null
   }>) => sidecar.setActivation(cueId, pointId, patch)
   // Toute édition manuelle des champs d'orientation personnalise
   // l'activation (même principe que fadeOverridden pour le fade, mission
@@ -1832,6 +1867,27 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
             onFixedDegChange={(d) => setOrientation({ arrivalFixedYawDeg: d })}
             onFocusChange={(id) => setOrientation({ arrivalFocusPointId: id })}
           />
+        </div>
+        {/* Preset de montage PAR BLOC (recadrage 2026-08-04) : "Ne rien
+            changer" = ce bloc ne touche pas le canal (le preset gouvernant
+            précédent continue, LTP) ; "Aucun" = efface la correction. */}
+        <div className="activation-orientation-phase">
+          <h4>{t('cue.mountPreset')}</h4>
+          <label>
+            <select
+              value={activation.mountPresetId === null || activation.mountPresetId === undefined
+                ? '~nochange~'
+                : (activation.mountPresetId === '' ? '~none~' : activation.mountPresetId)}
+              onChange={(e) => set({
+                mountPresetId: e.target.value === '~nochange~' ? null
+                  : e.target.value === '~none~' ? '' : e.target.value,
+              })}
+            >
+              <option value="~nochange~">{t('cue.mountPresetNoChange')}</option>
+              <option value="~none~">{t('cue.mountPresetNone')}</option>
+              {mountPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
         </div>
         {activation.orientationOverridden && (
           <button

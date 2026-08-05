@@ -369,9 +369,10 @@ def test_set_roster_groups_broadcasts_and_prunes_detached_points():
     assert session.project.point_by_id("p1").roster_group_id is None
 
 
-def test_set_fixture_mount_presets_broadcasts_and_prunes_detached_points():
+def test_set_fixture_mount_presets_broadcasts_and_prunes_detached_activations():
     session = Session()
-    _run(_handle_message(session, {"type": "update_point", "pointId": "p1", "mountPresetId": "vert"}))
+    session.project.points = [Point(id="p1", name="P1")]
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=2000.0)]
     reply = _run(_handle_message(session, {
         "type": "set_fixture_mount_presets",
         "presets": [{"id": "vert", "name": "Vertical", "basePitchDeg": 90.0, "baseRollDeg": 0.0,
@@ -379,11 +380,17 @@ def test_set_fixture_mount_presets_broadcasts_and_prunes_detached_points():
     }))
     assert reply is None
     assert session.project.fixture_mount_presets[0]["id"] == "vert"
-    assert session.project.point_by_id("p1").mount_preset_id == "vert"
+    # Le preset s'assigne au niveau de l'acteur DANS LE BLOC (recadrage
+    # 2026-08-04), via set_activation.
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1",
+        "targetXCm": 0.0, "mountPresetId": "vert",
+    }))
+    assert session.project.cue_by_id("c1").activations["p1"].mount_preset_id == "vert"
 
-    # Supprimer le preset détache l'acteur plutôt que de laisser un id mort.
+    # Supprimer le preset détache l'activation plutôt que de laisser un id mort.
     _run(_handle_message(session, {"type": "set_fixture_mount_presets", "presets": []}))
-    assert session.project.point_by_id("p1").mount_preset_id is None
+    assert session.project.cue_by_id("c1").activations["p1"].mount_preset_id is None
 
 
 def test_add_point_accepts_a_roster_group_id():

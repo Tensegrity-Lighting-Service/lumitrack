@@ -94,6 +94,29 @@ class Transport:
         )
 
 
+def governing_mount_preset(project: Project, point_id: str, t_ms: float) -> Optional[dict]:
+    """Preset de montage GOUVERNANT ce point à l'instant t (recadrage
+    2026-08-04 : le preset se règle au niveau des acteurs DANS LES BLOCS,
+    pas par acteur globalement) — même règle LTP que les axes : la dernière
+    activation démarrée à-ou-avant t dont mount_preset_id n'est pas None
+    ("ne rien changer") l'emporte. "" = "aucun preset" (correction
+    explicitement effacée). Retourne l'entrée de fixture_mount_presets, ou
+    None (aucune correction)."""
+    governing_id: Optional[str] = None
+    governing_start = None
+    for cue in project.cues:
+        act = cue.activations.get(point_id)
+        if act is None or act.mount_preset_id is None:
+            continue
+        effective_start = cue.start_ms + act.start_offset_ms
+        if effective_start <= t_ms and (governing_start is None or effective_start >= governing_start):
+            governing_start = effective_start
+            governing_id = act.mount_preset_id
+    if not governing_id:  # None (jamais touché) ou "" (efface)
+        return None
+    return next((p for p in project.fixture_mount_presets if p.get("id") == governing_id), None)
+
+
 def apply_mount_preset(preset: Optional[dict], yaw_deg: float) -> tuple:
     """-> (pitch_deg, roll_deg), dérivés du lacet déjà résolu par la
     timeline (mission "modes d'orientation", phase D, 2026-08-04) — complète
@@ -217,14 +240,11 @@ class PsnBroadcaster:
             # ORI = vecteur axe-angle : le lacet tourne autour de l'axe
             # VERTICAL de la convention de sortie (spec 2.03 : Y-up).
             up_y = getattr(transform, "up_axis", "y") == "y"
-            # Preset de montage de fixture (mission "modes d'orientation",
-            # phase D, 2026-08-04) : complète tangage/roulis, dérivés du
-            # lacet déjà résolu — jamais lu par la résolution elle-même.
-            mount_preset = None
-            if point.mount_preset_id:
-                mount_preset = next(
-                    (p for p in project.fixture_mount_presets if p["id"] == point.mount_preset_id),
-                    None)
+            # Preset de montage de fixture (phase D, recadré 2026-08-04) :
+            # complète rX/rZ depuis rY (lacet déjà résolu) — gouverné par
+            # les BLOCS (LTP par activation), jamais lu par la résolution
+            # de lecture elle-même.
+            mount_preset = governing_mount_preset(project, point.id, t_ms)
             pitch_deg, roll_deg = apply_mount_preset(mount_preset, pose.yaw_deg)
             pitch_rad = math.radians(pitch_deg)
             roll_rad = math.radians(roll_deg)

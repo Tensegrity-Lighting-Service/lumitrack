@@ -1276,6 +1276,31 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     lastSent: number
   } | null>(null)
 
+  // Filet de sécurité : si PivotControls ne redéclenche pas onDragEnd pour
+  // une raison ou une autre (relâchement hors fenêtre, sélection changée
+  // en plein geste, etc.), dragActiveRef resterait bloqué à true POUR
+  // TOUJOURS — et avec lui, TOUS les lassos suivants seraient
+  // silencieusement ignorés (2026-08-01, signalé par Florian).
+  //
+  // DOIT vivre AVANT le `return null` conditionnel ci-dessous (fix
+  // 2026-08-04, attrapé par le nouvel ErrorBoundary : "Rendered more hooks
+  // than during the previous render" — un hook après un retour anticipé
+  // change le NOMBRE de hooks rendus dès que la sélection passe de vide à
+  // non-vide, interdit par React). handleDragEnd n'existant qu'après ce
+  // point, on passe par une ref toujours à jour.
+  const handleDragEndRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    const onGlobalPointerUp = () => {
+      if (dragRef.current) handleDragEndRef.current()
+    }
+    window.addEventListener('pointerup', onGlobalPointerUp)
+    window.addEventListener('pointercancel', onGlobalPointerUp)
+    return () => {
+      window.removeEventListener('pointerup', onGlobalPointerUp)
+      window.removeEventListener('pointercancel', onGlobalPointerUp)
+    }
+  }, [])
+
   if (!bounds || live.length < 1) return null
   const singleMember = live.length === 1
   const { minX, minY, maxX, maxY } = bounds
@@ -1395,27 +1420,9 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     }
   }
 
-  // Filet de sécurité : si PivotControls ne redéclenche pas onDragEnd pour
-  // une raison ou une autre (relâchement hors fenêtre, démontage du
-  // composant pendant le geste si la sélection change entre-temps, etc.),
-  // dragActiveRef resterait bloqué à true POUR TOUJOURS — et avec lui,
-  // TOUS les lassos suivants seraient silencieusement ignorés (leur garde
-  // vérifie justement cette référence), ce qui ressemble à "la sélection
-  // multiple ne marche plus" alors que le vrai problème est bien plus en
-  // amont (2026-08-01, signalé par Florian). Un simple pointerup/
-  // pointercancel global qui force la remise à zéro si un geste semblait
-  // actif referme ce risque sans dépendre de PivotControls pour le faire.
-  useEffect(() => {
-    const onGlobalPointerUp = () => {
-      if (dragRef.current) handleDragEnd()
-    }
-    window.addEventListener('pointerup', onGlobalPointerUp)
-    window.addEventListener('pointercancel', onGlobalPointerUp)
-    return () => {
-      window.removeEventListener('pointerup', onGlobalPointerUp)
-      window.removeEventListener('pointercancel', onGlobalPointerUp)
-    }
-  }, [selectedCueId])
+  // Voir le useEffect "filet de sécurité" AVANT le retour anticipé plus
+  // haut — cette ref lui fournit toujours la dernière version du handler.
+  handleDragEndRef.current = handleDragEnd
 
   const outline = [
     new THREE.Vector3(...stageToLocal(minX, minY, 0)),
@@ -2054,12 +2061,54 @@ function SceneContent({
         for (const pointId of pointIds) sidecar.updatePoint(pointId, { homeZoneId: zone.id })
         return true
       }
-      let cueId = selectedCueId
-      if (!cueId) {
-        cueId = crypto.randomUUID()
-        sidecar.addCue('Entrée', tMsRef.current, 2000, '#4FF5E0', 0, cueId)
+      // Dépôt MULTIPLE (sélection ou groupe entier glissé par son en-tête) :
+      // grille compacte centrée sur le point de dépôt plutôt que tous les
+      // acteurs empilés sur la même coordonnée (illisible, et il faudrait
+      // les re-séparer un par un à la main). Espacement basé sur le
+      // diamètre d'acteur du projet, plancher 60 cm (même constante que la
+      // grille backstage).
+      const spacing = Math.max((proj.actorDiameterCm ?? 60) * 1.25, 60)
+      const cols = Math.ceil(Math.sqrt(pointIds.length))
+      const rows = Math.ceil(pointIds.length / cols)
+      const slotOf = (i: number): [number, number] => [
+        xCm + ((i % cols) - (cols - 1) / 2) * spacing,
+        yCm + (Math.floor(i / cols) - (rows - 1) / 2) * spacing,
+      ]
+      // Un POINT DE FOCUS déposé sur le terrain (2026-08-04, "il n'a pas de
+      // position") ne passe pas par le bloc sélectionné : sa position vit
+      // dans un cue dédié de durée nulle à t=0 (même mécanique que la
+      // migration des anciens projets en mode focus) — le repère existe
+      // ainsi pour TOUT le spectacle, pas seulement à partir d'un bloc. Un
+      // nouveau dépôt du même point met à jour ce cue au lieu d'en empiler
+      // un deuxième.
+      const focusIdSet = new Set(
+        proj.points.filter((p) => p.isFocusPoint && pointIds.includes(p.id)).map((p) => p.id))
+      pointIds.forEach((pointId, i) => {
+        if (!focusIdSet.has(pointId)) return
+        const [sx, sy] = slotOf(i)
+        const existing = proj.cues.find((c) => c.activations[pointId])
+        if (existing) {
+          sidecar.setActivation(existing.id, pointId, { targetXCm: sx, targetYCm: sy })
+        } else {
+          const name = proj.points.find((p) => p.id === pointId)?.name ?? 'Focus'
+          const focusCueId = crypto.randomUUID()
+          sidecar.addCue(`${name} (position)`, 0, 0, '#D8D8E2', 0, focusCueId)
+          sidecar.setActivation(focusCueId, pointId, { targetXCm: sx, targetYCm: sy, fadeMs: 0 })
+        }
+      })
+      const actorIds = pointIds.filter((id) => !focusIdSet.has(id))
+      if (actorIds.length > 0) {
+        let cueId = selectedCueId
+        if (!cueId) {
+          cueId = crypto.randomUUID()
+          sidecar.addCue('Entrée', tMsRef.current, 2000, '#4FF5E0', 0, cueId)
+        }
+        pointIds.forEach((pointId, i) => {
+          if (focusIdSet.has(pointId)) return
+          const [sx, sy] = slotOf(i)
+          sidecar.setActivation(cueId, pointId, { targetXCm: sx, targetYCm: sy })
+        })
       }
-      for (const pointId of pointIds) sidecar.setActivation(cueId, pointId, { targetXCm: xCm, targetYCm: yCm })
       if (pointIds.length === 1) onSelectPoint(pointIds[0])
       else onSelectPoints(pointIds)
       return true

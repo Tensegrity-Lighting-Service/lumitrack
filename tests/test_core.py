@@ -381,6 +381,29 @@ def test_orientation_mode_path_follows_movement_tangent():
     assert mid.yaw_deg == pytest.approx(90.0, abs=1.0)
 
 
+def test_orientation_mode_path_works_on_backstage_entry():
+    """Fix 2026-08-04 ("suivre la trajectoire ne marche pas") : sur une
+    PREMIÈRE apparition, l'échantillonnage de la tangente ignorait
+    l'origine backstage — chaque axe snapait sur sa cible, delta nul, et
+    le lacet retombait sur l'angle fixe (0°) pendant toute l'entrée alors
+    que l'acteur marche bel et bien depuis sa place backstage."""
+    import math as _math
+    project = Project()
+    project.points = [Point(id="a", name="A", home_zone_id="bs")]
+    project.backstage_zones = [{"id": "bs", "name": "BS", "xCm": -500.0, "yCm": 0.0,
+                                 "widthCm": 300.0, "heightCm": 900.0}]
+    project.cues = [
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=4000,
+            activations={"a": Activation(target_x_cm=2000, target_y_cm=2000, fade_ms=4000,
+                                          travel_orientation_mode="path")}),
+    ]
+    from lumitrack.core.timeline import backstage_slot
+    slot = backstage_slot(project, "a")
+    expected = _math.degrees(_math.atan2(2000 - slot[1], 2000 - slot[0]))
+    mid = resolve_positions(project, 3000)["a"]
+    assert mid.yaw_deg == pytest.approx(expected, abs=1.0)
+
+
 def test_orientation_mode_path_freezes_direction_once_stopped():
     """Une fois le déplacement terminé, "ne change pas" à l'arrivée (défaut)
     garde la dernière direction de marche plutôt que de dégénérer (l'acteur
@@ -1466,25 +1489,36 @@ def test_migration_focus_synthesizes_a_new_focus_point():
     assert (pose.x_cm, pose.y_cm) == pytest.approx((500.0, 500.0))
 
 
-def test_prune_mount_presets_detaches_points_from_a_deleted_preset():
+def test_prune_mount_presets_detaches_activations_from_a_deleted_preset():
     project = Project()
-    project.points = [Point(id="a", name="A", mount_preset_id="vertical"),
-                       Point(id="b", name="B", mount_preset_id="horizontal")]
+    project.points = [Point(id="a", name="A"), Point(id="b", name="B")]
     project.fixture_mount_presets = [{"id": "vertical", "name": "Vertical"}]  # horizontal supprimé
+    project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=0, activations={
+        "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0, mount_preset_id="vertical"),
+        "b": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0, mount_preset_id="horizontal"),
+    })]
     project.prune_mount_presets()
-    assert project.point_by_id("a").mount_preset_id == "vertical"  # preset valide, intact
-    assert project.point_by_id("b").mount_preset_id is None  # preset disparu, détaché
+    acts = project.cues[0].activations
+    assert acts["a"].mount_preset_id == "vertical"  # preset valide, intact
+    assert acts["b"].mount_preset_id is None  # preset disparu, repasse à "ne rien changer"
 
 
-def test_point_and_fixture_mount_presets_roundtrip_through_dict():
+def test_activation_mount_preset_roundtrips_through_dict():
     project = Project()
-    project.points = [Point(id="a", name="A", mount_preset_id="vertical")]
+    project.points = [Point(id="a", name="A")]
     project.fixture_mount_presets = [{"id": "vertical", "name": "Vertical",
                                        "basePitchDeg": 90.0, "baseRollDeg": 0.0,
                                        "pitchTracksYaw": False, "rollTracksYaw": True}]
+    project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=0, activations={
+        "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0, mount_preset_id="vertical"),
+    })]
     back = Project.from_dict(project.to_dict())
     assert back.fixture_mount_presets == project.fixture_mount_presets
-    assert back.point_by_id("a").mount_preset_id == "vertical"
+    assert back.cues[0].activations["a"].mount_preset_id == "vertical"
+    # "" ("aucun preset", efface explicitement) survit aussi au roundtrip —
+    # distinct de None ("ne rien changer").
+    project.cues[0].activations["a"].mount_preset_id = ""
+    assert Project.from_dict(project.to_dict()).cues[0].activations["a"].mount_preset_id == ""
 
 
 def test_migration_deduplicates_identical_focus_coordinates():

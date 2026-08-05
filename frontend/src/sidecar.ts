@@ -139,7 +139,6 @@ class SidecarClient {
     homeZoneId?: string | null; rosterGroupId?: string | null
     defaultTravelOrientationMode?: 'fixed' | 'path' | 'focus'
     isFocusPoint?: boolean
-    mountPresetId?: string | null
   }) {
     this.send({ type: 'update_point', pointId, ...patch })
   }
@@ -220,6 +219,8 @@ class SidecarClient {
     arrivalOrientationMode?: 'hold' | 'fixed' | 'focus'
     arrivalFixedYawDeg?: number
     arrivalFocusPointId?: string | null
+    /** null = "ne rien changer", '' = "aucun preset", sinon id de preset. */
+    mountPresetId?: string | null
     curves?: Partial<Record<'x' | 'y' | 'z', unknown[]>> | null
     pathPoints?: unknown[] | null
     startHandle?: { dxCm: number; dyCm: number } | null

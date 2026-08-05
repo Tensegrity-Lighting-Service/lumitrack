@@ -82,15 +82,6 @@ class Point:
     # pures), CE champ affecte la résolution (backstage_slot) — miroir Rust
     # nécessaire (native/src/model.rs::Point).
     is_focus_point: bool = False
-    # Preset de montage de fixture (mission "modes d'orientation", phase D,
-    # 2026-08-04) : PAR ACTEUR, pas un choix unique pour tout le projet — un
-    # vrai plateau mélange des montages différents en même temps (tubes tenus
-    # à l'horizontale, quelques-uns montés à la verticale, dans le MÊME
-    # show). None = aucune correction (comportement identique à avant cette
-    # fonctionnalité). Référence Project.fixture_mount_presets par id — pure
-    # donnée d'émission PSN (core/engine.py), jamais lue par la résolution de
-    # lecture (timeline.py) : pas de miroir Rust nécessaire.
-    mount_preset_id: Optional[str] = None
 
     def resolved_tracker_id(self, fallback_index: int) -> int:
         if self.psn_tracker_id is not None:
@@ -110,7 +101,6 @@ class Point:
             "rosterGroupId": self.roster_group_id,
             "defaultTravelOrientationMode": self.default_travel_orientation_mode,
             "isFocusPoint": self.is_focus_point,
-            "mountPresetId": self.mount_preset_id,
         }
 
     @classmethod
@@ -131,7 +121,6 @@ class Point:
             roster_group_id=d.get("rosterGroupId"),
             default_travel_orientation_mode=mode,
             is_focus_point=bool(d.get("isFocusPoint", False)),
-            mount_preset_id=d.get("mountPresetId"),
         )
 
 
@@ -198,6 +187,16 @@ class Activation:
     # touches_orientation() ci-dessous, pour le cas d'une activation de pure
     # rotation sans x/y) — miroir Rust nécessaire, exception documentée.
     orientation_overridden: bool = False
+    # Preset de montage de fixture (phase D, recadré 2026-08-04 : "pas un
+    # preset au niveau PSN, mais au niveau des acteurs dans les blocs, avec
+    # option ne rien changer") — PAR ACTIVATION, comme les cibles d'axes :
+    # None = "ne rien changer" (ce bloc ne touche pas le canal, le preset
+    # gouvernant précédent continue, LTP) ; "" = "aucun preset" (efface
+    # explicitement la correction) ; sinon id d'une entrée de
+    # Project.fixture_mount_presets. Résolu au moment de l'ÉMISSION PSN
+    # uniquement (core/engine.py::governing_mount_preset) — jamais lu par
+    # la résolution de lecture : pas de miroir Rust.
+    mount_preset_id: Optional[str] = None
     # Graph editor (mission 2026-07-29, spec = KeysView de Friction) :
     # courbes d'easing personnalisées PAR AXE. {"x"|"y"|"z"|"yaw": [node]}.
     # node = {"t": 0..1, "v": progrès, "inT"/"inV"/"outT"/"outV": poignées
@@ -247,6 +246,7 @@ class Activation:
             "arrivalOrientationMode": self.arrival_orientation_mode,
             "arrivalFixedYawDeg": self.arrival_fixed_yaw_deg,
             "arrivalFocusPointId": self.arrival_focus_point_id,
+            "mountPresetId": self.mount_preset_id,
             "curves": self.curves,
             "pathPoints": self.path_points,
             "startHandle": self.start_handle,
@@ -268,6 +268,7 @@ class Activation:
             arrival_orientation_mode=d.get("arrivalOrientationMode", "hold"),
             arrival_fixed_yaw_deg=float(d.get("arrivalFixedYawDeg", 0.0)),
             arrival_focus_point_id=d.get("arrivalFocusPointId"),
+            mount_preset_id=d.get("mountPresetId"),
             curves=d.get("curves"),
             path_points=d.get("pathPoints"),
             start_handle=d.get("startHandle"),
@@ -460,13 +461,14 @@ class Project:
 
     def prune_mount_presets(self):
         """Après un set_fixture_mount_presets qui supprime un preset : les
-        acteurs qui l'utilisaient redeviennent "sans correction" (émission
-        PSN identique à un projet qui n'utilise jamais cette fonctionnalité),
-        jamais orphelins d'un id de preset qui n'existe plus."""
+        activations qui l'utilisaient repassent à "ne rien changer" (None),
+        jamais orphelines d'un id de preset qui n'existe plus. "" ("aucun
+        preset", efface explicitement) reste valide par construction."""
         valid_ids = {p["id"] for p in self.fixture_mount_presets}
-        for pt in self.points:
-            if pt.mount_preset_id not in valid_ids:
-                pt.mount_preset_id = None
+        for cue in self.cues:
+            for act in cue.activations.values():
+                if act.mount_preset_id and act.mount_preset_id not in valid_ids:
+                    act.mount_preset_id = None
 
     def cue_by_id(self, cid: str) -> Optional[Cue]:
         for c in self.cues:

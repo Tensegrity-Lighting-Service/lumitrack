@@ -21,6 +21,7 @@ function cloneActivationPatch(act: Activation) {
     travelFocusPointId: act.travelFocusPointId ?? null,
     arrivalOrientationMode: act.arrivalOrientationMode, arrivalFixedYawDeg: act.arrivalFixedYawDeg,
     arrivalFocusPointId: act.arrivalFocusPointId ?? null,
+    mountPresetId: act.mountPresetId ?? null,
     curves: act.curves ?? null, pathPoints: act.pathPoints ?? null,
     startHandle: act.startHandle ?? null, targetHandle: act.targetHandle ?? null,
   }
@@ -137,6 +138,7 @@ export function splitCueAtPlayhead(cue: Cue, tMs: number, positions: Record<stri
       arrivalOrientationMode: act.arrivalOrientationMode,
       arrivalFixedYawDeg: act.arrivalFixedYawDeg,
       arrivalFocusPointId: act.arrivalFocusPointId ?? null,
+      mountPresetId: act.mountPresetId ?? null,
     })
   }
   return secondId

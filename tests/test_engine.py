@@ -30,15 +30,18 @@ def test_apply_mount_preset_tracks_yaw_independently_per_axis():
 
 def _project_with_mounted_point(up_axis="y", roll_tracks_yaw=False):
     project = Project(name="t", transform_up_axis=up_axis)
-    project.points = [Point(id="a", name="A", mount_preset_id="vert")]
+    project.points = [Point(id="a", name="A")]
     project.fixture_mount_presets = [{
         "id": "vert", "name": "Vertical",
         "basePitchDeg": 90.0, "baseRollDeg": 0.0,
         "pitchTracksYaw": False, "rollTracksYaw": roll_tracks_yaw,
     }]
+    # Recadrage 2026-08-04 : le preset se règle au niveau de l'acteur DANS
+    # LE BLOC (Activation.mount_preset_id), plus par acteur globalement.
     project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=0, activations={
         "a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
-                        travel_orientation_mode="fixed", travel_fixed_yaw_deg=45.0),
+                        travel_orientation_mode="fixed", travel_fixed_yaw_deg=45.0,
+                        mount_preset_id="vert"),
     })]
     return project
 
@@ -72,7 +75,39 @@ def test_build_trackers_puts_roll_on_the_axis_yaw_does_not_use():
 
 def test_build_trackers_no_preset_is_unaffected():
     project = _project_with_mounted_point()
-    project.points[0].mount_preset_id = None
+    project.cues[0].activations["a"].mount_preset_id = None
     broadcaster = _broadcaster_for(project)
     trackers = broadcaster.build_trackers(0.0)
     assert trackers[0].ori_x == 0.0
+
+
+def test_mount_preset_is_governed_by_blocks_ltp():
+    """"Ne rien changer" (None) laisse courir le preset gouvernant
+    précédent ; un bloc ultérieur peut en changer ou l'effacer ("")."""
+    import math
+    from lumitrack.core.engine import governing_mount_preset
+    project = _project_with_mounted_point()
+    project.fixture_mount_presets.append({
+        "id": "flat", "name": "Posé au sol",
+        "basePitchDeg": 45.0, "baseRollDeg": 0.0,
+        "pitchTracksYaw": False, "rollTracksYaw": False,
+    })
+    project.cues.append(Cue(id="c2", name="c2", start_ms=1000, duration_ms=0, activations={
+        # None = ne rien changer : "vert" (posé par c1) continue de gouverner.
+        "a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=0),
+    }))
+    project.cues.append(Cue(id="c3", name="c3", start_ms=2000, duration_ms=0, activations={
+        "a": Activation(target_x_cm=200, target_y_cm=0, fade_ms=0, mount_preset_id="flat"),
+    }))
+    project.cues.append(Cue(id="c4", name="c4", start_ms=3000, duration_ms=0, activations={
+        # "" = aucun preset : efface explicitement la correction.
+        "a": Activation(target_x_cm=300, target_y_cm=0, fade_ms=0, mount_preset_id=""),
+    }))
+    assert governing_mount_preset(project, "a", 500.0)["id"] == "vert"
+    assert governing_mount_preset(project, "a", 1500.0)["id"] == "vert"   # c2 ne change rien
+    assert governing_mount_preset(project, "a", 2500.0)["id"] == "flat"   # c3 bascule
+    assert governing_mount_preset(project, "a", 3500.0) is None           # c4 efface
+
+    broadcaster = _broadcaster_for(project)
+    assert broadcaster.build_trackers(2500.0)[0].ori_x == math.radians(45.0)
+    assert broadcaster.build_trackers(3500.0)[0].ori_x == 0.0

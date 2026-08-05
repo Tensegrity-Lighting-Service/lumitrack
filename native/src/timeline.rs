@@ -279,6 +279,11 @@ fn resolve_yaw(
             "path" => {
                 let kfs_x = axis_keyframes(project, point_id, Axis::X);
                 let kfs_y = axis_keyframes(project, point_id, Axis::Y);
+                // Origine backstage passée à la résolution (fix 2026-08-04,
+                // "suivre la trajectoire ne marche pas") : sans elle, une
+                // PREMIÈRE apparition snape sur sa cible — delta nul et le
+                // lacet retombait sur l'angle fixe pendant toute l'entrée.
+                let slot = backstage_slot(project, point_id);
                 let sample_t = if kf.fade_end_ms > kf.start_ms {
                     t_for_path.min(kf.fade_end_ms - PATH_YAW_SAMPLE_MS)
                 } else {
@@ -288,8 +293,10 @@ fn resolve_yaw(
                 let t0 = (sample_t - PATH_YAW_SAMPLE_MS).max(0.0);
                 let t1 = sample_t + PATH_YAW_SAMPLE_MS;
                 let (Some(x0), Some(y0), Some(x1), Some(y1)) =
-                    (resolve_axis(&kfs_x, t0), resolve_axis(&kfs_y, t0),
-                     resolve_axis(&kfs_x, t1), resolve_axis(&kfs_y, t1))
+                    (resolve_axis_with_origin(&kfs_x, t0, slot.map(|s| s.0)),
+                     resolve_axis_with_origin(&kfs_y, t0, slot.map(|s| s.1)),
+                     resolve_axis_with_origin(&kfs_x, t1, slot.map(|s| s.0)),
+                     resolve_axis_with_origin(&kfs_y, t1, slot.map(|s| s.1)))
                 else {
                     return act.travel_fixed_yaw_deg;
                 };
