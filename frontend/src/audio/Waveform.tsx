@@ -5,7 +5,7 @@
 // normal wavesurfer playback isn't fighting a 30 Hz setTime every tick.
 import { useEffect, useRef } from 'react'
 import WaveSurfer from 'wavesurfer.js'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { fileSrc } from '../fileSrc'
 import { sidecar } from '../sidecar'
 
 const DRIFT_THRESHOLD_S = 0.2
@@ -27,7 +27,7 @@ export function Waveform({ audioPath, tMs, playing }: {
       progressColor: '#8a92a6',
       cursorColor: '#e8e8ec',
       cursorWidth: 1,
-      url: convertFileSrc(audioPath),
+      url: fileSrc(audioPath),
       interact: true,
     })
     wsRef.current = ws

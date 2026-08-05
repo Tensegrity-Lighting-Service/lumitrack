@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { ErrorBoundary } from './ui/ErrorBoundary.tsx'
 
 // App desktop (Tauri = une WebView) : le menu contextuel natif du
 // navigateur ("Recharger", "Inspecter l'élément"...) n'a aucun sens ici et
@@ -15,6 +16,11 @@ window.addEventListener('contextmenu', (e) => e.preventDefault())
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    {/* Filet de sécurité global (2026-08-04, bug "l'app ne se lance
+        plus") : une exception de rendu affiche désormais un message
+        d'erreur lisible au lieu d'un écran blanc indiagnosticable. */}
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )

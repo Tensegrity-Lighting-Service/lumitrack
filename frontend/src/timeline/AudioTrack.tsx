@@ -16,7 +16,7 @@
 // qu'au-delà d'un seuil de dérive pour ne pas se battre avec les ticks.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import WaveSurfer from 'wavesurfer.js'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { fileSrc } from '../fileSrc'
 import { sidecar } from '../sidecar'
 import { useT } from '../i18n'
 import { setAudioPeaks, type Peaks } from './audioPeaks'
@@ -130,7 +130,7 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
     const ws = WaveSurfer.create({
       container: hiddenRef.current,
       height: 1,
-      url: convertFileSrc(audioPath),
+      url: fileSrc(audioPath),
       interact: false,
       // Décodage BASSE FRÉQUENCE pour la waveform uniquement : 12 kHz
       // suffisent à des pics d'affichage et divisent le coût de

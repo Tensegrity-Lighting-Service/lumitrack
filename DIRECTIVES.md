@@ -1115,12 +1115,41 @@ garantie** (l'ordre de composition de rotations 3D dépend de la
 convention) — à régler en direct face au vrai tube Astera/à la vraie
 console, pas quelque chose qu'une revue de code peut valider seule.
 
-## Régression signalée, pas encore diagnostiquée (2026-08-04)
+## Régression "drag-and-drop / app ne se lance plus" — ✅ DIAGNOSTIQUÉE ET CORRIGÉE (2026-08-04)
 
-Florian, en cours de session (redesign visuel des acteurs) : "le [app] ne
-se lance plus, drag and drop des acteurs sur le terrain ne marche plus."
-Reporté volontairement à une prochaine session ("continue celle qu'on a
-mis en place récemment" — la refonte orientation/points de focus en
-cours). Pas encore reproduit ni investigué — deux symptômes distincts
-possibles (lancement de l'app ET glisser-déposer roster→scène), à
-vérifier séparément avant de chercher une cause commune.
+Signalée par Florian pendant le redesign des acteurs ("le [app] ne se
+lance plus, drag and drop des acteurs sur le terrain ne marche plus"),
+reproduite et diagnostiquée EN NAVIGATEUR (Playwright + Edge headless
+contre le dev stack Vite/sidecar, geste pointer complet scripté — pas de
+l'analyse statique, qui n'avait rien trouvé) :
+
+**Drag-and-drop roster→scène (cause racine)** : `useDroppable({ id:
+'scene' })` était appelé directement dans `App` — le composant qui rend
+`<DndContext>` LUI-MÊME — donc le hook lisait le contexte par défaut
+(vide) et la zone 'scene' ne s'enregistrait JAMAIS dans le vrai registre
+des droppables (vérifié en loggant le registre pendant le geste : les 80
+lignes du roster y étaient, pas 'scene'). `over` restait `null` au
+relâchement et le drop ne faisait rien. Présent depuis la migration
+dnd-kit (2026-07-31) — le drop roster→scène n'a jamais marché depuis.
+Corrigé : nouveau composant `SceneDropZone` (rendu À L'INTÉRIEUR du
+DndContext) qui porte le `useDroppable`, + `collisionDetection`
+personnalisée `pointerWithin`-d'abord (la cible d'un drop est là où
+POINTE le curseur, la sémantique que `placeActorsAt` applique déjà en
+raycastant aux coordonnées du pointeur). Vérifié en navigateur : le drop
+crée bien le bloc "Entrée" + l'activation (bloc de test annulé par undo
+ensuite).
+
+**"L'app ne se lance plus" (classe de cause identifiée)** : AUCUN error
+boundary dans tout l'arbre React — la moindre exception de rendu
+démontait TOUTE l'app en écran blanc sans message. Trois lanceurs
+d'exceptions synchrones trouvés en reproduisant hors WebView Tauri :
+`getCurrentWebview()` (App.tsx, lance AVANT de retourner une promesse —
+le `.catch` seul ne suffisait pas), `convertFileSrc` (AudioTrack/
+Waveform/Terrain — centralisé dans le nouveau `fileSrc.ts` avec
+try/catch), et l'échec de chargement du GLB terrain (useGLTF). Corrigé :
+`ErrorBoundary` générique (nouveau `ui/ErrorBoundary.tsx`) posé au
+sommet (main.tsx — une erreur affiche désormais un message lisible avec
+la stack au lieu d'un écran blanc) ET autour du chargement du terrain
+(un GLB introuvable dégrade en sol générique au lieu de tuer le Canvas).
+Si "ne se lance plus" se reproduit dans la vraie fenêtre Tauri, l'écran
+affichera maintenant l'erreur exacte à transmettre.

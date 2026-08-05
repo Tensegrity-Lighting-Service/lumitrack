@@ -20,8 +20,9 @@ import { buildActorContextMenuSections, buildFocusPointContextMenuSections } fro
 import { CompassPicker } from './ui/CompassPicker'
 import { FocusPointSelect } from './ui/FocusPointSelect'
 import {
-  DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
-  type DragEndEvent, type DragOverEvent, type DragStartEvent,
+  DndContext, DragOverlay, PointerSensor, pointerWithin, rectIntersection,
+  useDroppable, useSensor, useSensors,
+  type CollisionDetection, type DragEndEvent, type DragOverEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -29,6 +30,33 @@ import { setLocale, t, useLocale, useT } from './i18n'
 
 function lumitrackFilter() {
   return [{ name: t('common.lumitrackProjectFilter'), extensions: ['lumitrack'] }]
+}
+
+/** La cible d'un drop est là où POINTE le curseur — pas là où traîne le
+ * rectangle translaté de l'élément saisi (décalé du point de saisie, même
+ * problème déjà corrigé pour isInsertingAfter ci-dessous). pointerWithin
+ * d'abord (le curseur est DANS une cible — la sémantique que l'utilisateur
+ * perçoit, et celle que placeActorsAt applique déjà en raycastant aux
+ * coordonnées du pointeur), rectIntersection en repli (pointeur entre deux
+ * lignes du roster, geste sans coordonnées de pointeur). */
+const dropCollisionDetection: CollisionDetection = (args) => {
+  const withPointer = pointerWithin(args)
+  return withPointer.length > 0 ? withPointer : rectIntersection(args)
+}
+
+/** Zone de dépôt 'scene' de dnd-kit — DOIT être déclarée par un composant
+ * rendu À L'INTÉRIEUR de <DndContext> : useDroppable appelé directement
+ * dans App (le composant qui rend le DndContext lui-même) lisait le
+ * contexte par défaut (vide) et ne s'enregistrait JAMAIS dans le vrai
+ * contexte — la zone 'scene' n'existait pour aucun geste, `over` restait
+ * null au relâchement, et le drop roster→scène ne faisait rien du tout.
+ * Cause racine du bug "drag and drop des acteurs sur le terrain ne marche
+ * plus" (signalé 2026-08-04, présent depuis la migration dnd-kit du
+ * 07-31), reproduit et diagnostiqué en navigateur : le registre des
+ * droppables listait les 80 lignes du roster mais pas 'scene'. */
+function SceneDropZone({ children }: { children: React.ReactNode }) {
+  const { setNodeRef } = useDroppable({ id: 'scene' })
+  return <main className="scene-view" ref={setNodeRef}>{children}</main>
 }
 
 /** Le curseur au-dessus de la moitié basse d'une ligne = insertion APRÈS
@@ -492,18 +520,29 @@ function App() {
   useEffect(() => {
     const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac']
     let unlisten: (() => void) | null = null
-    getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type !== 'drop') return
-      for (const path of event.payload.paths) {
-        const ext = path.split('.').pop()?.toLowerCase() ?? ''
-        if (AUDIO_EXT.includes(ext)) sidecar.setAudio({ path })
-        else if (ext === 'stancz') sidecar.importStancz(path)
-        // .lumitrack = fichier (format courant) ; .bundle = ancien dossier
-        // (lecture seule, voir core/project.py::load_bundle) — les deux
-        // passent par la même commande, le backend distingue fichier/dossier.
-        else if (ext === 'lumitrack' || ext === 'bundle') sidecar.loadBundle(path)
-      }
-    }).then((fn) => { unlisten = fn }).catch(() => { /* hors Tauri (dev navigateur) */ })
+    // try/catch SYNCHRONE en plus du .catch : hors Tauri (dev navigateur),
+    // getCurrentWebview() LANCE une exception synchrone (lecture de
+    // __TAURI_INTERNALS__ absent) avant même de retourner une promesse —
+    // le .catch seul ne suffisait pas, et l'exception non rattrapée dans
+    // cet effet démontait TOUTE l'app (écran blanc, aucun error boundary),
+    // constaté le 2026-08-04 en reproduisant le bug "l'app ne se lance
+    // plus" dans un navigateur.
+    try {
+      getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type !== 'drop') return
+        for (const path of event.payload.paths) {
+          const ext = path.split('.').pop()?.toLowerCase() ?? ''
+          if (AUDIO_EXT.includes(ext)) sidecar.setAudio({ path })
+          else if (ext === 'stancz') sidecar.importStancz(path)
+          // .lumitrack = fichier (format courant) ; .bundle = ancien dossier
+          // (lecture seule, voir core/project.py::load_bundle) — les deux
+          // passent par la même commande, le backend distingue fichier/dossier.
+          else if (ext === 'lumitrack' || ext === 'bundle') sidecar.loadBundle(path)
+        }
+      }).then((fn) => { unlisten = fn }).catch(() => { /* hors Tauri (dev navigateur) */ })
+    } catch {
+      /* hors Tauri (dev navigateur) : pas de drag-drop de fichiers natif */
+    }
     return () => { if (unlisten) unlisten() }
   }, [])
 
@@ -655,9 +694,10 @@ function App() {
   }, [moveDroppedIds])
 
   // La scène 3D est une simple zone de dépôt dnd-kit — le point d'impact
-  // exact (raycasting) est recalculé dans handleDragEnd via placeActorsAt,
-  // ce hook ne sert qu'à faire reconnaître le canvas comme cible valide.
-  const { setNodeRef: setSceneDropRef } = useDroppable({ id: 'scene' })
+  // exact (raycasting) est recalculé dans handleDragEnd via placeActorsAt.
+  // L'enregistrement du droppable vit dans SceneDropZone (voir sa doc :
+  // useDroppable ICI, hors du DndContext rendu plus bas, ne s'enregistrait
+  // jamais).
 
   const tMs = tick?.tMs ?? 0
   const playing = tick?.playing ?? false
@@ -863,7 +903,7 @@ function App() {
         gridTemplateRows: `26px 1fr 6px ${timelineHeight}px`,
       }}
     >
-      <DndContext sensors={dndSensors} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
+      <DndContext sensors={dndSensors} collisionDetection={dropCollisionDetection} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
       <MenuBar menus={menus} />
 
       <aside className="roster">
@@ -1041,7 +1081,7 @@ function App() {
 
       <VerticalResizer area="vhandle1" onDeltaX={(dx) => setRosterWidth((w) => clamp(w + dx, ROSTER_MIN, ROSTER_MAX))} />
 
-      <main className="scene-view" ref={setSceneDropRef}>
+      <SceneDropZone>
         <Scene
           ref={sceneRef}
           project={project}
@@ -1113,7 +1153,7 @@ function App() {
             )}
           </div>
         </div>
-      </main>
+      </SceneDropZone>
 
       <VerticalResizer area="vhandle2" onDeltaX={(dx) => setInspectorWidth((w) => clamp(w - dx, INSPECTOR_MIN, INSPECTOR_MAX))} />
 

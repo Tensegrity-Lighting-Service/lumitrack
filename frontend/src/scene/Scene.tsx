@@ -30,7 +30,8 @@ import { Canvas, useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
 import { OrthographicCamera, MapControls, Grid, useGLTF, Line, PivotControls } from '@react-three/drei'
 import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { fileSrc } from '../fileSrc'
+import { ErrorBoundary } from '../ui/ErrorBoundary'
 import { sidecar } from '../sidecar'
 import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, PathPoint, Point, Project, Pose } from '../types'
 import { boundsOf, rotationArc } from './transformBox'
@@ -163,7 +164,7 @@ function Terrain({ path, rotationDeg, onBounds, onSnapPoints }: {
   onBounds: (bounds: PlanarBounds) => void
   onSnapPoints: (points: SnapPoint[]) => void
 }) {
-  const url = useMemo(() => convertFileSrc(path), [path])
+  const url = useMemo(() => fileSrc(path), [path])
   const { scene } = useGLTF(url)
   const groupRef = useRef<THREE.Group>(null)
   // Bornes et points de snap recalculés APRÈS application de la rotation
@@ -2243,11 +2244,17 @@ function SceneContent({
       <ambientLight intensity={editingZone ? 0.7 : 1.1} />
       <directionalLight position={[fit.centerX, span * 3, fit.centerZ]} intensity={editingZone ? 0.4 : 0.6} />
 
-      <Suspense fallback={<GenericFloor widthM={widthM} heightM={heightM} />}>
-        {project.terrainGltfPath
-          ? <Terrain path={project.terrainGltfPath} rotationDeg={project.terrainRotationDeg ?? 0} onBounds={onTerrainBounds} onSnapPoints={onSnapPoints} />
-          : null}
-      </Suspense>
+      {/* ErrorBoundary (2026-08-04) : un GLB introuvable/illisible (chemin
+          disque disparu, dev navigateur sans asset Tauri...) faisait
+          exploser useGLTF et démontait TOUT le Canvas — écran noir. La
+          scène continue désormais sans terrain (sol générique). */}
+      <ErrorBoundary fallback={<GenericFloor widthM={widthM} heightM={heightM} />}>
+        <Suspense fallback={<GenericFloor widthM={widthM} heightM={heightM} />}>
+          {project.terrainGltfPath
+            ? <Terrain path={project.terrainGltfPath} rotationDeg={project.terrainRotationDeg ?? 0} onBounds={onTerrainBounds} onSnapPoints={onSnapPoints} />
+            : null}
+        </Suspense>
+      </ErrorBoundary>
 
       <StageGroup project={project} groupRef={stageGroupRef}>
         {!project.terrainGltfPath && <GenericFloor widthM={widthM} heightM={heightM} />}
