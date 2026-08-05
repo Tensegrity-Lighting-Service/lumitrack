@@ -487,11 +487,14 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     el.addEventListener('pointerup', onUp)
   }, [effPxPerMs, onSelectCue, snap])
 
+  // Nouveau bloc À LA POSITION DU PLAYHEAD (demande Florian, 2026-08-04) —
+  // avant : toujours collé à la fin du dernier bloc, sans rapport avec
+  // l'endroit où on travaille. Le clic droit sur une piste vide ("Nouveau
+  // bloc ici") reste l'autre chemin, lui basé sur la position du clic.
   const addCue = useCallback(() => {
     const color = CUE_PALETTE[cues.length % CUE_PALETTE.length]
-    const lastEnd = cues.length ? Math.max(...cues.map((c) => c.startMs + c.durationMs)) : 0
-    sidecar.addCue('Cue', lastEnd, 2000, color)
-  }, [cues])
+    sidecar.addCue(t('timeline.newCueName'), Math.max(0, Math.round(tMs)), 2000, color)
+  }, [cues, tMs, t])
 
   const deleteSelected = useCallback(() => {
     if (selectedCueId) {
@@ -674,7 +677,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
         </button>
         <span className="tl-timecode">{formatTimecodeMs(tMs)}</span>
         <span className="tl-toolbar-sep" />
-        <button onClick={addCue}>{t('timeline.addCue')}</button>
+        <button onClick={addCue} title={t('timeline.addCueHint')}>{t('timeline.addCue')}</button>
         {selectedCueId && <button onClick={deleteSelected}>{t('timeline.deleteCue')}</button>}
         {selectedCueId && (
           <button
