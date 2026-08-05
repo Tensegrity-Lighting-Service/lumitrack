@@ -1708,9 +1708,10 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   const applyAll = (patch: { fadeMs?: number; easing?: string }) => {
     // Une édition groupée est aussi une personnalisation manuelle : sort du
     // recalcul de la durée automatique tant qu'elle reste personnalisée
-    // (même logique que le champ individuel de ActivationCard).
+    // (même logique que le champ individuel de ActivationCard). UN message
+    // groupé (optimisation 2026-08-06).
     const withOverride = 'fadeMs' in patch ? { ...patch, fadeOverridden: true } : patch
-    for (const id of activated) sidecar.setActivation(cue.id, id, withOverride)
+    sidecar.setActivations(cue.id, activated.map((id) => ({ pointId: id, ...withOverride })))
   }
 
   // "Décalage en escalier" (DIRECTIVES.md point 6) : respecte l'ORDRE DE
@@ -1719,7 +1720,7 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   // `staggerMs` plus tard, etc. Effet vague/escalier sans nouveau suivi
   // d'ordre à écrire.
   const applyStagger = () => {
-    activated.forEach((id, i) => sidecar.setActivation(cue.id, id, { startOffsetMs: i * staggerMs }))
+    sidecar.setActivations(cue.id, activated.map((id, i) => ({ pointId: id, startOffsetMs: i * staggerMs })))
   }
 
   const names = selectedPointIds

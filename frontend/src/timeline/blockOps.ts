@@ -35,9 +35,10 @@ function cloneCueInto(source: Cue, name: string, startMs: number, durationMs: nu
   const newId = crypto.randomUUID()
   sidecar.addCue(name, startMs, durationMs, source.color, lane, newId)
   if (source.autoDuration) sidecar.updateCue(newId, { autoDuration: true })
-  for (const [pointId, act] of Object.entries(source.activations)) {
-    sidecar.setActivation(newId, pointId, cloneActivationPatch(act))
-  }
+  // UN message groupé (optimisation 2026-08-06) : dupliquer un bloc de N
+  // acteurs déclenchait N rediffusions complètes du projet.
+  sidecar.setActivations(newId, Object.entries(source.activations)
+    .map(([pointId, act]) => ({ pointId, ...cloneActivationPatch(act) })))
   return newId
 }
 
@@ -92,6 +93,10 @@ export function splitCueAtPlayhead(cue: Cue, tMs: number, positions: Record<stri
   sidecar.addCue(`${cue.name} (suite)`, tMs, secondDurationMs, cue.color, cue.lane ?? 0, secondId)
   sidecar.updateCue(cue.id, { durationMs: firstDurationMs, autoDuration: false })
 
+  // Deux messages groupés (un par bloc) au lieu de 2 N unitaires
+  // (optimisation 2026-08-06).
+  const firstEntries: Array<Record<string, unknown> & { pointId: string }> = []
+  const secondEntries: Array<Record<string, unknown> & { pointId: string }> = []
   for (const [pointId, act] of Object.entries(cue.activations)) {
     const pose = positions[pointId]
     if (!pose) continue
@@ -107,7 +112,8 @@ export function splitCueAtPlayhead(cue: Cue, tMs: number, positions: Record<stri
     // d'orientation", 2026-08-04) — la trajectoire visuelle ne saute pas,
     // quel que soit le mode de trajet d'origine (fixed/path/focus, inchangé
     // ici, seule l'arrivée du sous-bloc tronqué est réglée).
-    sidecar.setActivation(cue.id, pointId, {
+    firstEntries.push({
+      pointId,
       targetXCm: act.targetXCm !== null ? xCm : null,
       targetYCm: act.targetYCm !== null ? yCm : null,
       targetZCm: act.targetZCm !== null ? zCm : null,
@@ -125,7 +131,8 @@ export function splitCueAtPlayhead(cue: Cue, tMs: number, positions: Record<stri
     // au même instant absolu qu'avant la coupe (immédiatement si le
     // mouvement avait déjà commencé, après une attente résiduelle sinon).
     const secondOffsetMs = Math.max(0, effectiveStart - tMs)
-    sidecar.setActivation(secondId, pointId, {
+    secondEntries.push({
+      pointId,
       targetXCm: act.targetXCm, targetYCm: act.targetYCm,
       targetZCm: act.targetZCm,
       fadeMs: Math.max(MIN_SPLIT_MS, originalArrivalMs - (tMs + secondOffsetMs)),
@@ -143,6 +150,8 @@ export function splitCueAtPlayhead(cue: Cue, tMs: number, positions: Record<stri
       yawTurnMs: act.yawTurnMs,
     })
   }
+  sidecar.setActivations(cue.id, firstEntries)
+  sidecar.setActivations(secondId, secondEntries)
   return secondId
 }
 

@@ -1394,11 +1394,14 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     // avec poignées Bézier) reste calculé uniquement au relâchement.
     const thetaDegLive = (drag.lastTheta * 180) / Math.PI
 
-    for (const m of drag.members) {
+    // UN message groupé par échantillon (optimisation 2026-08-06) — la
+    // version par-membre faisait rediffuser le projet N fois par sample.
+    const rotating = drag.kind === 'rotate'
+    sidecar.setActivations(drag.cueId, drag.members.map((m) => {
       const qLocal = new THREE.Vector3(...stageToLocal(m.baseX, m.baseY, 0))
       const qNew = qLocal.clone().applyMatrix4(effectiveDelta)
-      const rotating = drag.kind === 'rotate'
-      sidecar.setActivation(drag.cueId, m.pointId, {
+      return {
+        pointId: m.pointId,
         targetXCm: qNew.x / CM_TO_M, targetYCm: qNew.z / CM_TO_M,
         ...(rotating && (m.baseTravelYaw !== null || m.baseArrivalYaw !== null)
           ? { orientationOverridden: true } : {}),
@@ -1406,8 +1409,8 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
           ? { travelFixedYawDeg: m.baseTravelYaw + thetaDegLive } : {}),
         ...(rotating && m.baseArrivalYaw !== null
           ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDegLive } : {}),
-      })
-    }
+      }
+    }))
   }
 
   const handleDragEnd = () => {
@@ -1419,6 +1422,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     // Écriture finale de la rotation : cible + ARC autour du centre +
     // lacet tourné du même angle (identique à avant le passage à drei).
     const thetaDeg = (drag.lastTheta * 180) / Math.PI
+    const finalEntries: Array<Record<string, unknown> & { pointId: string }> = []
     for (const m of drag.members) {
       const arc = rotationArc(m.baseX, m.baseY, drag.centerX, drag.centerY, drag.lastTheta)
       // Un acteur seul (ou exactement sur le pivot) ne suit aucun arc —
@@ -1429,7 +1433,8 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       // réinitialise la courbe de l'acteur") — ces champs ne doivent être
       // touchés que quand un arc réel a été calculé (groupe, rayon non nul).
       const r = Math.hypot(m.baseX - drag.centerX, m.baseY - drag.centerY)
-      sidecar.setActivation(drag.cueId, m.pointId, {
+      finalEntries.push({
+        pointId: m.pointId,
         targetXCm: arc.targetXCm,
         targetYCm: arc.targetYCm,
         ...(r >= 1e-6
@@ -1440,6 +1445,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
         ...(m.baseArrivalYaw !== null ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDeg } : {}),
       })
     }
+    sidecar.setActivations(drag.cueId, finalEntries)
   }
 
   // Voir le useEffect "filet de sécurité" AVANT le retour anticipé plus
@@ -1831,11 +1837,11 @@ function SceneContent({
             dx = Math.round(dx / proj.gridSizeCm) * proj.gridSizeCm
             dy = Math.round(dy / proj.gridSizeCm) * proj.gridSizeCm
           }
-          for (const m of drag.group) {
-            sidecar.setActivation(gestureCueId, m.pointId, {
-              targetXCm: m.baseX + dx, targetYCm: m.baseY + dy,
-            })
-          }
+          // UN message groupé pour tout le groupe (optimisation
+          // 2026-08-06) — N set_activation = N rediffusions du projet.
+          sidecar.setActivations(gestureCueId, drag.group.map((m) => ({
+            pointId: m.pointId, targetXCm: m.baseX + dx, targetYCm: m.baseY + dy,
+          })))
         } else {
           sidecar.setActivation(gestureCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
         }
@@ -2169,11 +2175,14 @@ function SceneContent({
           cueId = crypto.randomUUID()
           sidecar.addCue('Entrée', tMsRef.current, 2000, '#4FF5E0', 0, cueId)
         }
-        pointIds.forEach((pointId, i) => {
-          if (focusIdSet.has(pointId)) return
-          const [sx, sy] = slotOf(i)
-          sidecar.setActivation(cueId, pointId, { targetXCm: sx, targetYCm: sy })
-        })
+        // Écriture groupée : un dépôt de groupe (8+ acteurs) en un message.
+        sidecar.setActivations(cueId, pointIds
+          .map((pointId, i) => ({ pointId, i }))
+          .filter(({ pointId }) => !focusIdSet.has(pointId))
+          .map(({ pointId, i }) => {
+            const [sx, sy] = slotOf(i)
+            return { pointId, targetXCm: sx, targetYCm: sy }
+          }))
       }
       if (pointIds.length === 1) onSelectPoint(pointIds[0])
       else onSelectPoints(pointIds)

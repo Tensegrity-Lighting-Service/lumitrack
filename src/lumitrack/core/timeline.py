@@ -614,6 +614,22 @@ def resolve_block_context(project: Project, cue_id: str,
         raise ValueError(f"Unknown cue id {cue_id!r}")
 
     entries = {}
+    # Résolution GLOBALE x/y à un instant donné, MÉMOÏSÉE par timestamp
+    # (optimisation 2026-08-06, "le déplacement de plusieurs points fait
+    # ramer") : définie par point et sans cache, elle relançait
+    # resolve_positions (O(points × cues)) DEUX FOIS PAR ACTEUR du bloc —
+    # O(P²) par appel de resolve_block_context, lui-même rejoué à chaque
+    # écho de projet pendant un geste. Les acteurs d'un même bloc partagent
+    # presque toujours les mêmes instants (départ/arrivée du bloc, sauf
+    # décalages) : 2 résolutions au lieu de 2 N.
+    _xy_cache: dict = {}
+
+    def _resolved_xy_at(t: float) -> dict:
+        if t not in _xy_cache:
+            _xy_cache[t] = {pid: (pose.x_cm, pose.y_cm)
+                            for pid, pose in resolve_positions(project, t).items()}
+        return _xy_cache[t]
+
     for point in project.points:
         act = cue.activations.get(point.id)
         if act is None:
@@ -661,11 +677,8 @@ def resolve_block_context(project: Project, cue_id: str,
         # le lacet réellement affiché au départ/à la cible de CE bloc, à
         # partir des positions x/y déjà résolues juste au-dessus. Un
         # éventuel point de focus référencé est cherché dans la résolution
-        # GLOBALE du projet à cet instant (`_resolved_xy_at`) — sa propre
-        # position ne dépend jamais de ce bloc.
-        def _resolved_xy_at(t: float) -> dict:
-            return {pid: (pose.x_cm, pose.y_cm) for pid, pose in resolve_positions(project, t).items()}
-
+        # GLOBALE du projet à cet instant (`_resolved_xy_at`, mémoïsée
+        # ci-dessus) — sa propre position ne dépend jamais de ce bloc.
         axis_start["yaw"] = None
         axis_target["yaw"] = None
         kfs_orient = _orientation_keyframes(project, point.id)

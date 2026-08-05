@@ -57,6 +57,7 @@ UNDO_MAX_DEPTH = 200
 MUTATING_COMMANDS = {
     "set_audio", "update_point", "update_stage_map", "set_backstage_zones",
     "add_point", "add_cue", "update_cue", "delete_cue", "set_activation",
+    "set_activations", "set_fixture_mount_presets",
     "apply_group_transform", "delete_point", "reorder_points", "set_roster_groups",
     # Contrairement à update_psn_config (réseau/sortie) : la vitesse de
     # référence recalcule la durée de vrais blocs (contenu créatif).
@@ -335,6 +336,126 @@ def _apply_cue_orientation_defaults(cue: Cue) -> None:
     for act in cue.activations.values():
         if not act.orientation_overridden:
             _sync_activation_orientation_defaults(cue, act)
+
+
+def _apply_activation_patch(session: Session, cue: Cue, msg: dict):
+    """Applique un patch d'activation (les clés camelCase du protocole)
+    sur UN point d'un cue — corps commun de set_activation (unitaire) et
+    set_activations (groupé, optimisation 2026-08-06). Retourne un dict
+    d'erreur ou None ; l'appelant gère auto-duration/rebuild/broadcast
+    UNE seule fois pour tout le lot."""
+    point_id = msg.get("pointId")
+    if session.project.point_by_id(point_id) is None:
+        return {"type": "error", "message": f"Unknown point id {point_id!r}"}
+    act = cue.activations.get(point_id)
+    is_new_activation = act is None
+    act = act or Activation()
+    if is_new_activation and "fadeMs" not in msg and not cue.auto_duration:
+        # "le timing de l'acteur ne suit pas le timing du bloc ... on
+        # dirait qu'ils sont par défaut désynchronisés" (Florian,
+        # 2026-08-03) : un acteur fraîchement activé (glisser dans la
+        # scène, dépôt roster, "+ Activer un point") héritait du
+        # fade_ms par défaut du dataclass (1000 ms), sans aucun rapport
+        # avec la durée réelle du bloc. Un bloc SANS durée automatique
+        # EST par définition le fade par défaut de ses membres — un
+        # nouvel acteur suit cette durée dès sa création, pas une
+        # constante arbitraire. (Durée automatique active : laissé au
+        # recalcul par distance/vitesse ci-dessous, comme d'habitude.)
+        act.fade_ms = max(MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
+    orientation_keys = (
+        "travelOrientationMode", "travelFixedYawDeg", "travelFocusPointId",
+        "arrivalOrientationMode", "arrivalFixedYawDeg", "arrivalFocusPointId",
+        "mountPresetId", "yawTurnMs",
+    )
+    if is_new_activation and not any(k in msg for k in orientation_keys):
+        # Préremplissage (DIRECTIVES.md point 5/6, "réglage par défaut"
+        # à 2 niveaux) — n'a d'effet que sur une activation TOUTE
+        # NEUVE, jamais sur une déjà réglée : d'abord les défauts du
+        # BLOC s'ils sont réglés, sinon le repli du Point (trajet
+        # seulement — l'arrivée retombe toujours sur "hold").
+        if (cue.default_travel_orientation_mode is not None
+                or cue.default_arrival_orientation_mode is not None
+                or cue.default_mount_preset_id is not None
+                or cue.default_yaw_turn_ms is not None):
+            _sync_activation_orientation_defaults(cue, act)
+        else:
+            point = session.project.point_by_id(point_id)
+            if point is not None:
+                act.travel_orientation_mode = point.default_travel_orientation_mode
+    for field_name, json_key in (
+        ("target_x_cm", "targetXCm"), ("target_y_cm", "targetYCm"),
+        ("target_z_cm", "targetZCm"),
+    ):
+        if json_key in msg:
+            setattr(act, field_name, msg[json_key])
+    if "fadeMs" in msg:
+        act.fade_ms = float(msg["fadeMs"])
+    if "startOffsetMs" in msg:
+        # Jamais négatif : un acteur ne peut pas démarrer avant le bloc
+        # qui le contient (voir Activation.start_offset_ms).
+        act.start_offset_ms = max(0.0, float(msg["startOffsetMs"]))
+    if "fadeOverridden" in msg:
+        act.fade_overridden = bool(msg["fadeOverridden"])
+        # "Revenir au bloc" (bouton inspecteur) envoie fadeOverridden:
+        # false seul — en durée automatique, _apply_auto_duration plus
+        # bas s'en charge déjà ; sinon (bloc manuel), synchronise cette
+        # activation sur la durée actuelle du bloc, sinon "revenir au
+        # bloc" ne changeait rien du tout hors durée automatique.
+        if not act.fade_overridden and not cue.auto_duration and "fadeMs" not in msg:
+            act.fade_ms = max(MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
+    if "easing" in msg:
+        act.easing = msg["easing"]
+    if "orientationOverridden" in msg:
+        act.orientation_overridden = bool(msg["orientationOverridden"])
+        # "Revenir au bloc" (bouton inspecteur) envoie
+        # orientationOverridden:false seul — resynchronise depuis les
+        # défauts actuels du bloc, comme le fait _apply_auto_duration
+        # pour le fade juste au-dessus.
+        if not act.orientation_overridden and not any(k in msg for k in orientation_keys):
+            _sync_activation_orientation_defaults(cue, act)
+    if "travelOrientationMode" in msg:
+        act.travel_orientation_mode = msg["travelOrientationMode"] or "fixed"
+    if "travelFixedYawDeg" in msg:
+        act.travel_fixed_yaw_deg = float(msg["travelFixedYawDeg"] or 0.0)
+    if "travelFocusPointId" in msg:
+        act.travel_focus_point_id = msg["travelFocusPointId"]
+    if "arrivalOrientationMode" in msg:
+        act.arrival_orientation_mode = msg["arrivalOrientationMode"] or "hold"
+    if "arrivalFixedYawDeg" in msg:
+        act.arrival_fixed_yaw_deg = float(msg["arrivalFixedYawDeg"] or 0.0)
+    if "arrivalFocusPointId" in msg:
+        act.arrival_focus_point_id = msg["arrivalFocusPointId"]
+    if "mountPresetId" in msg:
+        # null = "ne rien changer" (le bloc ne touche pas le canal),
+        # "" = "aucun preset" (efface), sinon id de preset — voir
+        # Activation.mount_preset_id.
+        act.mount_preset_id = msg["mountPresetId"]
+    if "yawTurnMs" in msg:
+        act.yaw_turn_ms = max(0.0, float(msg["yawTurnMs"] or 0.0))
+    # Tracé spatial (motion path) : listes/dicts écrits tels quels,
+    # null efface (retour à la ligne droite).
+    if "pathPoints" in msg:
+        act.path_points = msg["pathPoints"] or None
+    if "startHandle" in msg:
+        act.start_handle = msg["startHandle"]
+    if "targetHandle" in msg:
+        act.target_handle = msg["targetHandle"]
+    if "curves" in msg:
+        # Dict {axe: [nœuds]} du graph editor, ou None pour tout effacer.
+        # Un axe portant [] ou None est retiré (retour à l'easing nommé).
+        curves = msg["curves"]
+        if curves is None:
+            act.curves = None
+        else:
+            merged = dict(act.curves or {})
+            for axis, nodes in curves.items():
+                if nodes:
+                    merged[axis] = nodes
+                else:
+                    merged.pop(axis, None)
+            act.curves = merged or None
+    cue.activations[point_id] = act
+    return None
 
 
 async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
@@ -708,117 +829,9 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         cue = session.project.cue_by_id(msg.get("cueId", ""))
         if cue is None:
             return {"type": "error", "message": "Unknown cue id"}
-        point_id = msg.get("pointId")
-        if session.project.point_by_id(point_id) is None:
-            return {"type": "error", "message": f"Unknown point id {point_id!r}"}
-        act = cue.activations.get(point_id)
-        is_new_activation = act is None
-        act = act or Activation()
-        if is_new_activation and "fadeMs" not in msg and not cue.auto_duration:
-            # "le timing de l'acteur ne suit pas le timing du bloc ... on
-            # dirait qu'ils sont par défaut désynchronisés" (Florian,
-            # 2026-08-03) : un acteur fraîchement activé (glisser dans la
-            # scène, dépôt roster, "+ Activer un point") héritait du
-            # fade_ms par défaut du dataclass (1000 ms), sans aucun rapport
-            # avec la durée réelle du bloc. Un bloc SANS durée automatique
-            # EST par définition le fade par défaut de ses membres — un
-            # nouvel acteur suit cette durée dès sa création, pas une
-            # constante arbitraire. (Durée automatique active : laissé au
-            # recalcul par distance/vitesse ci-dessous, comme d'habitude.)
-            act.fade_ms = max(MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
-        orientation_keys = (
-            "travelOrientationMode", "travelFixedYawDeg", "travelFocusPointId",
-            "arrivalOrientationMode", "arrivalFixedYawDeg", "arrivalFocusPointId",
-            "mountPresetId", "yawTurnMs",
-        )
-        if is_new_activation and not any(k in msg for k in orientation_keys):
-            # Préremplissage (DIRECTIVES.md point 5/6, "réglage par défaut"
-            # à 2 niveaux) — n'a d'effet que sur une activation TOUTE
-            # NEUVE, jamais sur une déjà réglée : d'abord les défauts du
-            # BLOC s'ils sont réglés, sinon le repli du Point (trajet
-            # seulement — l'arrivée retombe toujours sur "hold").
-            if (cue.default_travel_orientation_mode is not None
-                    or cue.default_arrival_orientation_mode is not None
-                    or cue.default_mount_preset_id is not None
-                    or cue.default_yaw_turn_ms is not None):
-                _sync_activation_orientation_defaults(cue, act)
-            else:
-                point = session.project.point_by_id(point_id)
-                if point is not None:
-                    act.travel_orientation_mode = point.default_travel_orientation_mode
-        for field_name, json_key in (
-            ("target_x_cm", "targetXCm"), ("target_y_cm", "targetYCm"),
-            ("target_z_cm", "targetZCm"),
-        ):
-            if json_key in msg:
-                setattr(act, field_name, msg[json_key])
-        if "fadeMs" in msg:
-            act.fade_ms = float(msg["fadeMs"])
-        if "startOffsetMs" in msg:
-            # Jamais négatif : un acteur ne peut pas démarrer avant le bloc
-            # qui le contient (voir Activation.start_offset_ms).
-            act.start_offset_ms = max(0.0, float(msg["startOffsetMs"]))
-        if "fadeOverridden" in msg:
-            act.fade_overridden = bool(msg["fadeOverridden"])
-            # "Revenir au bloc" (bouton inspecteur) envoie fadeOverridden:
-            # false seul — en durée automatique, _apply_auto_duration plus
-            # bas s'en charge déjà ; sinon (bloc manuel), synchronise cette
-            # activation sur la durée actuelle du bloc, sinon "revenir au
-            # bloc" ne changeait rien du tout hors durée automatique.
-            if not act.fade_overridden and not cue.auto_duration and "fadeMs" not in msg:
-                act.fade_ms = max(MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
-        if "easing" in msg:
-            act.easing = msg["easing"]
-        if "orientationOverridden" in msg:
-            act.orientation_overridden = bool(msg["orientationOverridden"])
-            # "Revenir au bloc" (bouton inspecteur) envoie
-            # orientationOverridden:false seul — resynchronise depuis les
-            # défauts actuels du bloc, comme le fait _apply_auto_duration
-            # pour le fade juste au-dessus.
-            if not act.orientation_overridden and not any(k in msg for k in orientation_keys):
-                _sync_activation_orientation_defaults(cue, act)
-        if "travelOrientationMode" in msg:
-            act.travel_orientation_mode = msg["travelOrientationMode"] or "fixed"
-        if "travelFixedYawDeg" in msg:
-            act.travel_fixed_yaw_deg = float(msg["travelFixedYawDeg"] or 0.0)
-        if "travelFocusPointId" in msg:
-            act.travel_focus_point_id = msg["travelFocusPointId"]
-        if "arrivalOrientationMode" in msg:
-            act.arrival_orientation_mode = msg["arrivalOrientationMode"] or "hold"
-        if "arrivalFixedYawDeg" in msg:
-            act.arrival_fixed_yaw_deg = float(msg["arrivalFixedYawDeg"] or 0.0)
-        if "arrivalFocusPointId" in msg:
-            act.arrival_focus_point_id = msg["arrivalFocusPointId"]
-        if "mountPresetId" in msg:
-            # null = "ne rien changer" (le bloc ne touche pas le canal),
-            # "" = "aucun preset" (efface), sinon id de preset — voir
-            # Activation.mount_preset_id.
-            act.mount_preset_id = msg["mountPresetId"]
-        if "yawTurnMs" in msg:
-            act.yaw_turn_ms = max(0.0, float(msg["yawTurnMs"] or 0.0))
-        # Tracé spatial (motion path) : listes/dicts écrits tels quels,
-        # null efface (retour à la ligne droite).
-        if "pathPoints" in msg:
-            act.path_points = msg["pathPoints"] or None
-        if "startHandle" in msg:
-            act.start_handle = msg["startHandle"]
-        if "targetHandle" in msg:
-            act.target_handle = msg["targetHandle"]
-        if "curves" in msg:
-            # Dict {axe: [nœuds]} du graph editor, ou None pour tout effacer.
-            # Un axe portant [] ou None est retiré (retour à l'easing nommé).
-            curves = msg["curves"]
-            if curves is None:
-                act.curves = None
-            else:
-                merged = dict(act.curves or {})
-                for axis, nodes in curves.items():
-                    if nodes:
-                        merged[axis] = nodes
-                    else:
-                        merged.pop(axis, None)
-                act.curves = merged or None
-        cue.activations[point_id] = act
+        err = _apply_activation_patch(session, cue, msg)
+        if err is not None:
+            return err
         # Durée automatique (mission "refonte AE/Reaper") : seul ce bloc peut
         # avoir changé de distance à parcourir, jamais ses voisins — recalcul
         # ciblé, pas un balayage de tout le projet à chaque frappe.
@@ -827,6 +840,28 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
         return None
+
+    if msg_type == "set_activations":
+        # Écriture GROUPÉE (optimisation 2026-08-06, "le déplacement de
+        # plusieurs points en même temps fait ramer") : un geste multi-
+        # acteurs envoyait N set_activation par échantillon, et CHAQUE
+        # message déclenchait une re-sérialisation + diffusion du projet
+        # ENTIER — N diffusions et N re-rendus frontend là où une seule
+        # suffit. Ce message applique toutes les entrées d'un coup : une
+        # seule passe auto-duration/rebuild, UNE seule diffusion.
+        cue = session.project.cue_by_id(msg.get("cueId", ""))
+        if cue is None:
+            return {"type": "error", "message": "Unknown cue id"}
+        for entry in msg.get("entries") or []:
+            err = _apply_activation_patch(session, cue, entry)
+            if err is not None:
+                return err
+        if cue.auto_duration:
+            _apply_auto_duration(session.project, cue)
+        session.timeline.rebuild()
+        session.transport.set_duration(session.timeline.duration_ms)
+        return None
+
 
     if msg_type == "apply_group_transform":
         cue = session.project.cue_by_id(msg.get("cueId", ""))

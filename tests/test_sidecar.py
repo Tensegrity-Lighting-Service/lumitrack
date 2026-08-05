@@ -510,6 +510,35 @@ def test_cue_orientation_default_change_resyncs_non_overridden_activations():
     assert cue.activations["p2"].travel_orientation_mode == "path"
 
 
+def test_set_activations_batch_applies_all_entries_in_one_message():
+    """Écriture groupée (optimisation 2026-08-06) : un geste multi-acteurs
+    passe par UN message au lieu de N — mêmes effets de bord que la version
+    unitaire (préremplissage, fade du bloc, durée automatique) une seule
+    fois pour tout le lot."""
+    session = Session()
+    session.project.points = [Point(id=f"p{i}", name=f"P{i}") for i in range(3)]
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=3000.0)]
+    reply = _run(_handle_message(session, {
+        "type": "set_activations", "cueId": "c1", "entries": [
+            {"pointId": "p0", "targetXCm": 100.0, "targetYCm": 0.0},
+            {"pointId": "p1", "targetXCm": 200.0, "targetYCm": 0.0},
+            {"pointId": "p2", "targetXCm": 300.0, "targetYCm": 0.0},
+        ],
+    }))
+    assert reply is None
+    cue = session.project.cue_by_id("c1")
+    assert len(cue.activations) == 3
+    assert cue.activations["p1"].target_x_cm == 200.0
+    # Même préremplissage que la version unitaire : fade = durée du bloc.
+    assert cue.activations["p2"].fade_ms == pytest.approx(3000.0)
+
+    # Un point inconnu -> erreur, comme la version unitaire.
+    err = _run(_handle_message(session, {
+        "type": "set_activations", "cueId": "c1", "entries": [{"pointId": "nope", "targetXCm": 1.0}],
+    }))
+    assert err is not None and err["type"] == "error"
+
+
 def test_new_cue_defaults_to_path_travel_and_hold_arrival():
     """Un bloc NEUF (2026-08-05) part avec trajet="suivre la trajectoire"
     et arrivée="ne change pas" — et ses nouvelles activations en héritent."""

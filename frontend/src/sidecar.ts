@@ -210,6 +210,15 @@ class SidecarClient {
   // repasse en tracking (§12.1). undefined = champ non modifié.
   // `curves`: dict {axe: nœuds} fusionné par le backend — un axe portant
   // [] est retiré (retour à l'easing nommé), null efface tout.
+  /** Écriture GROUPÉE de plusieurs activations d'un même bloc en UN
+   * message (optimisation 2026-08-06) : un geste multi-acteurs envoyait N
+   * set_activation par échantillon et le backend rediffusait le projet
+   * entier N fois — d'où "le déplacement de plusieurs points fait ramer".
+   * Une entrée = { pointId, ...patch de setActivation }. */
+  setActivations(cueId: string, entries: Array<Record<string, unknown> & { pointId: string }>) {
+    if (entries.length === 0) return
+    this.send({ type: 'set_activations', cueId, entries })
+  }
   setActivation(cueId: string, pointId: string, patch: {
     targetXCm?: number | null; targetYCm?: number | null
     targetZCm?: number | null

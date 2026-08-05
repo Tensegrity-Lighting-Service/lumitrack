@@ -1274,3 +1274,27 @@ resserrer, pas d'étaler :
 5. **Barre d'espace = lecture/pause PARTOUT** (Mission 3) : sauf champ
    texte actif ; et Espace ne doit plus ouvrir un menu déroulant/bouton
    qui a le focus (interception globale en phase capture).
+
+## Optimisation multi-drag (2026-08-06) — ✅ LIVRÉ
+
+"Le déplacement de plusieurs points en même temps fait ramer, comme s'il
+résolvait chaque acteur un par un" (Florian) — c'était littéralement ça,
+deux étages :
+
+1. **N diffusions par échantillon de geste** : chaque `set_activation`
+   individuel déclenchait une re-sérialisation + diffusion du projet
+   ENTIER à tous les clients. Un drag de 30 acteurs à ~30 Hz = ~900
+   diffusions/s tentées, chacune avec re-rendu React complet. Nouveau
+   message groupé `set_activations` (une liste d'entrées, corps commun
+   `_apply_activation_patch` partagé avec la version unitaire,
+   auto-duration/rebuild/diffusion UNE fois par lot) — branché sur tous
+   les chemins multi : gizmo (drag + relâchement), drag de groupe dans la
+   scène, dépôt en grille, timing groupé, dupliquer/coller/diviser un
+   bloc.
+2. **`resolve_block_context` en O(P²)** : depuis la refonte orientation,
+   le calcul du lacet départ/cible rappelait `resolve_positions` (tout le
+   projet) DEUX FOIS PAR ACTEUR du bloc — rejoué à chaque écho de projet
+   pendant le geste. La résolution globale est maintenant MÉMOÏSÉE par
+   timestamp au niveau de l'appel (les acteurs d'un bloc partagent
+   quasi toujours les mêmes instants) : ~5 ms/appel sur un projet de 79
+   points / bloc de 30 acteurs, au lieu de ~30× plus.
