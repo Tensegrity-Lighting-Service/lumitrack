@@ -1123,6 +1123,7 @@ function App() {
           selectedCueId={selectedCueId}
           blockContext={blockContext}
           onSelectPoint={setSelectedPointId}
+          onSelectCue={setSelectedCueId}
           cameraLocked={cameraLocked}
           fitToken={fitToken}
           editingZone={editingZone}

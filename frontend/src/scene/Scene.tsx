@@ -1215,10 +1215,16 @@ function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZo
  * (le centre du groupe sélectionné) — plus prévisible pour "resserrer/
  * écarter une formation", à valider à l'usage.
  */
-function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, controlsRef, snapToGrid, gridSizeCm, dragActiveRef }: {
+function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, controlsRef, snapToGrid, gridSizeCm, dragActiveRef, ensureGestureCue }: {
   project: Project
   positions: Record<string, Pose>
   selectedCueId: string
+  /** Fournit le cue où écrire le geste — le bloc actif, ou un bloc
+   * "Entrée" créé au playhead s'il n'y en a aucun (fix 2026-08-05 : le
+   * gizmo se saisissait mais ne déplaçait rien sans bloc actif, sans
+   * aucun retour visuel — "je n'arrive pas à déplacer le groupe
+   * sélectionné avec le gizmo"). */
+  ensureGestureCue: () => string
   selectedPointIds: string[]
   controlsRef: React.RefObject<MapControlsImpl | null>
   snapToGrid: boolean
@@ -1274,6 +1280,9 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     centerY: number
     lastTheta: number
     lastSent: number
+    /** Cue où ce geste écrit (bloc actif ou bloc créé par
+     * ensureGestureCue au début du geste). */
+    cueId: string
   } | null>(null)
 
   // Filet de sécurité : si PivotControls ne redéclenche pas onDragEnd pour
@@ -1321,12 +1330,13 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     component === 'Rotator' ? 'rotate' : component === 'Sphere' ? 'resize' : 'move'
 
   const handleDragStart: NonNullable<React.ComponentProps<typeof PivotControls>['onDragStart']> = (props) => {
-    // La boîte reste visible sans bloc actif (repère visuel), mais il n'y a
-    // alors nulle part où écrire un geste — pas de bloc, pas de drag.
-    if (!selectedCueId) return
     const members = membersNow()
     if (members.length === 0) return
-    dragRef.current = { kind: kindFor(props.component), members, centerX, centerY, lastTheta: 0, lastSent: 0 }
+    // Sans bloc actif, le geste en crée un au playhead (ensureGestureCue) —
+    // avant, il était silencieusement ignoré : gizmo saisissable mais
+    // inerte, aucun retour (signalé 2026-08-05).
+    const cueId = ensureGestureCue()
+    dragRef.current = { kind: kindFor(props.component), members, centerX, centerY, lastTheta: 0, lastSent: 0, cueId }
     dragActiveRef.current = true
     if (controlsRef.current) controlsRef.current.enabled = false
   }
@@ -1376,7 +1386,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       const qLocal = new THREE.Vector3(...stageToLocal(m.baseX, m.baseY, 0))
       const qNew = qLocal.clone().applyMatrix4(effectiveDelta)
       const rotating = drag.kind === 'rotate'
-      sidecar.setActivation(selectedCueId, m.pointId, {
+      sidecar.setActivation(drag.cueId, m.pointId, {
         targetXCm: qNew.x / CM_TO_M, targetYCm: qNew.z / CM_TO_M,
         ...(rotating && (m.baseTravelYaw !== null || m.baseArrivalYaw !== null)
           ? { orientationOverridden: true } : {}),
@@ -1407,7 +1417,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       // réinitialise la courbe de l'acteur") — ces champs ne doivent être
       // touchés que quand un arc réel a été calculé (groupe, rayon non nul).
       const r = Math.hypot(m.baseX - drag.centerX, m.baseY - drag.centerY)
-      sidecar.setActivation(selectedCueId, m.pointId, {
+      sidecar.setActivation(drag.cueId, m.pointId, {
         targetXCm: arc.targetXCm,
         targetYCm: arc.targetYCm,
         ...(r >= 1e-6
@@ -1460,7 +1470,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
 
 function SceneContent({
   project, positions, tMs, selectedPointId, selectedPointIds, selectedCueId, blockContext, onSelectPoint, onSelectPoints,
-  onLassoRect, cameraLocked, fitToken, editingZone,
+  onSelectCue, onLassoRect, cameraLocked, fitToken, editingZone,
   gridOpacity, snapToGrid, zoomAction, dropHandleRef, onToggleGrid, onFitToWindow,
 }: {
   project: Project
@@ -1472,6 +1482,7 @@ function SceneContent({
   blockContext: BlockContextMessage | null
   onSelectPoint: (pointId: string) => void
   onSelectPoints: (ids: string[]) => void
+  onSelectCue: (cueId: string) => void
   onLassoRect: (rect: { x: number; y: number; w: number; h: number } | null) => void
   cameraLocked: boolean
   fitToken: number
@@ -1491,6 +1502,11 @@ function SceneContent({
   const stageGroupRef = useRef<THREE.Group>(null)
   type SceneDrag =
     | { kind: 'target'; pointId: string; planeY: number; lastSent: number;
+        /** Cue dans lequel ce geste écrit — le bloc actif, ou un bloc
+         * "Entrée" créé au pointerdown s'il n'y en avait aucun
+         * (ensureGestureCue) : la closure selectedCueId ne se met à jour
+         * qu'au re-render, trop tard pour les premiers pointermove. */
+        cueId: string
         /** Transformation groupée : membres avec leur position de base, et
          * curseur de référence (cm) fixé au premier échantillon du drag —
          * chaque membre suit alors le MÊME delta que la souris. */
@@ -1534,6 +1550,20 @@ function SceneContent({
   positionsRef.current = positions
   const tMsRef = useRef(tMs)
   tMsRef.current = tMs
+  // Un geste d'édition dans la scène (glisser un acteur, gizmo de la boîte
+  // de transformation) SANS bloc actif crée un bloc "Entrée" au playhead et
+  // le sélectionne — même comportement que le dépôt depuis le roster
+  // (placeActorsAt). Avant (fix 2026-08-05, "je n'arrive pas à déplacer le
+  // groupe sélectionné avec le gizmo") : le geste était silencieusement
+  // ignoré — la boîte s'affichait, le gizmo se saisissait, mais rien ne
+  // bougeait, sans aucun retour.
+  const ensureGestureCue = (): string => {
+    if (selectedCueId) return selectedCueId
+    const cueId = crypto.randomUUID()
+    sidecar.addCue('Entrée', tMsRef.current, 2000, '#4FF5E0', 0, cueId)
+    onSelectCue(cueId)
+    return cueId
+  }
   const [terrainBounds, setTerrainBounds] = useState<PlanarBounds | null>(null)
   const onTerrainBounds = useCallback((b: PlanarBounds) => setTerrainBounds(b), [])
   const [snapPoints, setSnapPoints] = useState<SnapPoint[]>([])
@@ -1737,7 +1767,12 @@ function SceneContent({
 
     const onMove = (e: PointerEvent) => {
       const drag = dragRef.current
-      if (!drag || !selectedCueId) return
+      if (!drag) return
+      // Le geste 'target' porte SON cue (créé au pointerdown si aucun bloc
+      // n'était actif, voir ensureGestureCue) — ne pas dépendre du
+      // selectedCueId de la closure, qui ne se met à jour qu'au re-render.
+      const gestureCueId = drag.kind === 'target' ? drag.cueId : selectedCueId
+      if (!gestureCueId) return
       const now = performance.now()
       if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
       drag.lastSent = now
@@ -1766,17 +1801,17 @@ function SceneContent({
             dy = Math.round(dy / proj.gridSizeCm) * proj.gridSizeCm
           }
           for (const m of drag.group) {
-            sidecar.setActivation(selectedCueId, m.pointId, {
+            sidecar.setActivation(gestureCueId, m.pointId, {
               targetXCm: m.baseX + dx, targetYCm: m.baseY + dy,
             })
           }
         } else {
-          sidecar.setActivation(selectedCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
+          sidecar.setActivation(gestureCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
         }
         return
       }
 
-      const cue = proj.cues.find((c) => c.id === selectedCueId)
+      const cue = proj.cues.find((c) => c.id === gestureCueId)
       const act = cue?.activations[drag.pointId]
       if (!act) return
 
@@ -1784,7 +1819,7 @@ function SceneContent({
         const wps = (act.pathPoints ?? []).map((wp) => ({ ...wp }))
         if (!wps[drag.index]) return
         wps[drag.index] = { ...wps[drag.index], xCm, yCm }
-        sidecar.setActivation(selectedCueId, drag.pointId, { pathPoints: wps })
+        sidecar.setActivation(gestureCueId, drag.pointId, { pathPoints: wps })
         return
       }
 
@@ -1794,12 +1829,12 @@ function SceneContent({
       if (!entry) return
       if (drag.anchor === 'start') {
         if (!entry.startPose) return
-        sidecar.setActivation(selectedCueId, drag.pointId, {
+        sidecar.setActivation(gestureCueId, drag.pointId, {
           startHandle: { dxCm: xCm - entry.startPose[0], dyCm: yCm - entry.startPose[1] },
         })
       } else if (drag.anchor === 'target') {
         if (!entry.targetPose) return
-        sidecar.setActivation(selectedCueId, drag.pointId, {
+        sidecar.setActivation(gestureCueId, drag.pointId, {
           targetHandle: { dxCm: xCm - entry.targetPose[0], dyCm: yCm - entry.targetPose[1] },
         })
       } else {
@@ -1817,7 +1852,7 @@ function SceneContent({
           wp.outDyCm = dy
           if (!e.altKey) { wp.inDxCm = -dx; wp.inDyCm = -dy }
         }
-        sidecar.setActivation(selectedCueId, drag.pointId, { pathPoints: wps })
+        sidecar.setActivation(gestureCueId, drag.pointId, { pathPoints: wps })
       }
     }
 
@@ -2194,9 +2229,11 @@ function SceneContent({
     // Glisser un acteur DÉJÀ dans la sélection multiple ne la casse pas :
     // c'est le geste "transformer la sélection". Hors sélection : simple.
     if (!inSelection) onSelectPoint(pointId)
-    if (!selectedCueId) return
     const pose = positions[pointId]
     if (!pose) return
+    // Sans bloc actif : le geste en crée un au playhead (ensureGestureCue)
+    // au lieu d'être silencieusement ignoré.
+    const gestureCueId = ensureGestureCue()
     // Actor height only depends on the group's Y-axis rotation, which never
     // touches Y — so local height == world height regardless of the
     // stage's placement (position/rotation) inside the terrain.
@@ -2204,7 +2241,7 @@ function SceneContent({
     const members = inSelection && selectedIdsRef.current.length > 1
       ? selectedIdsRef.current : [pointId]
     dragRef.current = {
-      kind: 'target', pointId, planeY, lastSent: 0,
+      kind: 'target', pointId, planeY, lastSent: 0, cueId: gestureCueId,
       group: members.length > 1 ? groupBases(members) : null,
       baseCursor: null,
     }
@@ -2226,11 +2263,12 @@ function SceneContent({
       return
     }
     onSelectPoint(pointId)
+    // Un ghost n'existe qu'avec un bloc actif — pas de création ici.
     if (!selectedCueId) return
     const members = inSelection && selectedIdsRef.current.length > 1
       ? selectedIdsRef.current : [pointId]
     dragRef.current = {
-      kind: 'target', pointId, planeY: targetZCm * CM_TO_M, lastSent: 0,
+      kind: 'target', pointId, planeY: targetZCm * CM_TO_M, lastSent: 0, cueId: selectedCueId,
       group: members.length > 1 ? groupBases(members) : null,
       baseCursor: null,
     }
@@ -2381,7 +2419,7 @@ function SceneContent({
                 pose={pose}
                 color={point.color}
                 selected={selectedPointIds.includes(point.id)}
-                draggable={Boolean(selectedCueId)}
+                draggable={true /* toujours : sans bloc actif, le geste en crée un (ensureGestureCue) */}
                 opacity={opacity}
                 radiusM={(project.actorDiameterCm / 2) * CM_TO_M}
                 onPointerDown={(e) => handleActorPointerDown(e, point.id)}
@@ -2414,6 +2452,7 @@ function SceneContent({
             snapToGrid={snapToGrid}
             gridSizeCm={project.gridSizeCm}
             dragActiveRef={boxDragActiveRef}
+            ensureGestureCue={ensureGestureCue}
           />
         )}
 
@@ -2500,6 +2539,7 @@ export const Scene = forwardRef<SceneHandle, {
   blockContext: BlockContextMessage | null
   onSelectPoint: (pointId: string) => void
   onSelectPoints: (ids: string[]) => void
+  onSelectCue: (cueId: string) => void
   cameraLocked: boolean
   fitToken: number
   editingZone: boolean

@@ -167,12 +167,17 @@ timeline documenté et validé par le superviseur.
 - [x] Mission 2 — Inspecteur fiable *(✅ validée en UI le 2026-07-28 soir,
   codée par le superviseur, voir verdict)*
 - [ ] Mission 3 — Finitions desktop (dialogues natifs, undo/redo, rotation)
-  *(mission courante — undo/redo livré le 2026-07-31, voir note ci-dessous ;
-  restent : 2 `window.prompt` (nouveau projet, renommage de bloc dans
-  CueTimeline.tsx) et à vérifier si la rotation souris existe déjà pour un
-  acteur seul en mode édition de bloc, distincte de la boîte de
-  transformation multi-sélection déjà livrée)*
-- [ ] Mission 4 — Timeline pro
+  *(undo/redo livré le 2026-07-31 ; rotation d'un acteur seul : EXISTE —
+  vérifié le 2026-08-05, la boîte de transformation s'affiche dès 1 acteur
+  sélectionné, bague de rotation comprise (PivotControls, `singleMember`
+  ne désactive que la mise à l'échelle) ; reste : 2 `window.prompt`
+  (nouveau projet, renommage de bloc dans CueTimeline.tsx))*
+- [ ] Mission 4 — Timeline pro *(état 2026-08-05 : l'essentiel livré DE
+  FAIT via les missions ultérieures — multi-pistes, zoom fluide,
+  règle/ticks, sélection de plage, courbes — sans verdict formel sur
+  `@xzdarcy/react-timeline-editor` : la timeline est finalement MAISON,
+  la librairie n'a jamais été retenue. Restent : les marqueurs de projet
+  nommés (piste Repères), toujours reportés)*
 
 ## Verdicts du superviseur
 
@@ -625,12 +630,12 @@ relative, LTP inter-groupes), reportés en v1.1.
   supprimé, remplacé par un bouton « Gérer… » ouvrant le panneau.
 - 8 tests pytest dédiés (modèle + protocole fil), 119 tests au total.
 
-**Non fait** (hors périmètre choisi par Florian) : pas d'étalement/
+**Non fait** (hors périmètre choisi par Florian) : ~~pas d'étalement/
 disposition en grille automatique au dépôt d'un groupe entier dans la
-scène (la boîte de transformation multi-acteurs sert à réarranger ensuite
-à la main) ; pas de groupes animables (§12.2) — pas d'appartenance
-multiple, pas d'animation de groupe relative, pas de résolution LTP
-inter-groupes.
+scène~~ *(finalement LIVRÉ le 2026-08-04, session corrections en direct :
+grille compacte centrée sur le point de dépôt)* ; pas de groupes
+animables (§12.2) — pas d'appartenance multiple, pas d'animation de
+groupe relative, pas de résolution LTP inter-groupes.
 
 **Correction le même jour** : Florian a préféré un vrai système façon
 navigateur de fichiers (dossiers + glisser-déposer direct) au popup
@@ -729,9 +734,10 @@ geste :
      par défaut selon distance/vitesse — mais seulement pour les acteurs
      NON personnalisés (voir point 6) ; un acteur personnalisé sort du
      recalcul automatique tant qu'il reste personnalisé.
-     **✅ LIVRÉ (2026-08-01)**, hors exclusion des acteurs personnalisés
-     (point 6 n'existe pas encore, donc `auto_duration` recalcule pour
-     TOUS les acteurs du bloc pour l'instant) : `Cue.auto_duration` +
+     **✅ LIVRÉ (2026-08-01)**, ~~hors exclusion des acteurs personnalisés~~
+     *(exclusion CÂBLÉE depuis le point 6 (2026-08-03) :
+     `_apply_auto_duration` respecte `fade_overridden` — vérifié
+     2026-08-05, note périmée)* : `Cue.auto_duration` +
      `Project.reference_speed_cms` (réglage projet, cf. ci-dessous) +
      `core/timeline.required_duration_ms`, recalcul câblé sur
      `set_activation`/`update_cue`/`update_project_settings`, case à
@@ -982,9 +988,10 @@ laissé pour une session avec retour visuel possible, change le modèle
 d'interaction de la scène) et point 7 (refonte inspecteur).
 
 **Périmètre volontairement pas encore tranché / à des sessions futures** :
-un système de points de focus RÉUTILISABLES et nommés (comme les zones
-backstage) plutôt que des coordonnées libres par activation, si le besoin
-s'en fait sentir à l'usage.
+~~un système de points de focus RÉUTILISABLES et nommés (comme les zones
+backstage) plutôt que des coordonnées libres par activation~~ *(LIVRÉ le
+2026-08-04, chantier B de la mission suivante : `Point.is_focus_point`,
+nommés "Focus A/B/…", référencés par id dans les modes focus)*.
 
 ## Mission "modes d'orientation + points de focus + presets de montage" (2026-08-04) — ✅ LIVRÉE (4/4 chantiers)
 
@@ -1087,6 +1094,11 @@ de considérer le sens des boutons de la boussole comme définitif.
 l'orientation — laissé de côté, priorité basse comme prévu au plan.
 
 **D. Presets de montage de fixture — ✅ LIVRÉ (2026-08-04).**
+*(⚠️ RECADRÉ le soir même, voir "Session corrections en direct" plus
+bas : l'assignation décrite ici comme `Point.mount_preset_id` "par
+acteur" est devenue `Activation.mount_preset_id` "par acteur DANS LE
+BLOC", avec "ne rien changer" par défaut — cette section décrit la v1 de
+l'après-midi, la section du soir fait foi.)*
 `Project.fixture_mount_presets: list` — catalogue PROJET éditable/
 ajoutable (pas un enum codé en dur : "vertical"/"horizontal"/"posé au
 sol" ne sont que des lignes créées par l'utilisateur), même schéma que
@@ -1215,3 +1227,13 @@ vérifié en navigateur (Playwright + Edge headless sur le dev stack) :
   l'origine backstage — une première apparition snapait sur sa cible,
   delta nul, lacet à 0° pendant toute l'entrée. Corrigé Python + Rust
   (fixture de parité régénérée), test de régression ajouté.
+- **Un geste d'édition sans bloc actif crée un bloc "Entrée" au playhead**
+  (2026-08-05, "je n'arrive pas à déplacer le groupe sélectionné avec le
+  gizmo") : la boîte de transformation s'affichait et le gizmo se
+  saisissait, mais sans bloc actif le geste était silencieusement ignoré
+  (`if (!selectedCueId) return`) — aucun retour visuel. Nouveau
+  `ensureGestureCue()` (SceneContent) : gizmo ET glisser d'acteur créent
+  désormais un bloc "Entrée" au playhead et le sélectionnent, même
+  comportement que le dépôt depuis le roster. Le cue du geste voyage dans
+  le dragRef (la closure `selectedCueId` ne se met à jour qu'au
+  re-render, trop tard pour les premiers pointermove).
