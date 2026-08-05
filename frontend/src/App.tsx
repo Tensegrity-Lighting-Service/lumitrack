@@ -786,18 +786,38 @@ function App() {
   }, [selectedPointIds])
 
   // Global shortcuts. Skipped while typing in an input/select/color-picker
-  // so Space/Delete keep their normal text-editing meaning there.
+  // so Delete/Ctrl+Z keep their normal text-editing meaning there.
   useEffect(() => {
+    // Seule la SAISIE DE TEXTE garde la barre d'espace (2026-08-05) — pas
+    // les <select>/boutons/cases à cocher.
+    const isTextField = (el: HTMLElement | null): boolean => {
+      if (!el) return false
+      if (el.isContentEditable || el.tagName === 'TEXTAREA') return true
+      if (el.tagName !== 'INPUT') return false
+      const type = (el as HTMLInputElement).type
+      return ['text', 'number', 'search', 'password', 'email', 'url', 'tel'].includes(type)
+    }
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
-      const tag = target?.tagName
-      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || target?.isContentEditable) return
 
+      // Espace = lecture/pause PARTOUT sauf champ texte actif (demande
+      // Florian 2026-08-05) : la garde générique ci-dessous exemptait
+      // aussi SELECT — après un clic sur un menu déroulant, Espace
+      // l'OUVRAIT au lieu de piloter le transport. Traité AVANT la garde,
+      // avec preventDefault qui coupe le comportement natif du contrôle
+      // focalisé (ouvrir le menu, re-cliquer le bouton).
       if (e.code === 'Space') {
+        if (isTextField(target)) return
         e.preventDefault()
         if (playing) sidecar.pause()
         else sidecar.play()
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        return
+      }
+
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         // Ctrl+Z / Ctrl+Maj+Z (§13.1.10) : historique côté sidecar, ce
         // raccourci n'envoie qu'une intention — un undo/redo sans rien à
         // faire est un no-op silencieux côté serveur (test_undo.py).
@@ -1192,17 +1212,48 @@ function App() {
         <h2>{t('inspector.title')}</h2>
         {editingZone && <StagePlacementPanel project={project} />}
         {editingZone && <BackstagePanel project={project} />}
-        {!editingZone && (
-          <ActorInspector project={project} selectedPointIds={selectedPointIds} />
-        )}
-        {selectedCue && selectedPointIds.length > 1 && (
-          <GroupTimingPanel
-            cue={selectedCue}
-            selectedPointIds={selectedPointIds}
-            projectPoints={project.points}
-          />
-        )}
-        {selectedCue ? (
+        {/* L'inspecteur montre l'ACTEUR sélectionné OU le BLOC sélectionné,
+            jamais les deux empilés (demande Florian 2026-08-05, absorbe le
+            point 7 "refonte inspecteur") : un acteur sélectionné prend
+            toute la colonne — ses propriétés + sa carte d'activation dans
+            le bloc actif, dépliée ; sans acteur, les réglages du bloc et
+            la liste de ses activations (cliquer une carte bascule en vue
+            acteur). */}
+        {!editingZone && selectedPointIds.length > 0 ? (
+          <>
+            <ActorInspector project={project} selectedPointIds={selectedPointIds} />
+            {selectedCue && selectedPointIds.length > 1 && (
+              <GroupTimingPanel
+                cue={selectedCue}
+                selectedPointIds={selectedPointIds}
+                projectPoints={project.points}
+              />
+            )}
+            {selectedCue && selectedPointId && (
+              selectedCue.activations[selectedPointId] ? (
+                <ActivationCard
+                  cueId={selectedCue.id}
+                  pointId={selectedPointId}
+                  point={project.points.find((p) => p.id === selectedPointId)}
+                  activation={selectedCue.activations[selectedPointId]}
+                  selected
+                  onSelect={() => {}}
+                  blockContext={blockContext}
+                  allPoints={project.points}
+                  mountPresets={project.fixtureMountPresets}
+                  defaultCollapsed={false}
+                />
+              ) : (
+                <button
+                  className="inspector-activate-btn"
+                  onClick={() => sidecar.setActivation(selectedCue.id, selectedPointId, { easing: 'linear' })}
+                >
+                  {t('cue.activateSelectedPoint')}
+                </button>
+              )
+            )}
+          </>
+        ) : !editingZone && selectedCue ? (
           <CueInspector
             cue={selectedCue}
             projectPoints={project.points}
@@ -1213,7 +1264,7 @@ function App() {
             onOpenBlockDetail={() => setShowBlockDetail(true)}
           />
         ) : (
-          !editingZone && selectedPointIds.length === 0 && (
+          !editingZone && (
             <p className="hint">{t('inspector.emptyHint')}</p>
           )
         )}
@@ -1552,20 +1603,15 @@ function CueInspector({ cue, projectPoints, mountPresets, selectedPointId, onSel
  * d'orientation", 2026-08-04, même esprit que le timing point 6) —
  * préremplit toute NOUVELLE activation du bloc et resynchronise
  * (backend : _apply_cue_orientation_defaults) toute activation existante
- * non personnalisée dès qu'on change un réglage ici. Repliée par défaut,
- * même logique que les cartes d'activation (peu utilisée au quotidien). */
+ * non personnalisée dès qu'on change un réglage ici. TOUJOURS visible,
+ * plus repliable du tout (demande Florian 2026-08-05) — c'est LE réglage
+ * central du bloc, le cacher le faisait passer pour secondaire. */
 function CueOrientationDefaults({ cue, projectPoints }: { cue: Cue; projectPoints: Point[] }) {
   const t = useT()
-  const [collapsed, setCollapsed] = useState(true)
   return (
     <div className="cue-orientation-defaults">
-      <button
-        className="cue-orientation-defaults-toggle"
-        onClick={() => setCollapsed((v) => !v)}
-      >
-        {collapsed ? '▸' : '▾'} {t('cue.blockOrientationDefaultsTitle')}
-      </button>
-      {!collapsed && (
+      <h3 className="cue-orientation-defaults-title">{t('cue.blockOrientationDefaultsTitle')}</h3>
+      {(
         <div className="activation-orientation">
           <div className="activation-orientation-phase">
             <h4>{t('cue.travelPhase')}</h4>
@@ -1735,7 +1781,7 @@ function OrientationPhaseFields({ phase, mode, fixedDeg, focusId, points, onMode
   )
 }
 
-function ActivationCard({ cueId, pointId, point, activation, selected, onSelect, blockContext, allPoints, mountPresets }: {
+function ActivationCard({ cueId, pointId, point, activation, selected, onSelect, blockContext, allPoints, mountPresets, defaultCollapsed = true }: {
   cueId: string
   pointId: string
   point: Point | undefined
@@ -1745,13 +1791,14 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
   blockContext: BlockContextMessage | null
   allPoints: Point[]
   mountPresets: FixtureMountPreset[]
+  /** false en vue "acteur seul" de l'inspecteur (2026-08-05) : la carte
+   * EST alors le sujet, elle arrive dépliée. true (défaut) dans la liste
+   * du CueInspector — une carte dépliée par acteur rendait l'inspecteur
+   * illisible dès 3-4 acteurs (mission "replier les acteurs", 2026-08-03). */
+  defaultCollapsed?: boolean
 }) {
   const t = useT()
-  // Repliée par défaut (mission "replier les acteurs", 2026-08-03) : une
-  // carte dépliée par acteur activé rendait l'inspecteur illisible dès 3-4
-  // acteurs (cf. point 7 du DIRECTIVES.md, pas encore attaqué en entier).
-  // Repliement PROPRE à chaque carte, indépendant de la sélection.
-  const [collapsed, setCollapsed] = useState(true)
+  const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const set = (patch: Partial<{
     targetXCm: number | null; targetYCm: number | null; targetZCm: number | null
     fadeMs: number; fadeOverridden: boolean
@@ -1869,23 +1916,22 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
             onFocusChange={(id) => setOrientation({ arrivalFocusPointId: id })}
           />
         </div>
-        {/* Preset de montage PAR BLOC (recadrage 2026-08-04) : "Ne rien
-            changer" = ce bloc ne touche pas le canal (le preset gouvernant
-            précédent continue, LTP) ; "Aucun" = efface la correction. */}
+        {/* Preset d'orientation PAR BLOC (recadrage 2026-08-04) : "Ne rien
+            changer" = ce bloc ne touche pas le canal, le preset gouvernant
+            précédent continue (LTP) — logique TOUJOURS tracking, pas
+            d'option "aucun preset" (retirée le 2026-08-05, sans usage
+            réel ; un "" existant en donnée s'affiche comme "ne rien
+            changer" et disparaît à la prochaine écriture). */}
         <div className="activation-orientation-phase">
           <h4>{t('cue.mountPreset')}</h4>
           <label>
             <select
-              value={activation.mountPresetId === null || activation.mountPresetId === undefined
-                ? '~nochange~'
-                : (activation.mountPresetId === '' ? '~none~' : activation.mountPresetId)}
+              value={activation.mountPresetId ? activation.mountPresetId : '~nochange~'}
               onChange={(e) => set({
-                mountPresetId: e.target.value === '~nochange~' ? null
-                  : e.target.value === '~none~' ? '' : e.target.value,
+                mountPresetId: e.target.value === '~nochange~' ? null : e.target.value,
               })}
             >
               <option value="~nochange~">{t('cue.mountPresetNoChange')}</option>
-              <option value="~none~">{t('cue.mountPresetNone')}</option>
               {mountPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </label>

@@ -1237,3 +1237,28 @@ vérifié en navigateur (Playwright + Edge headless sur le dev stack) :
   comportement que le dépôt depuis le roster. Le cue du geste voyage dans
   le dragRef (la closure `selectedCueId` ne se met à jour qu'au
   re-render, trop tard pour les premiers pointermove).
+
+## Batch "finir l'app ce soir" (2026-08-05) — retours de Florian en direct
+
+Cinq retours d'usage, consignés et RATTACHÉS aux chantiers existants
+plutôt que traités comme une mission de plus — l'objectif du soir est de
+resserrer, pas d'étaler :
+
+1. **Preset d'orientation (ex-"preset de montage")** — renommer partout
+   "Preset orientation" ; retirer l'option "Aucun preset" du sélecteur :
+   la logique est TOUJOURS un tracking ("Ne rien changer" = le canal suit
+   le preset gouvernant précédent), l'effacement explicite n'a pas
+   d'usage réel. Le backend garde la tolérance "" (donnée existante),
+   l'UI ne l'émet plus.
+2. **Inspecteur : bloc OU acteur, jamais les deux** (absorbe le point 7
+   "refonte de l'inspecteur", enfin attaqué) : un acteur sélectionné →
+   l'inspecteur ne montre QUE lui ; sinon bloc sélectionné → les réglages
+   du bloc. Plus d'empilement bloc + carte d'acteur.
+3. **"Orientation par défaut du bloc" toujours visible** — ni repliée par
+   défaut, ni repliable du tout (point 7 aussi).
+4. **Highlight du module survolé** (Mission 3, finitions desktop) : un
+   contour blanc autour du module sous la souris (roster / terrain /
+   timeline) — repère visuel de "qui reçoit le clavier".
+5. **Barre d'espace = lecture/pause PARTOUT** (Mission 3) : sauf champ
+   texte actif ; et Espace ne doit plus ouvrir un menu déroulant/bouton
+   qui a le focus (interception globale en phase capture).

@@ -433,13 +433,30 @@
 .compass-se { grid-area: 3 / 3; }
 .cue-orientation-defaults {
   margin-bottom: 10px;
+  border: 1px solid #262b38; border-radius: 6px; padding: 6px 8px;
+  background: #161a24;
 }
-.cue-orientation-defaults-toggle {
-  font-size: 11px; padding: 3px 8px;
+.cue-orientation-defaults-title {
+  margin: 0 0 4px; font-size: 11px; font-weight: 600; color: #8a92a6;
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.inspector-activate-btn {
+  width: 100%; margin-top: 8px; font-size: 12px; padding: 6px 8px;
   background: #1f1f27; color: #b9b9c6; border: 1px solid #30303c;
-  border-radius: 4px; cursor: pointer; width: 100%; text-align: left;
+  border-radius: 4px; cursor: pointer;
 }
-.cue-orientation-defaults-toggle:hover { background: #2a2a35; }
+.inspector-activate-btn:hover { background: #2a2a35; }
+
+/* Repère visuel du module sous la souris (demande Florian 2026-08-05) :
+   contour blanc discret autour du panneau survolé (roster / terrain /
+   timeline) — indique qui recevra les gestes/le clavier. Outline (pas
+   border) : aucun décalage de mise en page, dessiné par-dessus. */
+.roster:hover,
+.scene-view:hover,
+.timeline-dock:hover {
+  outline: 1px solid rgba(255, 255, 255, 0.3);
+  outline-offset: -1px;
+}
 .cue-inspector-title {
   display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
 }
