@@ -33,7 +33,7 @@ import * as THREE from 'three'
 import { fileSrc } from '../fileSrc'
 import { ErrorBoundary } from '../ui/ErrorBoundary'
 import { sidecar } from '../sidecar'
-import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, PathPoint, Point, Project, Pose } from '../types'
+import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, Cue, PathPoint, Point, Project, Pose } from '../types'
 import { boundsOf, rotationArc } from './transformBox'
 import { openContextMenu } from '../ui/contextMenuStore'
 import { buildActorContextMenuSections, buildFocusPointContextMenuSections } from '../ui/actorContextMenu'
@@ -1514,18 +1514,24 @@ function SceneContent({
   const stageGroupRef = useRef<THREE.Group>(null)
   type SceneDrag =
     | { kind: 'target'; pointId: string; planeY: number; lastSent: number;
-        /** Cue dans lequel ce geste écrit — le bloc actif, ou un bloc
-         * "Entrée" créé au pointerdown s'il n'y en avait aucun
-         * (ensureGestureCue) : la closure selectedCueId ne se met à jour
+        /** Cue dans lequel ce geste écrit — le bloc actif, le bloc
+         * GOUVERNANT au playhead (geste libre, point 3), ou un bloc créé
+         * au pointerdown : la closure selectedCueId ne se met à jour
          * qu'au re-render, trop tard pour les premiers pointermove. */
         cueId: string
+        /** Geste libre dans un TROU (point 3, 2026-08-05) : le bloc vient
+         * d'être créé avec arrivée = playhead — à chaque échantillon, sa
+         * durée est recalculée depuis la distance parcourue / la vitesse
+         * de référence (début = arrivée − durée), le bloc s'étire en
+         * direct dans la timeline (c'est l'aperçu "fantôme" du plan). */
+        freeCreate: { originX: number; originY: number; arrivalMs: number } | null
         /** Transformation groupée : membres avec leur position de base, et
          * curseur de référence (cm) fixé au premier échantillon du drag —
          * chaque membre suit alors le MÊME delta que la souris. */
         group: { pointId: string; baseX: number; baseY: number }[] | null
         baseCursor: { x: number; y: number } | null }
-    | { kind: 'waypoint'; pointId: string; index: number; planeY: number; lastSent: number }
-    | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number }
+    | { kind: 'waypoint'; pointId: string; index: number; planeY: number; lastSent: number; cueId: string }
+    | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number; cueId: string }
 
   const dragRef = useRef<SceneDrag | null>(null)
   // Drag actif DANS SelectionTransform (boîte de transfo multi-sélection) :
@@ -1780,10 +1786,10 @@ function SceneContent({
     const onMove = (e: PointerEvent) => {
       const drag = dragRef.current
       if (!drag) return
-      // Le geste 'target' porte SON cue (créé au pointerdown si aucun bloc
-      // n'était actif, voir ensureGestureCue) — ne pas dépendre du
+      // Chaque geste porte SON cue (bloc actif, bloc gouvernant du geste
+      // libre, ou bloc créé au pointerdown) — ne pas dépendre du
       // selectedCueId de la closure, qui ne se met à jour qu'au re-render.
-      const gestureCueId = drag.kind === 'target' ? drag.cueId : selectedCueId
+      const gestureCueId = drag.cueId
       if (!gestureCueId) return
       const now = performance.now()
       if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
@@ -1801,6 +1807,19 @@ function SceneContent({
       }
 
       if (drag.kind === 'target') {
+        // Geste libre dans un trou : le bloc s'étire pour que la durée
+        // colle à distance/vitesse de référence, arrivée figée au playhead
+        // du pointerdown (spec point 3). update_cue resynchronise
+        // lui-même le fade des activations sur la nouvelle durée.
+        if (drag.freeCreate) {
+          const dist = Math.hypot(xCm - drag.freeCreate.originX, yCm - drag.freeCreate.originY)
+          const vref = proj.referenceSpeedCms || 220
+          const fade = Math.max(200, (dist / vref) * 1000)
+          const startMs = Math.max(0, drag.freeCreate.arrivalMs - fade)
+          sidecar.updateCue(gestureCueId, {
+            startMs, durationMs: Math.max(200, drag.freeCreate.arrivalMs - startMs),
+          })
+        }
         if (drag.group) {
           // Transformation groupée : delta souris depuis le premier
           // échantillon, appliqué à la base de CHAQUE membre (les
@@ -2025,7 +2044,7 @@ function SceneContent({
     onSelectPoint(pointId)
     setSelectedWaypoint({ pointId, index })
     if (!selectedCueId) return
-    dragRef.current = { kind: 'waypoint', pointId, index, planeY: zCm * CM_TO_M, lastSent: 0 }
+    dragRef.current = { kind: 'waypoint', pointId, index, planeY: zCm * CM_TO_M, lastSent: 0, cueId: selectedCueId }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
@@ -2035,7 +2054,7 @@ function SceneContent({
     hitObjectRef.current = true
     if (typeof anchor === 'number') setSelectedWaypoint({ pointId, index: anchor })
     if (!selectedCueId) return
-    dragRef.current = { kind: 'handle', pointId, anchor, side, planeY: zCm * CM_TO_M, lastSent: 0 }
+    dragRef.current = { kind: 'handle', pointId, anchor, side, planeY: zCm * CM_TO_M, lastSent: 0, cueId: selectedCueId }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
@@ -2221,6 +2240,24 @@ function SceneContent({
     return out
   }
 
+  /** Activation GOUVERNANT la position x/y de cet acteur à l'instant t —
+   * même règle LTP que la lecture (dernier bloc démarré à-ou-avant t qui
+   * touche x/y). Pure logique d'ÉDITION (savoir OÙ écrire un geste),
+   * aucune position n'est résolue ici (§13.1.7 respecté). */
+  const governingActivationFor = (pointId: string, t: number) => {
+    const proj = liveRef.current.project
+    let best: { cue: Cue; effStart: number; fadeEnd: number } | null = null
+    for (const cue of proj.cues) {
+      const act = cue.activations[pointId]
+      if (!act || (act.targetXCm === null && act.targetYCm === null)) continue
+      const effStart = cue.startMs + act.startOffsetMs
+      if (effStart <= t && (!best || effStart >= best.effStart)) {
+        best = { cue, effStart, fadeEnd: effStart + act.fadeMs }
+      }
+    }
+    return best
+  }
+
   const handleActorPointerDown = (e: ThreeEvent<PointerEvent>, pointId: string) => {
     e.stopPropagation()
     hitObjectRef.current = true
@@ -2243,17 +2280,64 @@ function SceneContent({
     if (!inSelection) onSelectPoint(pointId)
     const pose = positions[pointId]
     if (!pose) return
-    // Sans bloc actif : le geste en crée un au playhead (ensureGestureCue)
-    // au lieu d'être silencieusement ignoré.
-    const gestureCueId = ensureGestureCue()
     // Actor height only depends on the group's Y-axis rotation, which never
     // touches Y — so local height == world height regardless of the
     // stage's placement (position/rotation) inside the terrain.
     const planeY = pose[2] * CM_TO_M
     const members = inSelection && selectedIdsRef.current.length > 1
       ? selectedIdsRef.current : [pointId]
+
+    // GESTE LIBRE (point 3, 2026-08-05) : avec un bloc actif, comportement
+    // historique (le geste édite CE bloc). Sans bloc actif, le geste se
+    // route selon la position du playhead par rapport au bloc GOUVERNANT
+    // cet acteur (LTP) :
+    //   - plein fade  -> insère un waypoint dans le tracé à cet instant ;
+    //   - maintien    -> déplace la cible du bloc gouvernant ;
+    //   - trou        -> crée un bloc, arrivée = playhead, durée étirée en
+    //                    direct à distance/vitesse de référence (onMove).
+    let gestureCueId: string
+    let freeCreate: { originX: number; originY: number; arrivalMs: number } | null = null
+    if (selectedCueId) {
+      gestureCueId = selectedCueId
+    } else {
+      const t = tMsRef.current
+      const gov = governingActivationFor(pointId, t)
+      if (gov && t < gov.fadeEnd && gov.fadeEnd > gov.effStart && members.length === 1) {
+        // Plein fade : insertion d'un waypoint à la fraction TEMPORELLE du
+        // playhead (approximation du paramètre du tracé — le nœud est de
+        // toute façon aussitôt déplacé sous la souris), puis le geste
+        // continue comme un drag de waypoint classique.
+        const act = gov.cue.activations[pointId]
+        const wps = (act.pathPoints ?? []).map((wp: PathPoint) => ({ ...wp }))
+        const segCount = wps.length + 1
+        const f = (t - gov.effStart) / (gov.fadeEnd - gov.effStart)
+        const segIdx = Math.min(segCount - 1, Math.max(0, Math.floor(f * segCount)))
+        wps.splice(segIdx, 0, { xCm: pose[0], yCm: pose[1], inDxCm: null, inDyCm: null, outDxCm: null, outDyCm: null })
+        sidecar.setActivation(gov.cue.id, pointId, { pathPoints: wps })
+        onSelectCue(gov.cue.id)
+        setSelectedWaypoint({ pointId, index: segIdx })
+        dragRef.current = { kind: 'waypoint', pointId, index: segIdx, planeY, lastSent: 0, cueId: gov.cue.id }
+        if (controlsRef.current) controlsRef.current.enabled = false
+        return
+      }
+      if (gov) {
+        // Maintien : la cible du bloc gouvernant est LA chose qu'on tient.
+        gestureCueId = gov.cue.id
+        onSelectCue(gov.cue.id)
+      } else {
+        // Trou : nouveau bloc, arrivée figée au playhead — la durée réelle
+        // est recalculée à chaque échantillon du geste (freeCreate).
+        gestureCueId = crypto.randomUUID()
+        const arrivalMs = tMsRef.current
+        sidecar.addCue('Entrée', Math.max(0, arrivalMs - 200), 200, '#4FF5E0', 0, gestureCueId)
+        onSelectCue(gestureCueId)
+        freeCreate = { originX: pose[0], originY: pose[1], arrivalMs }
+      }
+    }
+
     dragRef.current = {
       kind: 'target', pointId, planeY, lastSent: 0, cueId: gestureCueId,
+      freeCreate,
       group: members.length > 1 ? groupBases(members) : null,
       baseCursor: null,
     }
@@ -2281,6 +2365,7 @@ function SceneContent({
       ? selectedIdsRef.current : [pointId]
     dragRef.current = {
       kind: 'target', pointId, planeY: targetZCm * CM_TO_M, lastSent: 0, cueId: selectedCueId,
+      freeCreate: null,
       group: members.length > 1 ? groupBases(members) : null,
       baseCursor: null,
     }

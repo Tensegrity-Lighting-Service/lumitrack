@@ -755,11 +755,20 @@ geste :
      pas câblé.
    - **Aperçu pendant le geste** : bloc fantôme qui se dessine en temps
      réel dans la timeline (position + durée) pendant le glisser.
-   - **⏳ Pas commencé** : le geste de glisser libre lui-même (créer/
-     étendre/insérer un nœud selon le cas du playhead) — la pièce la plus
-     grosse et la plus risquée de cette mission (change le modèle
-     d'interaction de la scène), volontairement laissée pour une session
-     avec retour visuel possible plutôt que construite à l'aveugle.
+   - **✅ LIVRÉ (2026-08-05)** : le geste de glisser libre lui-même —
+     sans bloc actif, le geste se route selon le playhead par rapport au
+     bloc GOUVERNANT l'acteur (LTP, logique d'édition frontend, aucune
+     position résolue) : plein fade → insertion d'un waypoint à la
+     fraction temporelle du playhead puis drag du nœud ; maintien →
+     déplace la cible du bloc gouvernant (et le sélectionne) ; trou →
+     crée un bloc "Entrée" avec ARRIVÉE = playhead et durée étirée en
+     direct à distance/vitesse de référence pendant le geste (le bloc
+     réel qui s'étire dans la timeline EST l'aperçu "fantôme" prévu ; le
+     badge de vitesse du bloc suit en direct = thermomètre pendant le
+     geste). Avec un bloc actif : comportement historique inchangé (le
+     geste édite ce bloc). Chaque geste transporte son cue dans le
+     dragRef (la closure selectedCueId arrive trop tard pour les
+     premiers pointermove). À VALIDER en usage réel par Florian.
 
 **4. Diviser un bloc au playhead** (nouvelle action, menu contextuel du
 bloc) — fige la position de CHAQUE acteur activé à l'instant précis du
