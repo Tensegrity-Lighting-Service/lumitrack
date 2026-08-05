@@ -1,23 +1,22 @@
 // Sélecteur de direction à 8 points cardinaux — préréglages rapides pour un
-// angle "Fixe" (mission "modes d'orientation", 2026-08-04). Mapping degré <->
-// direction : convention mathématique standard (0°=Est, 90°=Nord), cohérente
-// avec atan2(dy,dx) déjà utilisé partout ailleurs dans la résolution/scène
-// (voir Scene.tsx::SelectionTransform). Signalé au plan : quel coin de
-// l'écran correspond réellement à "Nord" doit être confirmé en direct dans
-// l'app (placer un point de focus au nord d'un acteur, lire l'angle résolu),
-// pas déduit à froid de la convention caméra — à ajuster si besoin une fois
-// vérifié visuellement.
+// angle "Fixe" (mission "modes d'orientation", 2026-08-04). Mapping VÉRIFIÉ
+// en direct le 2026-08-05 (retour de Florian "quart de tour pas bon") :
+// le lacet backend = atan2(dy, dx) dans le repère scène, x → droite mais
+// y → BAS d'écran (origine en haut à gauche) — donc 0° = Est, 90° = SUD
+// (pas nord : l'axe y est inversé par rapport à la convention math
+// habituelle), 270° = Nord. Les libellés N/S de ce widget désignent le
+// haut/bas de l'ÉCRAN en vue du dessus.
 import { useT } from '../i18n'
 
 const DIRECTIONS: Array<{ deg: number; label: string; area: string }> = [
-  { deg: 135, label: 'NW', area: 'nw' },
-  { deg: 90, label: 'N', area: 'n' },
-  { deg: 45, label: 'NE', area: 'ne' },
+  { deg: 225, label: 'NW', area: 'nw' },
+  { deg: 270, label: 'N', area: 'n' },
+  { deg: 315, label: 'NE', area: 'ne' },
   { deg: 180, label: 'W', area: 'w' },
   { deg: 0, label: 'E', area: 'e' },
-  { deg: 225, label: 'SW', area: 'sw' },
-  { deg: 270, label: 'S', area: 's' },
-  { deg: 315, label: 'SE', area: 'se' },
+  { deg: 135, label: 'SW', area: 'sw' },
+  { deg: 90, label: 'S', area: 's' },
+  { deg: 45, label: 'SE', area: 'se' },
 ]
 
 export function CompassPicker({ valueDeg, onPick }: { valueDeg: number; onPick: (deg: number) => void }) {

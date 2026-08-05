@@ -226,7 +226,17 @@ function Actor({ pose, color, selected, draggable, opacity, radiusM, onPointerDo
   return (
     <group
       position={[x, y, z]}
-      rotation={[0, -yawRad, 0]}
+      // π/2 − yaw, pas −yaw (fix 2026-08-05, "la flèche est de côté, 90°
+      // horaire") : le backend définit lacet = atan2(dy, dx) dans le
+      // repère scène (x → droite, y → bas d'écran) — lacet 0° = est. Le
+      // cône au repos pointe +Z local (= y scène, bas d'écran) et
+      // Ry(θ) envoie +Z sur (sin θ, cos θ) : pour viser (cos yaw, sin yaw)
+      // il faut θ = π/2 − yaw. L'ancien −yaw laissait la flèche 90°
+      // horaire à côté de la direction réelle (visible en mode "suivre la
+      // trajectoire" : l'acteur marchait le long de la ligne, flèche de
+      // travers). Même formule que TargetGhost — les deux DOIVENT bouger
+      // ensemble.
+      rotation={[0, Math.PI / 2 - yawRad, 0]}
       onPointerDown={onPointerDown}
       onContextMenu={onContextMenu}
       onPointerOver={() => { document.body.style.cursor = draggable ? 'grab' : 'pointer' }}
@@ -548,7 +558,9 @@ function TargetGhost({ pose, color, emphasis, onPointerDown }: {
   })
   const opacity = EMPHASIS_OPACITY[emphasis]
   return (
-    <group position={[x, y, z]} rotation={[0, -yawRad, 0]}>
+    // π/2 − yaw : même convention que Actor (voir son commentaire) —
+    // lacet 0° = est, cône au repos vers +Z local.
+    <group position={[x, y, z]} rotation={[0, Math.PI / 2 - yawRad, 0]}>
       <group
         ref={scaledRef}
         onPointerDown={onPointerDown}
