@@ -13,16 +13,26 @@ export function ContextMenu() {
   useEffect(() => {
     if (!state) return
     const close = () => closeContextMenu()
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
     // pointerdown (pas click) : se ferme dès l'appui, avant qu'un éventuel
     // second clic droit ailleurs n'ouvre un nouveau menu par-dessus.
-    window.addEventListener('pointerdown', close, true)
+    // FILTRE par cible (fix 2026-08-05, "clic droit pour renommer bloc
+    // marche pas") : ce listener est en phase CAPTURE — le stopPropagation
+    // du menu (phase bubble) ne l'atteignait jamais, l'appui sur un ITEM
+    // fermait donc le menu qui pouvait se démonter avant que le `click` de
+    // l'item ne parte. Course perdue systématiquement pour "Renommer"
+    // (dialogue jamais ouvert), gagnée par chance pour d'autres items.
+    const closeIfOutside = (e: Event) => {
+      if (menuRef.current && e.target instanceof Node && menuRef.current.contains(e.target)) return
+      closeContextMenu()
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    window.addEventListener('pointerdown', closeIfOutside, true)
     window.addEventListener('wheel', close, true)
     window.addEventListener('resize', close)
     window.addEventListener('blur', close)
     window.addEventListener('keydown', onKey)
     return () => {
-      window.removeEventListener('pointerdown', close, true)
+      window.removeEventListener('pointerdown', closeIfOutside, true)
       window.removeEventListener('wheel', close, true)
       window.removeEventListener('resize', close)
       window.removeEventListener('blur', close)
