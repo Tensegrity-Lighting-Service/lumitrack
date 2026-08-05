@@ -320,6 +320,12 @@ def _sync_activation_orientation_defaults(cue: Cue, act: Activation) -> None:
         act.arrival_orientation_mode = cue.default_arrival_orientation_mode
         act.arrival_fixed_yaw_deg = cue.default_arrival_fixed_yaw_deg or 0.0
         act.arrival_focus_point_id = cue.default_arrival_focus_point_id
+    if cue.default_mount_preset_id is not None:
+        # "" = défaut explicite "ne rien changer" -> l'activation repasse à
+        # None ; sinon l'id du preset (2026-08-05, preset au niveau bloc).
+        act.mount_preset_id = cue.default_mount_preset_id or None
+    if cue.default_yaw_turn_ms is not None:
+        act.yaw_turn_ms = max(0.0, float(cue.default_yaw_turn_ms))
 
 
 def _apply_cue_orientation_defaults(cue: Cue) -> None:
@@ -613,6 +619,12 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             duration_ms=float(msg.get("durationMs", 1000.0)),
             color=msg.get("color", "#4F6DF5"),
             lane=max(0, int(msg.get("lane", 0))),
+            # Défauts d'orientation d'un bloc NEUF (demande Florian
+            # 2026-08-05) : trajet "suivre la trajectoire", arrivée "ne
+            # change pas" — le comportement le plus naturel pour un acteur
+            # porté. Les blocs existants (chargés) gardent leurs défauts.
+            default_travel_orientation_mode="path",
+            default_arrival_orientation_mode="hold",
         )
         session.project.cues.append(cue)
         session.project.sort_cues()
@@ -660,6 +672,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             "defaultTravelOrientationMode", "defaultTravelFixedYawDeg",
             "defaultTravelFocusPointId", "defaultArrivalOrientationMode",
             "defaultArrivalFixedYawDeg", "defaultArrivalFocusPointId",
+            "defaultMountPresetId", "defaultYawTurnMs",
         )
         if "defaultTravelOrientationMode" in msg:
             cue.default_travel_orientation_mode = msg["defaultTravelOrientationMode"]
@@ -673,6 +686,10 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             cue.default_arrival_fixed_yaw_deg = msg["defaultArrivalFixedYawDeg"]
         if "defaultArrivalFocusPointId" in msg:
             cue.default_arrival_focus_point_id = msg["defaultArrivalFocusPointId"]
+        if "defaultMountPresetId" in msg:
+            cue.default_mount_preset_id = msg["defaultMountPresetId"]
+        if "defaultYawTurnMs" in msg:
+            cue.default_yaw_turn_ms = msg["defaultYawTurnMs"]
         if any(k in msg for k in orientation_default_keys):
             _apply_cue_orientation_defaults(cue)
         session.project.sort_cues()
@@ -712,6 +729,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         orientation_keys = (
             "travelOrientationMode", "travelFixedYawDeg", "travelFocusPointId",
             "arrivalOrientationMode", "arrivalFixedYawDeg", "arrivalFocusPointId",
+            "mountPresetId", "yawTurnMs",
         )
         if is_new_activation and not any(k in msg for k in orientation_keys):
             # Préremplissage (DIRECTIVES.md point 5/6, "réglage par défaut"
@@ -720,7 +738,9 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # BLOC s'ils sont réglés, sinon le repli du Point (trajet
             # seulement — l'arrivée retombe toujours sur "hold").
             if (cue.default_travel_orientation_mode is not None
-                    or cue.default_arrival_orientation_mode is not None):
+                    or cue.default_arrival_orientation_mode is not None
+                    or cue.default_mount_preset_id is not None
+                    or cue.default_yaw_turn_ms is not None):
                 _sync_activation_orientation_defaults(cue, act)
             else:
                 point = session.project.point_by_id(point_id)
@@ -774,6 +794,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # "" = "aucun preset" (efface), sinon id de preset — voir
             # Activation.mount_preset_id.
             act.mount_preset_id = msg["mountPresetId"]
+        if "yawTurnMs" in msg:
+            act.yaw_turn_ms = max(0.0, float(msg["yawTurnMs"] or 0.0))
         # Tracé spatial (motion path) : listes/dicts écrits tels quels,
         # null efface (retour à la ligne droite).
         if "pathPoints" in msg:

@@ -179,6 +179,16 @@ class Activation:
     arrival_orientation_mode: str = "hold"
     arrival_fixed_yaw_deg: float = 0.0
     arrival_focus_point_id: Optional[str] = None
+    # Temps de rotation (2026-08-05, "ajouter le temps de rotation qui pour
+    # le moment est cut") : durée (ms) du fondu du lacet aux TRANSITIONS —
+    # à l'entrée de la fenêtre de l'activation (depuis la valeur qui
+    # gouvernait juste avant) et à la bascule trajet→arrivée. 0 = cut
+    # (comportement depuis la refonte du 08-04). Toujours en plus court
+    # chemin angulaire, easing smoothstep — ce n'est PAS le retour de
+    # l'ancien lacet animé "manual" : la CIBLE reste discrète/dérivée, seul
+    # le raccord est adouci. Lu par la résolution (timeline.py::_resolve_yaw)
+    # → miroir Rust obligatoire.
+    yaw_turn_ms: float = 0.0
     # Mission "global vs sélectif" étendue à l'orientation (2026-08-04,
     # même principe que fade_overridden) : marque une personnalisation
     # manuelle qui sort du réglage par défaut du bloc (Cue.default_travel_*/
@@ -246,6 +256,7 @@ class Activation:
             "arrivalOrientationMode": self.arrival_orientation_mode,
             "arrivalFixedYawDeg": self.arrival_fixed_yaw_deg,
             "arrivalFocusPointId": self.arrival_focus_point_id,
+            "yawTurnMs": self.yaw_turn_ms,
             "mountPresetId": self.mount_preset_id,
             "curves": self.curves,
             "pathPoints": self.path_points,
@@ -268,6 +279,7 @@ class Activation:
             arrival_orientation_mode=d.get("arrivalOrientationMode", "hold"),
             arrival_fixed_yaw_deg=float(d.get("arrivalFixedYawDeg", 0.0)),
             arrival_focus_point_id=d.get("arrivalFocusPointId"),
+            yaw_turn_ms=max(0.0, float(d.get("yawTurnMs", 0.0))),
             mount_preset_id=d.get("mountPresetId"),
             curves=d.get("curves"),
             path_points=d.get("pathPoints"),
@@ -315,6 +327,16 @@ class Cue:
     default_arrival_orientation_mode: Optional[str] = None
     default_arrival_fixed_yaw_deg: Optional[float] = None
     default_arrival_focus_point_id: Optional[str] = None
+    # Preset d'orientation par défaut du bloc (demande Florian 2026-08-05,
+    # "cela fait sens avec l'option orientation par défaut du bloc") — même
+    # mécanique que les 6 défauts ci-dessus : None = jamais réglé (les
+    # activations gardent leur valeur), "" = défaut explicite "ne rien
+    # changer" (resynchronise les non-personnalisées à None), sinon id d'un
+    # preset de Project.fixture_mount_presets.
+    default_mount_preset_id: Optional[str] = None
+    # Temps de rotation par défaut du bloc (2026-08-05, même famille) —
+    # None = jamais réglé, sinon millisecondes (voir Activation.yaw_turn_ms).
+    default_yaw_turn_ms: Optional[float] = None
 
     def activation_end_ms(self) -> float:
         """Latest moment any activation in this cue is still fading."""
@@ -466,6 +488,8 @@ class Project:
         preset", efface explicitement) reste valide par construction."""
         valid_ids = {p["id"] for p in self.fixture_mount_presets}
         for cue in self.cues:
+            if cue.default_mount_preset_id and cue.default_mount_preset_id not in valid_ids:
+                cue.default_mount_preset_id = None
             for act in cue.activations.values():
                 if act.mount_preset_id and act.mount_preset_id not in valid_ids:
                     act.mount_preset_id = None
@@ -579,6 +603,8 @@ class Project:
                     "defaultArrivalOrientationMode": c.default_arrival_orientation_mode,
                     "defaultArrivalFixedYawDeg": c.default_arrival_fixed_yaw_deg,
                     "defaultArrivalFocusPointId": c.default_arrival_focus_point_id,
+                    "defaultMountPresetId": c.default_mount_preset_id,
+                    "defaultYawTurnMs": c.default_yaw_turn_ms,
                     "activations": {
                         pid: a.to_dict() for pid, a in c.activations.items()
                     },
@@ -702,6 +728,8 @@ class Project:
                 default_arrival_orientation_mode=c.get("defaultArrivalOrientationMode"),
                 default_arrival_fixed_yaw_deg=c.get("defaultArrivalFixedYawDeg"),
                 default_arrival_focus_point_id=c.get("defaultArrivalFocusPointId"),
+                default_mount_preset_id=c.get("defaultMountPresetId"),
+                default_yaw_turn_ms=c.get("defaultYawTurnMs"),
             ))
         proj.ensure_backstage()
         proj.sort_cues()

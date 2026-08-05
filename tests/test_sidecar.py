@@ -510,6 +510,50 @@ def test_cue_orientation_default_change_resyncs_non_overridden_activations():
     assert cue.activations["p2"].travel_orientation_mode == "path"
 
 
+def test_new_cue_defaults_to_path_travel_and_hold_arrival():
+    """Un bloc NEUF (2026-08-05) part avec trajet="suivre la trajectoire"
+    et arrivée="ne change pas" — et ses nouvelles activations en héritent."""
+    session = Session()
+    session.project.points = [Point(id="p1", name="P1")]
+    _run(_handle_message(session, {
+        "type": "add_cue", "id": "c1", "name": "Bloc", "startMs": 0.0, "durationMs": 2000.0,
+    }))
+    cue = session.project.cue_by_id("c1")
+    assert cue.default_travel_orientation_mode == "path"
+    assert cue.default_arrival_orientation_mode == "hold"
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 10.0,
+    }))
+    act = cue.activations["p1"]
+    assert act.travel_orientation_mode == "path"
+    assert act.arrival_orientation_mode == "hold"
+
+
+def test_cue_default_mount_preset_and_yaw_turn_sync():
+    """Preset orientation + temps de rotation au niveau BLOC (2026-08-05) :
+    même resynchronisation que trajet/arrivée ; "" remet les
+    non-personnalisés à "ne rien changer" (None)."""
+    session = Session()
+    session.project.points = [Point(id="p1", name="P1")]
+    session.project.fixture_mount_presets = [{"id": "vert", "name": "Vertical"}]
+    session.project.cues = [Cue(id="c1", name="c1", start_ms=0, duration_ms=2000.0)]
+    _run(_handle_message(session, {
+        "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 0.0,
+    }))
+    _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "c1",
+        "defaultMountPresetId": "vert", "defaultYawTurnMs": 400.0,
+    }))
+    act = session.project.cue_by_id("c1").activations["p1"]
+    assert act.mount_preset_id == "vert"
+    assert act.yaw_turn_ms == 400.0
+    # "" = défaut explicite "ne rien changer" -> resynchronise à None.
+    _run(_handle_message(session, {
+        "type": "update_cue", "cueId": "c1", "defaultMountPresetId": "",
+    }))
+    assert session.project.cue_by_id("c1").activations["p1"].mount_preset_id is None
+
+
 def test_reverting_orientation_override_resyncs_to_cue_default():
     session = Session()
     session.project.points = [Point(id="p1", name="P1")]

@@ -75,6 +75,11 @@ pub struct Activation {
     pub arrival_fixed_yaw_deg: f64,
     #[serde(default)]
     pub arrival_focus_point_id: Option<String>,
+    /// Temps de rotation (2026-08-05) : fondu du lacet aux transitions
+    /// (entrée de fenêtre + bascule trajet→arrivée), plus court chemin
+    /// angulaire, smoothstep. 0 = cut. Lu par la résolution → mirroré.
+    #[serde(default)]
+    pub yaw_turn_ms: f64,
     /// Mission "global vs sélectif" étendue à l'orientation (2026-08-04) :
     /// contrairement à fade_overridden (repère d'édition pur), CE champ EST
     /// lu au moment de la résolution (touches_orientation, cas de rotation

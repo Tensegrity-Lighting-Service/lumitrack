@@ -461,6 +461,49 @@ def test_orientation_mode_focus_tracks_actor_as_it_moves():
     assert end.yaw_deg == pytest.approx(-45.0, abs=1.0)
 
 
+def test_yaw_turn_ms_smooths_both_transitions():
+    """Temps de rotation (2026-08-05) : yaw_turn_ms fond le raccord à
+    l'ENTRÉE de la fenêtre (depuis la valeur gouvernante précédente) ET à
+    la bascule trajet→arrivée — plus court chemin angulaire, smoothstep.
+    0 (défaut) = cut, comportement de la refonte 08-04 inchangé."""
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=0)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=2000,
+            activations={"a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=2000,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=90,
+                                          arrival_orientation_mode="fixed", arrival_fixed_yaw_deg=180,
+                                          yaw_turn_ms=400)}),
+    ]
+    # Milieu de la fenêtre d'entrée (smoothstep(0.5) = 0.5) : à mi-chemin.
+    assert resolve_positions(project, 1200)["a"].yaw_deg == pytest.approx(45.0)
+    # Fenêtre finie : tient la valeur de trajet.
+    assert resolve_positions(project, 2000)["a"].yaw_deg == pytest.approx(90.0)
+    # Bascule arrivée : fondu 90 -> 180 sur 400 ms après fade_end (3000).
+    assert resolve_positions(project, 3200)["a"].yaw_deg == pytest.approx(135.0)
+    assert resolve_positions(project, 5000)["a"].yaw_deg == pytest.approx(180.0)
+
+
+def test_yaw_turn_takes_shortest_angular_path():
+    """350° -> 10° tourne de +20° (par 360), jamais -340° à rebours."""
+    project = Project()
+    project.points = [Point(id="a", name="A")]
+    project.cues = [
+        Cue(id="c0", name="c0", start_ms=0, duration_ms=0,
+            activations={"a": Activation(target_x_cm=0, target_y_cm=0, fade_ms=0,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=350)}),
+        Cue(id="c1", name="c1", start_ms=1000, duration_ms=1000,
+            activations={"a": Activation(target_x_cm=100, target_y_cm=0, fade_ms=1000,
+                                          travel_orientation_mode="fixed", travel_fixed_yaw_deg=10,
+                                          yaw_turn_ms=400)}),
+    ]
+    mid = resolve_positions(project, 1200)["a"]  # smoothstep(0.5) -> +10°
+    assert mid.yaw_deg == pytest.approx(360.0)
+
+
 def test_travel_and_arrival_focus_points_are_independent():
     """Les deux phases ne partagent jamais la même référence de focus —
     confirmé explicitement par Florian ("indépendant par phase")."""

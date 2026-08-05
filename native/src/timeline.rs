@@ -311,16 +311,37 @@ fn resolve_yaw(
         }
     };
 
+    // Temps de rotation (2026-08-05, port de _resolve_yaw Python) : adoucit
+    // l'entrée de fenêtre et la bascule trajet→arrivée — plus court chemin
+    // angulaire, smoothstep. 0 = cut (inchangé par défaut).
+    let blend = |from_deg: f64, to_deg: f64, progress: f64| -> f64 {
+        let delta = (to_deg - from_deg + 180.0).rem_euclid(360.0) - 180.0;
+        let p = progress.clamp(0.0, 1.0);
+        let eased = p * p * (3.0 - 2.0 * p);
+        from_deg + delta * eased
+    };
+    let turn = act.yaw_turn_ms.max(0.0);
+
     if t_ms < kf.fade_end_ms {
-        return travel_value(t_ms);
+        let value = travel_value(t_ms);
+        if turn > 0.0 && t_ms < kf.start_ms + turn && idx > 0 {
+            let prev = resolve_yaw(project, point_id, kf.start_ms, x, y, resolved_xy, Some(&kfs[..idx]));
+            return blend(prev, value, (t_ms - kf.start_ms) / turn);
+        }
+        return value;
     }
-    match act.arrival_orientation_mode.as_str() {
+    let value = match act.arrival_orientation_mode.as_str() {
         "fixed" => act.arrival_fixed_yaw_deg,
         "focus" => focus_angle(&act.arrival_focus_point_id, act.arrival_fixed_yaw_deg),
         // "hold" (défaut — et repli sûr) : fige ce que le trajet avait
-        // résolu PILE à l'instant où le fondu s'est terminé.
-        _ => travel_value(kf.fade_end_ms),
+        // résolu PILE à l'instant où le fondu s'est terminé — continu par
+        // construction, aucune transition à fondre.
+        _ => return travel_value(kf.fade_end_ms),
+    };
+    if turn > 0.0 && t_ms < kf.fade_end_ms + turn {
+        return blend(travel_value(kf.fade_end_ms), value, (t_ms - kf.fade_end_ms) / turn);
     }
+    value
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

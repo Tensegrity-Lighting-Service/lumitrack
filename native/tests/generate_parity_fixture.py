@@ -118,6 +118,9 @@ def rand_project(n_points, n_cues):
                     arrival_orientation_mode=arrival_mode,
                     arrival_fixed_yaw_deg=round(random.uniform(-360, 720), 1),
                     arrival_focus_point_id=rand_focus_ref() if arrival_mode == "focus" else None,
+                    # ~30% avec un temps de rotation (2026-08-05) — exerce le
+                    # fondu des transitions ; le reste garde le cut (0).
+                    yaw_turn_ms=round(random.uniform(50, 800), 1) if random.random() < 0.3 else 0.0,
                     # ~40 % des activations portent des courbes sur un
                     # sous-ensemble d'axes (le reste teste le repli easing).
                     # Plus d'axe "yaw" (mission "modes d'orientation") : le

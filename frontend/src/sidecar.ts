@@ -198,6 +198,8 @@ class SidecarClient {
     defaultArrivalOrientationMode?: 'hold' | 'fixed' | 'focus' | null
     defaultArrivalFixedYawDeg?: number | null
     defaultArrivalFocusPointId?: string | null
+    defaultMountPresetId?: string | null
+    defaultYawTurnMs?: number | null
   }) {
     this.send({ type: 'update_cue', cueId, ...patch })
   }
@@ -221,6 +223,7 @@ class SidecarClient {
     arrivalFocusPointId?: string | null
     /** null = "ne rien changer", '' = "aucun preset", sinon id de preset. */
     mountPresetId?: string | null
+    yawTurnMs?: number
     curves?: Partial<Record<'x' | 'y' | 'z', unknown[]>> | null
     pathPoints?: unknown[] | null
     startHandle?: { dxCm: number; dyCm: number } | null

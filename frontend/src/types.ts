@@ -113,6 +113,10 @@ export interface Activation {
    * personnalisation qui sort des défauts d'orientation du bloc (Cue,
    * mission "modes d'orientation") tant qu'elle reste personnalisée. */
   orientationOverridden: boolean
+  /** Temps de rotation (2026-08-05) : durée (ms) du fondu du lacet aux
+   * transitions (entrée de fenêtre + bascule trajet→arrivée), plus court
+   * chemin angulaire. 0 = cut. */
+  yawTurnMs: number
   /** Preset de montage de fixture, PAR ACTIVATION (recadrage 2026-08-04 :
    * "au niveau des acteurs dans les blocs, avec option ne rien changer") :
    * null = "ne rien changer" (le bloc ne touche pas le canal, le preset
@@ -151,6 +155,11 @@ export interface Cue {
   defaultArrivalOrientationMode: 'hold' | 'fixed' | 'focus' | null
   defaultArrivalFixedYawDeg: number | null
   defaultArrivalFocusPointId: string | null
+  /** Preset orientation par défaut du bloc (2026-08-05) : null = jamais
+   * réglé, '' = défaut explicite "ne rien changer", sinon id de preset. */
+  defaultMountPresetId: string | null
+  /** Temps de rotation par défaut du bloc (ms) — null = jamais réglé. */
+  defaultYawTurnMs: number | null
   activations: Record<string, Activation>
 }
 

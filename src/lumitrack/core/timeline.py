@@ -479,16 +479,43 @@ def _resolve_yaw(project: Project, point_id: str, t_ms: float, x: float, y: floa
         # "fixed" (défaut — et repli sûr pour une valeur non reconnue).
         return act.travel_fixed_yaw_deg
 
+    def arrival_value() -> float:
+        if act.arrival_orientation_mode == "fixed":
+            return act.arrival_fixed_yaw_deg
+        if act.arrival_orientation_mode == "focus":
+            return focus_angle(act.arrival_focus_point_id, act.arrival_fixed_yaw_deg)
+        # "hold" (défaut — et repli sûr) : fige ce que le trajet avait
+        # résolu PILE à l'instant où le fondu s'est terminé — généralise à
+        # tous les modes de trajet ce que "path" faisait déjà seul avant
+        # le split.
+        return travel_value(fade_end)
+
+    # Temps de rotation (2026-08-05, Activation.yaw_turn_ms) : adoucit les
+    # DEUX transitions — l'entrée de la fenêtre (depuis la valeur qui
+    # gouvernait juste avant, LTP sur kfs[:idx]) et la bascule
+    # trajet→arrivée. Plus court chemin angulaire + smoothstep ; 0 = cut
+    # (comportement de la refonte 08-04, inchangé par défaut). Ce n'est
+    # PAS le retour du lacet animé "manual" : la cible reste
+    # discrète/dérivée, seul le raccord est fondu.
+    def blend(from_deg: float, to_deg: float, progress: float) -> float:
+        delta = ((to_deg - from_deg + 180.0) % 360.0) - 180.0
+        p = max(0.0, min(1.0, progress))
+        eased = p * p * (3 - 2 * p)  # smoothstep, comme _smooth
+        return from_deg + delta * eased
+
+    turn = max(0.0, act.yaw_turn_ms)
     if t_ms < fade_end:
-        return travel_value(t_ms)
-    if act.arrival_orientation_mode == "fixed":
-        return act.arrival_fixed_yaw_deg
-    if act.arrival_orientation_mode == "focus":
-        return focus_angle(act.arrival_focus_point_id, act.arrival_fixed_yaw_deg)
-    # "hold" (défaut — et repli sûr) : fige ce que le trajet avait résolu
-    # PILE à l'instant où le fondu s'est terminé — généralise à tous les
-    # modes de trajet ce que "path" faisait déjà seul avant le split.
-    return travel_value(fade_end)
+        value = travel_value(t_ms)
+        if turn > 0.0 and t_ms < start + turn and idx > 0:
+            prev = _resolve_yaw(project, point_id, start, x, y, resolved_xy, kfs=kfs[:idx])
+            return blend(prev, value, (t_ms - start) / turn)
+        return value
+    if act.arrival_orientation_mode == "hold":
+        return travel_value(fade_end)
+    value = arrival_value()
+    if turn > 0.0 and t_ms < fade_end + turn:
+        return blend(travel_value(fade_end), value, (t_ms - fade_end) / turn)
+    return value
 
 
 def resolve_positions(project: Project, t_ms: float) -> dict:

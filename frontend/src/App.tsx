@@ -1559,7 +1559,7 @@ function CueInspector({ cue, projectPoints, mountPresets, selectedPointId, onSel
           </button>
         ))}
       </div>
-      <CueOrientationDefaults cue={cue} projectPoints={projectPoints} />
+      <CueOrientationDefaults cue={cue} projectPoints={projectPoints} mountPresets={mountPresets} />
       <div className="activation-list">
         {Object.entries(cue.activations).map(([pointId, act]) => {
           const point = projectPoints.find((p) => p.id === pointId)
@@ -1606,7 +1606,11 @@ function CueInspector({ cue, projectPoints, mountPresets, selectedPointId, onSel
  * non personnalisée dès qu'on change un réglage ici. TOUJOURS visible,
  * plus repliable du tout (demande Florian 2026-08-05) — c'est LE réglage
  * central du bloc, le cacher le faisait passer pour secondaire. */
-function CueOrientationDefaults({ cue, projectPoints }: { cue: Cue; projectPoints: Point[] }) {
+function CueOrientationDefaults({ cue, projectPoints, mountPresets }: {
+  cue: Cue
+  projectPoints: Point[]
+  mountPresets: FixtureMountPreset[]
+}) {
   const t = useT()
   return (
     <div className="cue-orientation-defaults">
@@ -1638,6 +1642,32 @@ function CueOrientationDefaults({ cue, projectPoints }: { cue: Cue; projectPoint
               onFixedDegChange={(d) => sidecar.updateCue(cue.id, { defaultArrivalFixedYawDeg: d })}
               onFocusChange={(id) => sidecar.updateCue(cue.id, { defaultArrivalFocusPointId: id })}
             />
+          </div>
+          {/* Preset orientation + temps de rotation par défaut du bloc
+              (2026-08-05, "cela fait sens avec l'option orientation par
+              défaut du bloc") — même resynchronisation des acteurs non
+              personnalisés que trajet/arrivée. "Ne rien changer" envoie
+              '' (défaut explicite : remet les non-personnalisés à None),
+              jamais null (qui voudrait dire "jamais réglé"). */}
+          <div className="activation-orientation-phase">
+            <h4>{t('cue.mountPreset')}</h4>
+            <label>
+              <select
+                value={cue.defaultMountPresetId ? cue.defaultMountPresetId : '~nochange~'}
+                onChange={(e) => sidecar.updateCue(cue.id, {
+                  defaultMountPresetId: e.target.value === '~nochange~' ? '' : e.target.value,
+                })}
+              >
+                <option value="~nochange~">{t('cue.mountPresetNoChange')}</option>
+                {mountPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+            <label>{t('cue.yawTurn')}
+              <NumericInput value={cue.defaultYawTurnMs === null ? null : cue.defaultYawTurnMs / 1000}
+                step={0.1} nullable
+                title={t('cue.yawTurnHint')}
+                onCommit={(v) => sidecar.updateCue(cue.id, { defaultYawTurnMs: v === null ? null : Math.max(0, v) * 1000 })} />
+            </label>
           </div>
         </div>
       )}
@@ -1811,6 +1841,7 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
     arrivalFixedYawDeg: number
     arrivalFocusPointId: string | null
     mountPresetId: string | null
+    yawTurnMs: number
   }>) => sidecar.setActivation(cueId, pointId, patch)
   // Toute édition manuelle des champs d'orientation personnalise
   // l'activation (même principe que fadeOverridden pour le fade, mission
@@ -1921,19 +1952,28 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
             précédent continue (LTP) — logique TOUJOURS tracking, pas
             d'option "aucun preset" (retirée le 2026-08-05, sans usage
             réel ; un "" existant en donnée s'affiche comme "ne rien
-            changer" et disparaît à la prochaine écriture). */}
+            changer" et disparaît à la prochaine écriture). Passe par
+            setOrientation : le preset fait partie de la famille
+            orientation, l'éditer personnalise l'activation. */}
         <div className="activation-orientation-phase">
           <h4>{t('cue.mountPreset')}</h4>
           <label>
             <select
               value={activation.mountPresetId ? activation.mountPresetId : '~nochange~'}
-              onChange={(e) => set({
+              onChange={(e) => setOrientation({
                 mountPresetId: e.target.value === '~nochange~' ? null : e.target.value,
               })}
             >
               <option value="~nochange~">{t('cue.mountPresetNoChange')}</option>
               {mountPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
+          </label>
+          {/* Temps de rotation (2026-08-05) : fondu du lacet aux
+              transitions — 0 = cut instantané. */}
+          <label>{t('cue.yawTurn')}
+            <NumericInput value={activation.yawTurnMs / 1000} step={0.1}
+              title={t('cue.yawTurnHint')}
+              onCommit={(v) => { if (v !== null && v >= 0) setOrientation({ yawTurnMs: v * 1000 }) }} />
           </label>
         </div>
         {activation.orientationOverridden && (
