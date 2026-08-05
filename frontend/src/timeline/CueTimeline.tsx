@@ -23,6 +23,7 @@ import { GraphEditor } from './GraphEditor'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
 import { showContextMenu } from '../ui/contextMenuStore'
+import { promptText } from '../ui/promptDialog'
 import { pickColor } from '../ui/colorPicker'
 import { NumericInput } from '../ui/NumericInput'
 import { chooseTickStep, computeTicks } from './ticks'
@@ -503,10 +504,10 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     }
   }, [selectedCueId, onSelectCue])
 
-  const renameCue = useCallback((cue: Cue) => {
-    // window.prompt temporaire — remplacé par un vrai édit inline/dialogue
-    // natif en Mission 3.
-    const name = window.prompt(t('timeline.renameCuePrompt'), cue.name)
+  const renameCue = useCallback(async (cue: Cue) => {
+    // Dialogue maison (promptDialog, Mission 3) — le window.prompt natif
+    // de la WebView est laid et hors de la langue de l'app.
+    const name = await promptText(t('timeline.renameCuePrompt'), cue.name)
     if (name && name !== cue.name) sidecar.updateCue(cue.id, { name })
   }, [t])
 

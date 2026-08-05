@@ -10,6 +10,7 @@ import { sidecar } from '../sidecar'
 import type { Point, Project } from '../types'
 import type { ContextMenuSections } from './contextMenuStore'
 import { pickColor } from './colorPicker'
+import { promptText } from './promptDialog'
 import { t } from '../i18n'
 
 export function buildActorContextMenuSections(point: Point, project: Project): ContextMenuSections {
@@ -26,8 +27,8 @@ export function buildActorContextMenuSections(point: Point, project: Project): C
     [
       {
         label: t('contextMenu.rename'),
-        onClick: () => {
-          const name = window.prompt(t('contextMenu.renameActorPrompt'), point.name)
+        onClick: async () => {
+          const name = await promptText(t('contextMenu.renameActorPrompt'), point.name)
           if (name && name !== point.name) sidecar.updatePoint(point.id, { name })
         },
       },
@@ -75,8 +76,8 @@ export function buildFocusPointContextMenuSections(point: Point): ContextMenuSec
     [
       {
         label: t('contextMenu.rename'),
-        onClick: () => {
-          const name = window.prompt(t('contextMenu.renameActorPrompt'), point.name)
+        onClick: async () => {
+          const name = await promptText(t('contextMenu.renameActorPrompt'), point.name)
           if (name && name !== point.name) sidecar.updatePoint(point.id, { name })
         },
       },

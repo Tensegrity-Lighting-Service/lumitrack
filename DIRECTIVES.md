@@ -166,12 +166,15 @@ timeline documenté et validé par le superviseur.
   2026-07-28 soir, voir verdict)*
 - [x] Mission 2 — Inspecteur fiable *(✅ validée en UI le 2026-07-28 soir,
   codée par le superviseur, voir verdict)*
-- [ ] Mission 3 — Finitions desktop (dialogues natifs, undo/redo, rotation)
-  *(undo/redo livré le 2026-07-31 ; rotation d'un acteur seul : EXISTE —
-  vérifié le 2026-08-05, la boîte de transformation s'affiche dès 1 acteur
-  sélectionné, bague de rotation comprise (PivotControls, `singleMember`
-  ne désactive que la mise à l'échelle) ; reste : 2 `window.prompt`
-  (nouveau projet, renommage de bloc dans CueTimeline.tsx))*
+- [x] Mission 3 — Finitions desktop (dialogues natifs, undo/redo, rotation)
+  *(✅ COMPLÉTÉE le 2026-08-05 : undo/redo livré le 07-31 ; rotation d'un
+  acteur seul existe (PivotControls dès 1 acteur) ; les 4 `window.prompt`
+  restants (nouveau projet, renommage de bloc, renommage acteur/point de
+  focus — les DIRECTIVES n'en comptaient que 2) remplacés par un dialogue
+  de saisie maison (`ui/promptDialog.tsx`, même pattern store+composant
+  que le menu contextuel : `promptText()` → promesse, Entrée/Échap,
+  raccourcis globaux coupés pendant la saisie) ; + Espace global et
+  highlight de module du batch du même soir)*
 - [ ] Mission 4 — Timeline pro *(état 2026-08-05 : l'essentiel livré DE
   FAIT via les missions ultérieures — multi-pistes, zoom fluide,
   règle/ticks, sélection de plage, courbes — sans verdict formel sur

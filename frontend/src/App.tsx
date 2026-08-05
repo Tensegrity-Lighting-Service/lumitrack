@@ -19,6 +19,7 @@ import { showContextMenu } from './ui/contextMenuStore'
 import { buildActorContextMenuSections, buildFocusPointContextMenuSections } from './ui/actorContextMenu'
 import { CompassPicker } from './ui/CompassPicker'
 import { FocusPointSelect } from './ui/FocusPointSelect'
+import { PromptDialog, promptText } from './ui/promptDialog'
 import {
   DndContext, DragOverlay, PointerSensor, pointerWithin, rectIntersection,
   useDraggable, useDroppable, useSensor, useSensors,
@@ -864,8 +865,8 @@ function App() {
     {
       label: t('menu.file'),
       items: [
-        { label: t('menu.file.new'), onClick: () => {
-          const name = window.prompt(t('menu.file.newProjectPrompt'), t('menu.file.newProjectDefault'))
+        { label: t('menu.file.new'), onClick: async () => {
+          const name = await promptText(t('menu.file.newProjectPrompt'), t('menu.file.newProjectDefault'))
           if (name) sidecar.newProject(name)
         } },
         { label: t('menu.file.importStancz'), onClick: async () => {
@@ -1278,6 +1279,7 @@ function App() {
       )}
       {showAddActors && <AddActorsPanel project={project} onClose={() => setShowAddActors(false)} />}
       <ContextMenu />
+      <PromptDialog />
       <footer className="timeline-dock">
         {showBlockDetail && selectedCue && (
           <BlockDetailPanel

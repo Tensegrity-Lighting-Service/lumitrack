@@ -12,6 +12,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     'common.loadingWaiting': 'En attente du sidecar Python (ws://127.0.0.1:17845)…',
     'common.lumitrackProjectFilter': 'Projet Lumitrack',
     'common.defaultProjectName': 'Projet',
+    'prompt.ok': 'OK',
+    'prompt.cancel': 'Annuler',
 
     // --------------------------------------------------------- menu bar --
     'menu.file': 'Fichier',
@@ -320,6 +322,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     'common.loadingWaiting': 'Waiting for the Python sidecar (ws://127.0.0.1:17845)…',
     'common.lumitrackProjectFilter': 'Lumitrack project',
     'common.defaultProjectName': 'Project',
+    'prompt.ok': 'OK',
+    'prompt.cancel': 'Cancel',
 
     'menu.file': 'File',
     'menu.file.new': 'New',
