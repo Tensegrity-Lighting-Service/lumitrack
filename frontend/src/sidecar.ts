@@ -181,7 +181,10 @@ class SidecarClient {
   }
   /** Réglages projet transverses (pour l'instant : vitesse de référence des
    * blocs en "durée automatique", cm/s). */
-  updateProjectSettings(patch: { referenceSpeedCms?: number; actorDiameterCm?: number }) {
+  updateProjectSettings(patch: {
+    referenceSpeedCms?: number; actorDiameterCm?: number
+    gridOpacity?: number; gridShade?: number; snapToGrid?: boolean
+  }) {
     this.send({ type: 'update_project_settings', ...patch })
   }
   addCue(name: string, startMs: number, durationMs: number, color?: string, lane?: number, id?: string) {

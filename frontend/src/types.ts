@@ -203,6 +203,11 @@ export interface Project {
   referenceSpeedCms: number
   /** Diamètre du marqueur d'acteur dans la scène (cm) — purement visuel. */
   actorDiameterCm: number
+  /** Réglages d'affichage du terrain — persistés dans la sauvegarde
+   * (2026-08-06), purement visuels. */
+  gridOpacity: number
+  gridShade: number
+  snapToGrid: boolean
   backstageZones: BackstageZone[]
   rosterGroups: RosterGroup[]
   fixtureMountPresets: FixtureMountPreset[]

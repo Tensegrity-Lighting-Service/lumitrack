@@ -435,6 +435,14 @@ class Project:
     # lecture, aucun miroir Rust nécessaire.
     actor_diameter_cm: float = 60.0
 
+    # Réglages d'affichage du terrain (demande 2026-08-06, "tous les
+    # réglages du terrain doivent être dans la sauvegarde") : vivaient en
+    # état React et repartaient à zéro à chaque lancement. Purement
+    # visuels/éditeur — aucun miroir Rust.
+    grid_opacity: float = 0.5
+    grid_shade: float = 0.15  # 0 = noir, 1 = blanc
+    snap_to_grid: bool = False
+
     # ---------- helpers ----------
 
     def ensure_backstage(self):
@@ -597,6 +605,9 @@ class Project:
             "terrainRotationDeg": self.terrain_rotation_deg,
             "referenceSpeedCms": self.reference_speed_cms,
             "actorDiameterCm": self.actor_diameter_cm,
+            "gridOpacity": self.grid_opacity,
+            "gridShade": self.grid_shade,
+            "snapToGrid": self.snap_to_grid,
             "backstageZones": self.backstage_zones,
             "rosterGroups": self.roster_groups,
             "fixtureMountPresets": self.fixture_mount_presets,
@@ -658,6 +669,9 @@ class Project:
             terrain_rotation_deg=float(d.get("terrainRotationDeg", 0.0)),
             reference_speed_cms=float(d.get("referenceSpeedCms", 220.0)),
             actor_diameter_cm=float(d.get("actorDiameterCm", 60.0)),
+            grid_opacity=float(d.get("gridOpacity", 0.5)),
+            grid_shade=float(d.get("gridShade", 0.15)),
+            snap_to_grid=bool(d.get("snapToGrid", False)),
         )
         proj.backstage_zones = list(d.get("backstageZones") or [])
         proj.roster_groups = list(d.get("rosterGroups") or [])

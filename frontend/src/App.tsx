@@ -532,19 +532,26 @@ function App() {
   const [cameraLocked, setCameraLocked] = useState(false)
   const [fitToken, setFitToken] = useState(0)
   const [editingZone, setEditingZone] = useState(false)
-  const [gridOpacity, setGridOpacity] = useState(0.5)
-  // Couleur de la grille : 0 = noir, 1 = blanc (2026-08-06) — le contraste
-  // dépend du terrain chargé, seul l'utilisateur peut trancher.
-  const [gridShade, setGridShade] = useState(0.15)
+  // Réglages d'affichage du terrain : source de vérité = LE PROJET
+  // (demande 2026-08-06, "tous les réglages du terrain doivent être dans la
+  // sauvegarde") — plus des useState qui repartaient à zéro à chaque
+  // lancement. Chaque changement passe par update_project_settings et
+  // revient par l'écho projet (§13.1.7).
+  const gridOpacity = project?.gridOpacity ?? 0.5
+  // Couleur de la grille : 0 = noir, 1 = blanc — le contraste dépend du
+  // terrain chargé, seul l'utilisateur peut trancher.
+  const gridShade = project?.gridShade ?? 0.15
+  const setGridOpacity = (v: number) => sidecar.updateProjectSettings({ gridOpacity: v })
+  const setGridShade = (v: number) => sidecar.updateProjectSettings({ gridShade: v })
   // "Grille on/off" (menu contextuel terrain vide) : bascule à 0, garde la
   // dernière opacité non nulle pour la retrouver telle quelle en rallumant
   // plutôt que de retomber sur un défaut arbitraire.
   const lastGridOpacityRef = useRef(0.5)
   useEffect(() => { if (gridOpacity > 0) lastGridOpacityRef.current = gridOpacity }, [gridOpacity])
   const toggleGrid = useCallback(() => {
-    setGridOpacity((v) => (v > 0 ? 0 : lastGridOpacityRef.current))
-  }, [])
-  const [snapToGrid, setSnapToGrid] = useState(false)
+    sidecar.updateProjectSettings({ gridOpacity: gridOpacity > 0 ? 0 : lastGridOpacityRef.current })
+  }, [gridOpacity])
+  const snapToGrid = project?.snapToGrid ?? false
   const [zoomAction, setZoomAction] = useState({ token: 0, factor: 1 })
   const [showGridSettings, setShowGridSettings] = useState(false)
   const [showPsnPanel, setShowPsnPanel] = useState(false)
@@ -1210,7 +1217,7 @@ function App() {
           <button
             title={t('viewport.snapToGrid')}
             className={snapToGrid ? 'active' : ''}
-            onClick={() => setSnapToGrid((v) => !v)}
+            onClick={() => sidecar.updateProjectSettings({ snapToGrid: !snapToGrid })}
           >
             #
           </button>

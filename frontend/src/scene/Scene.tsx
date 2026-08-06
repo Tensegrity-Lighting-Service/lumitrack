@@ -27,7 +27,7 @@
 // the placement once, rather than every child re-deriving it.
 import { Suspense, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
-import { OrthographicCamera, MapControls, Grid, useGLTF, Line, PivotControls } from '@react-three/drei'
+import { OrthographicCamera, MapControls, useGLTF, Line, PivotControls } from '@react-three/drei'
 import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { fileSrc } from '../fileSrc'
@@ -619,6 +619,67 @@ function ZoneOutline({ widthM, heightM, editing }: { widthM: number; heightM: nu
           <meshBasicMaterial color="#4f6df5" transparent opacity={0.12} depthWrite={false} depthTest={false} />
         </mesh>
       )}
+    </>
+  )
+}
+
+/** Grille 2D en surimpression, remplaçant le <Grid> de drei (2026-08-06,
+ * "la grille passe toujours sous le terrain") : le matériau shader interne
+ * de drei ignorait nos réglages de profondeur percés (material-depthTest),
+ * le plancher d'un GLB réel (au-dessus de y=0) l'enterrait donc toujours.
+ * De simples lineSegments comme le reste des calques d'édition (ZoneOutline,
+ * PathMarker…) : depthTest désactivé, renderOrder sous les tracés (1000),
+ * et un VRAI canal alpha — l'opacité du popover redevient une opacité. */
+function GridOverlay({ widthM, heightM, cellM, shade, opacity }: {
+  widthM: number
+  heightM: number
+  cellM: number
+  shade: number
+  opacity: number
+}) {
+  const { cellsGeom, sectionsGeom } = useMemo(() => {
+    const cells: number[] = []
+    const sections: number[] = []
+    if (cellM > 0.01) {
+      const push = (arr: number[], x1: number, z1: number, x2: number, z2: number) => {
+        arr.push(x1, 0, z1, x2, 0, z2)
+      }
+      // Grille CENTRÉE sur la scène (demande 2026-08-06) : les lignes
+      // rayonnent depuis le centre (k = 0 passe pile au milieu, et c'est
+      // une ligne de section) — marges symétriques quand la dimension
+      // n'est pas un multiple de la maille, au lieu de tout renvoyer le
+      // reste sur le bord droit/bas.
+      const cx = widthM / 2
+      const cz = heightM / 2
+      for (let k = -Math.floor(cx / cellM); k <= Math.floor(cx / cellM); k++) {
+        const x = cx + k * cellM
+        push(Math.abs(k) % 10 === 0 ? sections : cells, x, 0, x, heightM)
+      }
+      for (let k = -Math.floor(cz / cellM); k <= Math.floor(cz / cellM); k++) {
+        const z = cz + k * cellM
+        push(Math.abs(k) % 10 === 0 ? sections : cells, 0, z, widthM, z)
+      }
+    }
+    const build = (arr: number[]) => {
+      const geom = new THREE.BufferGeometry()
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3))
+      return geom
+    }
+    return { cellsGeom: build(cells), sectionsGeom: build(sections) }
+  }, [widthM, heightM, cellM])
+  // Un seul geometry recréé par changement de dimensions : libérer l'ancien
+  // (BufferGeometry ne part pas au GC tant que le GPU le référence).
+  useEffect(() => () => { cellsGeom.dispose(); sectionsGeom.dispose() }, [cellsGeom, sectionsGeom])
+  if (opacity <= 0) return null
+  const color = new THREE.Color(shade, shade, shade)
+  return (
+    <>
+      <lineSegments geometry={cellsGeom} renderOrder={996}>
+        <lineBasicMaterial color={color} transparent opacity={opacity * 0.45} depthTest={false} depthWrite={false} />
+      </lineSegments>
+      <lineSegments geometry={sectionsGeom} renderOrder={997}>
+        <lineBasicMaterial color={color} transparent opacity={opacity} depthTest={false} depthWrite={false} />
+      </lineSegments>
     </>
   )
 }
@@ -2484,23 +2545,6 @@ function SceneContent({
     return pointId === selectedPointId ? 'highlight' : 'dim'
   }
 
-  // drei's Grid n'a pas de vrai canal alpha — l'« opacité » est simulée en
-  // couleur. Nouveau modèle (2026-08-06, "le slider est inversé") : la
-  // teinte de base est un GRIS choisi noir↔blanc par l'utilisateur
-  // (gridShade — le contraste dépend du terrain chargé), et l'opacité
-  // fond ce gris vers le gris moyen 0.5 (quasi neutre sur la plupart des
-  // sols) : curseur à droite = grille plus franche, TOUJOURS. L'ancien
-  // modèle fondait vers le fond SOMBRE de l'app : sur un terrain clair,
-  // MOINS d'opacité donnait des lignes plus noires donc PLUS visibles.
-  const gridCellColor = useMemo(() => {
-    const v = 0.5 + (gridShade - 0.5) * Math.min(1, gridOpacity * 0.85)
-    return new THREE.Color(v, v, v).getStyle()
-  }, [gridShade, gridOpacity])
-  const gridSectionColor = useMemo(() => {
-    const v = 0.5 + (gridShade - 0.5) * Math.min(1, gridOpacity)
-    return new THREE.Color(v, v, v).getStyle()
-  }, [gridShade, gridOpacity])
-
   return (
     <>
       <OrthographicCamera makeDefault near={0.1} far={span * 20} />
@@ -2539,26 +2583,12 @@ function SceneContent({
       <StageGroup project={project} groupRef={stageGroupRef}>
         {!project.terrainGltfPath && <GenericFloor widthM={widthM} heightM={heightM} />}
 
-        {/* Grille en SURIMPRESSION, sans test de profondeur (fix
-            « le grid ne s'affiche toujours pas », 2026-08-06) : le +3 cm
-            du fix 2026-07-29 supposait un sol de terrain à y=0 — le
-            plancher d'un GLB réel (aréna) peut être plus haut et
-            enterrait la grille sous le sol. En vue du dessus
-            orthographique, la profondeur n'apporte rien : la grille se
-            dessine par-dessus le terrain, toujours visible. depthWrite
-            false pour ne masquer personne d'autre. */}
-        <Grid
-          position={[widthM / 2, 0.03, heightM / 2]}
-          args={[widthM, heightM]}
-          cellSize={project.gridSizeCm * CM_TO_M}
-          sectionSize={project.gridSizeCm * CM_TO_M * 10}
-          cellColor={gridCellColor}
-          sectionColor={gridSectionColor}
-          fadeDistance={span * 6}
-          infiniteGrid={false}
-          renderOrder={2}
-          material-depthTest={false}
-          material-depthWrite={false}
+        <GridOverlay
+          widthM={widthM}
+          heightM={heightM}
+          cellM={project.gridSizeCm * CM_TO_M}
+          shade={gridShade}
+          opacity={gridOpacity}
         />
 
         <ZoneOutline widthM={widthM} heightM={heightM} editing={editingZone} />

@@ -573,6 +573,15 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # recalcul de timeline nécessaire, contrairement à la vitesse
             # de référence ci-dessus.
             session.project.actor_diameter_cm = max(1.0, float(msg["actorDiameterCm"]))
+        # Réglages d'affichage du terrain (2026-08-06, "tous les réglages du
+        # terrain doivent être dans la sauvegarde") — purement visuels, mais
+        # persistés dans le projet.
+        if "gridOpacity" in msg and msg["gridOpacity"] is not None:
+            session.project.grid_opacity = min(1.0, max(0.0, float(msg["gridOpacity"])))
+        if "gridShade" in msg and msg["gridShade"] is not None:
+            session.project.grid_shade = min(1.0, max(0.0, float(msg["gridShade"])))
+        if "snapToGrid" in msg and msg["snapToGrid"] is not None:
+            session.project.snap_to_grid = bool(msg["snapToGrid"])
         return None
 
     if msg_type == "list_ifaces":
