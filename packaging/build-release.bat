@@ -24,9 +24,16 @@ if not exist "%USERPROFILE%\.tauri\lumitrack-updater.key" (
   exit /b 1
 )
 rem Tauri v2 lit TAURI_SIGNING_PRIVATE_KEY (chemin OU contenu) — la
-rem variante _PATH n'est pas reconnue par le build.
+rem variante _PATH n'est pas reconnue par le build. Le mot de passe est lu
+rem depuis un fichier a cote de la cle (cmd ne sait pas exprimer une
+rem variable VIDE : set "VAR=" la supprime et le CLI bloque sur un prompt,
+rem constate 2026-08-06) — les deux fichiers vivent HORS du depot.
+if not exist "%USERPROFILE%\.tauri\lumitrack-updater.pass" (
+  echo ECHEC : mot de passe de la cle introuvable ^(%USERPROFILE%\.tauri\lumitrack-updater.pass^).
+  exit /b 1
+)
 set "TAURI_SIGNING_PRIVATE_KEY=%USERPROFILE%\.tauri\lumitrack-updater.key"
-set "TAURI_SIGNING_PRIVATE_KEY_PASSWORD="
+set /p TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<"%USERPROFILE%\.tauri\lumitrack-updater.pass"
 
 echo.
 echo ==============================================================
