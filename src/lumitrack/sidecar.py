@@ -746,6 +746,10 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             # porté. Les blocs existants (chargés) gardent leurs défauts.
             default_travel_orientation_mode="path",
             default_arrival_orientation_mode="hold",
+            # Fade orientation par défaut 0,5 s (demande Florian
+            # 2026-08-06, ex-"temps de rotation") — les nouvelles
+            # activations du bloc en héritent via la resynchronisation.
+            default_yaw_turn_ms=500.0,
         )
         session.project.cues.append(cue)
         session.project.sort_cues()

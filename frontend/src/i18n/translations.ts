@@ -165,8 +165,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     'cue.mountPreset': 'Preset orientation',
     'cue.mountPresetNoChange': 'Ne rien changer',
     'cue.activateSelectedPoint': '+ Activer cet acteur dans le bloc',
-    'cue.yawTurn': 'Rotation (s)',
-    'cue.yawTurnHint': 'Durée du fondu du lacet aux transitions (entrée du bloc, bascule trajet→arrivée) — 0 = changement instantané',
+    'cue.yawTurn': 'Fade orientation (s)',
+    'cue.yawTurnHint': 'Durée du fondu de l’orientation aux transitions (entrée du bloc, bascule trajet→arrivée) — 0 = changement instantané',
 
     // ------------------------------------------------------- speed ------
     'speed.walk': 'Marche',
@@ -469,8 +469,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     'cue.mountPreset': 'Orientation preset',
     'cue.mountPresetNoChange': 'No change',
     'cue.activateSelectedPoint': '+ Activate this actor in the block',
-    'cue.yawTurn': 'Turn time (s)',
-    'cue.yawTurnHint': 'Yaw blend duration at transitions (block entry, travel→arrival switch) — 0 = instant cut',
+    'cue.yawTurn': 'Orientation fade (s)',
+    'cue.yawTurnHint': 'Orientation blend duration at transitions (block entry, travel→arrival switch) — 0 = instant cut',
 
     'speed.walk': 'Walk',
     'speed.jog': 'Jog',

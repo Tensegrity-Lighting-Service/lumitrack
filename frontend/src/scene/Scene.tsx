@@ -1227,7 +1227,7 @@ function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZo
  * (le centre du groupe sélectionné) — plus prévisible pour "resserrer/
  * écarter une formation", à valider à l'usage.
  */
-function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, controlsRef, snapToGrid, gridSizeCm, dragActiveRef, resolveGestureCue }: {
+function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, controlsRef, snapToGrid, gridSizeCm, dragActiveRef, resolveGestureCue, blockEntries }: {
   project: Project
   positions: Record<string, Pose>
   selectedCueId: string
@@ -1237,6 +1237,10 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
    * bloc au lieu d'éditer l'actuel"), sinon un bloc créé au playhead
    * (fix 2026-08-05 : gizmo silencieusement inerte sans bloc actif). */
   resolveGestureCue: (pointIds: string[]) => string
+  /** Entrées du contexte du bloc actif (départ/cible résolus par le
+   * backend) — sert à décider si l'arc de rotation a un sens (voir
+   * handleDragEnd). null hors mode édition de bloc. */
+  blockEntries: Record<string, BlockContextEntry> | null
   selectedPointIds: string[]
   controlsRef: React.RefObject<MapControlsImpl | null>
   snapToGrid: boolean
@@ -1477,6 +1481,16 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     const finalEntries: Array<Record<string, unknown> & { pointId: string }> = []
     for (const m of drag.members) {
       const arc = rotationArc(m.baseX, m.baseY, drag.centerX, drag.centerY, drag.lastTheta)
+      // L'arc de rotation ne décrit le CHEMIN du bloc que si l'acteur
+      // TOURNE SUR PLACE — départ résolu du bloc ≈ position d'avant
+      // rotation. Pour un bloc qui AMÈNE l'acteur d'ailleurs (entrée
+      // backstage, déplacement), greffer l'arc sur ce départ produisait
+      // des trajectoires en crochet absurdes (signalé 2026-08-06,
+      // "déplacement de bloc + écartement + rotation : les courbes ne
+      // vont pas"). Dans ce cas, la rotation ne change que la cible.
+      const startPose = blockEntries?.[m.pointId]?.startPose ?? null
+      const inPlace = startPose !== null
+        && Math.hypot(startPose[0] - m.baseX, startPose[1] - m.baseY) < 50
       // Un acteur seul (ou exactement sur le pivot) ne suit aucun arc —
       // rotationArc renvoie alors pathPoints/startHandle/targetHandle à
       // null, et les envoyer quand même EFFAÇAIT silencieusement toute
@@ -1489,7 +1503,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
         pointId: m.pointId,
         targetXCm: arc.targetXCm,
         targetYCm: arc.targetYCm,
-        ...(r >= 1e-6
+        ...(inPlace && r >= 1e-6
           ? { pathPoints: arc.pathPoints, startHandle: arc.startHandle, targetHandle: arc.targetHandle }
           : {}),
         ...(m.baseTravelYaw !== null || m.baseArrivalYaw !== null ? { orientationOverridden: true } : {}),
@@ -2628,6 +2642,7 @@ function SceneContent({
             gridSizeCm={project.gridSizeCm}
             dragActiveRef={boxDragActiveRef}
             resolveGestureCue={resolveGestureCue}
+            blockEntries={liveRef.current.entries}
           />
         )}
 

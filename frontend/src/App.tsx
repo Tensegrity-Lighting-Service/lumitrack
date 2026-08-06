@@ -1875,6 +1875,18 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints, mountPresets }
                   title={t('cue.yawTurnHint')}
                   onCommit={(v) => { if (v !== null && v >= 0) applyOrientation({ yawTurnMs: v * 1000 }) }} />
               </label>
+              {/* Remise à plat GROUPÉE des tracés (2026-08-06) : efface
+                  waypoints/poignées (dont les arcs de rotation hérités)
+                  de tous les acteurs sélectionnés d'un coup. */}
+              <button
+                className="inspector-clear-path"
+                title={t('cue.clearPath')}
+                onClick={() => sidecar.setActivations(cue.id, activated.map((id) => ({
+                  pointId: id, pathPoints: null, startHandle: null, targetHandle: null,
+                })))}
+              >
+                {t('cue.straightPath')}
+              </button>
             </div>
           </div>
         </>

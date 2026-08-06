@@ -550,12 +550,15 @@ def test_new_cue_defaults_to_path_travel_and_hold_arrival():
     cue = session.project.cue_by_id("c1")
     assert cue.default_travel_orientation_mode == "path"
     assert cue.default_arrival_orientation_mode == "hold"
+    # Fade orientation par défaut 0,5 s (2026-08-06).
+    assert cue.default_yaw_turn_ms == 500.0
     _run(_handle_message(session, {
         "type": "set_activation", "cueId": "c1", "pointId": "p1", "targetXCm": 10.0,
     }))
     act = cue.activations["p1"]
     assert act.travel_orientation_mode == "path"
     assert act.arrival_orientation_mode == "hold"
+    assert act.yaw_turn_ms == 500.0
 
 
 def test_cue_default_mount_preset_and_yaw_turn_sync():
