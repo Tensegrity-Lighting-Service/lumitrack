@@ -1083,3 +1083,23 @@
 .settings-section > summary:hover { color: #fff; }
 /* Sous-fenêtre scrollable pour les longs tableaux (trackers, moniteur) */
 .psn-scroll { max-height: 260px; overflow-y: auto; border: 1px solid #1d1d24; border-radius: 4px; padding: 0 6px; }
+
+/* Barre de titre maison (fenêtre sans décorations, 2026-08-06) */
+.app-brand {
+  display: flex; align-items: center; gap: 6px; padding: 0 10px;
+  -webkit-app-region: drag;
+}
+/* Les enfants laissent le mousedown atteindre l'élément porteur de
+   data-tauri-drag-region (l'attribut ne vaut que pour l'élément exact). */
+.app-brand > * { pointer-events: none; }
+.app-brand img { width: 16px; height: 16px; }
+.app-brand-name { font-weight: 600; color: #e8e8ec; }
+.app-brand-version { font-size: 10px; color: #7a8093; }
+.menu-bar-spacer { flex: 1; }
+.window-controls { display: flex; align-items: stretch; }
+.window-controls button {
+  width: 44px; background: none; border: none; border-radius: 0;
+  color: #b9bdc9; font-size: 11px; line-height: 1;
+}
+.window-controls button:hover { background: #2a2e37; color: #fff; }
+.window-controls .window-close:hover { background: #c42b1c; color: #fff; }

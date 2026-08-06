@@ -8,6 +8,12 @@ import {
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+// Source unique du numéro de version public affiché dans la barre de titre
+// (demande 2026-08-06) : la version de l'app packagée, pas celle du
+// package.json frontend (restée à 0.0.0).
+import tauriConf from '../src-tauri/tauri.conf.json'
+import appIcon from '../src-tauri/icons/32x32.png'
 import { NumericInput } from './ui/NumericInput'
 import { maxSpeedMs, msToKmh, pointSpeedMs, requiredFadeMsPerPointFromContext, speedCategory, SPEED_PRESETS } from './timeline/speed'
 import { PsnPanel } from './ui/PsnPanel'
@@ -196,7 +202,22 @@ type MenuItemDef =
   | { separator: true }
   | { numeric: true; label: string; value: number; step: number; title?: string; onCommit: (v: number | null) => void }
 
+/** Boutons fenêtre de la barre de titre maison (2026-08-06, "se passer de
+ * la barre Windows classique") : la fenêtre Tauri est sans décorations,
+ * réduire/agrandir/fermer vivent dans la barre de menus. Hors Tauri (dev
+ * navigateur) l'API lance une exception synchrone — silencieusement ignorée,
+ * même motif que fileSrc.ts. */
+function windowControl(action: 'minimize' | 'maximize' | 'close') {
+  try {
+    const w = getCurrentWindow()
+    if (action === 'minimize') void w.minimize()
+    else if (action === 'maximize') void w.toggleMaximize()
+    else void w.close()
+  } catch { /* hors Tauri : pas de fenêtre native à piloter */ }
+}
+
 function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }) {
+  const t = useT()
   const [openIndex, setOpenIndex] = useState<number | null>(null)
 
   useEffect(() => {
@@ -206,8 +227,17 @@ function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }
     return () => window.removeEventListener('click', close)
   }, [openIndex])
 
+  // data-tauri-drag-region ne vaut que pour l'élément EXACT qui reçoit le
+  // mousedown (pas ses enfants) : posé sur la barre, la marque ET le
+  // ressort central ; les enfants de la marque sont en pointer-events:none
+  // (App.css) pour laisser le geste traverser.
   return (
-    <nav className="menu-bar">
+    <nav className="menu-bar" data-tauri-drag-region>
+      <div className="app-brand" data-tauri-drag-region>
+        <img src={appIcon} alt="" draggable={false} />
+        <span className="app-brand-name">Lumitrack</span>
+        <span className="app-brand-version">v{tauriConf.version}</span>
+      </div>
       {menus.map((menu, i) => (
         <div key={menu.label} className="menu">
           <button
@@ -247,6 +277,12 @@ function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }
           )}
         </div>
       ))}
+      <div className="menu-bar-spacer" data-tauri-drag-region />
+      <div className="window-controls">
+        <button type="button" title={t('window.minimize')} onClick={() => windowControl('minimize')}>🗕</button>
+        <button type="button" title={t('window.maximize')} onClick={() => windowControl('maximize')}>🗖</button>
+        <button type="button" className="window-close" title={t('window.close')} onClick={() => windowControl('close')}>🗙</button>
+      </div>
     </nav>
   )
 }
