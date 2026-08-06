@@ -8,7 +8,7 @@ import {
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { getCurrentWindow, Window as TauriWindow } from '@tauri-apps/api/window'
 // Source unique du numéro de version public affiché dans la barre de titre
 // (demande 2026-08-06) : la version de l'app packagée, pas celle du
 // package.json frontend (restée à 0.0.0).
@@ -519,6 +519,33 @@ function App() {
   const setSelectedPointId = useCallback((id: string | null) => {
     setSelectedPointIds(id === null ? [] : [id])
   }, [])
+
+  // Splash → fenêtre principale (2026-08-06) : "main" démarre cachée
+  // (tauri.conf.json, visible:false) pendant que le splash tourne ; on la
+  // révèle au premier écho projet, quand l'app est réellement utilisable.
+  // Secours à 10 s : si le sidecar ne démarre pas, montrer l'app et son
+  // état déconnecté vaut mieux que rester invisible. Hors Tauri : no-op.
+  const splashClosedRef = useRef(false)
+  const revealMainWindow = useCallback(() => {
+    if (splashClosedRef.current) return
+    splashClosedRef.current = true
+    void (async () => {
+      try {
+        const splash = await TauriWindow.getByLabel('splashscreen')
+        await splash?.close()
+      } catch { /* hors Tauri */ }
+      try {
+        const main = getCurrentWindow()
+        await main.show()
+        await main.setFocus()
+      } catch { /* hors Tauri */ }
+    })()
+  }, [])
+  useEffect(() => { if (project) revealMainWindow() }, [project, revealMainWindow])
+  useEffect(() => {
+    const timer = window.setTimeout(revealMainWindow, 10_000)
+    return () => window.clearTimeout(timer)
+  }, [revealMainWindow])
 
   const [rosterWidth, setRosterWidth] = useState(220)
   // Sous-groupes du roster repliés (purement local à cette session — pas

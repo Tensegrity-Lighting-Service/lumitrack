@@ -12,12 +12,26 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Lumitrack",
         "width": 1440,
         "height": 900,
         "resizable": true,
         "fullscreen": false,
-        "decorations": false
+        "decorations": false,
+        "visible": false
+      },
+      {
+        "label": "splashscreen",
+        "title": "Lumitrack",
+        "url": "/splashscreen.html",
+        "width": 420,
+        "height": 240,
+        "decorations": false,
+        "resizable": false,
+        "center": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": false
       }
     ],
     "security": {
@@ -31,6 +45,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/lumitrack-sidecar"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

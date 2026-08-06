@@ -35,3 +35,7 @@ media_cache/
 # utilisateur, pas du code source ; peut contenir des fichiers volumineux
 # (audio/vidéo) qui dépassent la limite GitHub de 100 Mo par fichier.
 Sauvegarde/
+
+# Artefacts de packaging (build-sidecar.bat) — reconstruits localement
+build/
+frontend/src-tauri/binaries/

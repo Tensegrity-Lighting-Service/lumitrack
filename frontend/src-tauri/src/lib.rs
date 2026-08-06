@@ -6,23 +6,46 @@ use tauri::Manager;
 /// startup, so it can be killed when the window closes instead of lingering
 /// as an orphan process.
 ///
-/// Dev-only launch strategy: run the repo's `src/` on PYTHONPATH with the
-/// system `python`. Packaging this as a proper `externalBin` sidecar
-/// (CONCEPTION.md §12.11) is explicitly left open in §12.13 and not done
-/// here.
+/// Debug: run the repo's `src/` on PYTHONPATH with the system `python`
+/// (console output inherited, visible in the dev terminal). Release: the
+/// PyInstaller exe bundled as a Tauri `externalBin` (CONCEPTION.md §12.11,
+/// packaging/build-sidecar.bat), installed next to the app exe — spawned
+/// with CREATE_NO_WINDOW so no console window ever flashes for end users.
 struct SidecarProcess(Mutex<Option<Child>>);
 
 fn spawn_sidecar() -> std::io::Result<Child> {
-  // `cargo tauri dev` runs with cwd = frontend/src-tauri, so the repo's
-  // Python package lives two levels up.
-  let repo_src = std::env::current_dir()?.join("..").join("..").join("src");
-
-  Command::new("python")
-    .args(["-m", "lumitrack"])
-    .env("PYTHONPATH", &repo_src)
-    .stdout(Stdio::inherit())
-    .stderr(Stdio::inherit())
-    .spawn()
+  let mut cmd = if cfg!(debug_assertions) {
+    // `cargo tauri dev` runs with cwd = frontend/src-tauri, so the repo's
+    // Python package lives two levels up.
+    let repo_src = std::env::current_dir()?.join("..").join("..").join("src");
+    let mut c = Command::new("python");
+    c.args(["-m", "lumitrack"])
+      .env("PYTHONPATH", &repo_src)
+      .stdout(Stdio::inherit())
+      .stderr(Stdio::inherit());
+    c
+  } else {
+    // Tauri strips the platform-triple suffix when bundling: the installed
+    // file sits next to the app exe as plain `lumitrack-sidecar.exe`.
+    let exe_dir = std::env::current_exe()?
+      .parent()
+      .ok_or_else(|| std::io::Error::other("app exe has no parent dir"))?
+      .to_path_buf();
+    let mut c = Command::new(exe_dir.join("lumitrack-sidecar.exe"));
+    // The app itself is a GUI process: a console child would pop its own
+    // console window without CREATE_NO_WINDOW. Output goes nowhere in
+    // release — null keeps the exe's sys.stdout valid (the sidecar was
+    // deliberately built WITHOUT --noconsole, see build-sidecar.bat).
+    c.stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+      use std::os::windows::process::CommandExt;
+      const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+      c.creation_flags(CREATE_NO_WINDOW);
+    }
+    c
+  };
+  cmd.spawn()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
