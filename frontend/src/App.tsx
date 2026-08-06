@@ -830,6 +830,7 @@ function App() {
   const playing = tick?.playing ?? false
   const durationMs = tick?.durationMs ?? 1000
   const positions = tick?.positions ?? {}
+  const timecodeIn = tick?.timecode ?? null
 
   const movingPointIds = useMemo(() => {
     const moving = new Set<string>()
@@ -1050,6 +1051,20 @@ function App() {
           numeric: true, label: t('viewport.referenceSpeed'), title: t('viewport.referenceSpeedHint'),
           value: Math.round(project.referenceSpeedCms * 0.036 * 10) / 10, step: 0.5,
           onCommit: (v: number | null) => { if (v !== null && v >= 0.5) sidecar.updateProjectSettings({ referenceSpeedCms: v / 0.036 }) },
+        } as const,
+        { separator: true } as const,
+        // "Timecode In" (2026-08-06) : le transport suit le timecode
+        // Art-Net entrant (UDP 6454). N'importe quelle autre source
+        // (LTC/MTC/Link) se convertit avec Super Timecode Converter.
+        {
+          label: t('menu.settings.timecodeChase'),
+          checked: project.timecodeChaseEnabled,
+          onClick: () => sidecar.setTimecodeChase(!project.timecodeChaseEnabled),
+        },
+        {
+          numeric: true, label: t('menu.settings.timecodeOffset'), title: t('menu.settings.timecodeOffsetHint'),
+          value: Math.round((project.timecodeOffsetMs ?? 0) / 100) / 10, step: 0.5,
+          onCommit: (v: number | null) => { if (v !== null) sidecar.updateProjectSettings({ timecodeOffsetMs: v * 1000 }) },
         } as const,
         { separator: true } as const,
         {
@@ -1423,6 +1438,7 @@ function App() {
           onSelectCue={setSelectedCueId}
           blockContext={blockContext}
           positions={positions}
+          timecode={timecodeIn}
           onOpenBlockDetail={() => setShowBlockDetail(true)}
         />
       </footer>

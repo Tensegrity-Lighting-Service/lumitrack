@@ -56,6 +56,35 @@ def test_unknown_transport_action_is_reported_as_error():
     assert reply is not None and reply["type"] == "error"
 
 
+def test_set_timecode_chase_arms_transport_and_persists():
+    """Timecode In (2026-08-06) : armer le suivi passe le transport en
+    external_sync et persiste le reglage dans le projet ; desarmer fige la
+    lecture. Le recepteur reseau est simule (pas de bind reel en test)."""
+    session = Session()
+    session.timecode_input.start = lambda: True   # pas de socket en CI
+    session.timecode_input.stop = lambda: None
+    started = {"v": True}
+    type(session.timecode_input).running = property(lambda self: started["v"])
+
+    reply = _run(_handle_message(session, {"type": "set_timecode_chase", "enabled": True}))
+    assert reply is None
+    assert session.transport.external_sync is True
+    assert session.project.timecode_chase_enabled is True
+    assert session.project.to_dict()["timecodeChaseEnabled"] is True
+
+    # Un paquet TC recu fait avancer le transport, offset projet soustrait.
+    session.project.timecode_offset_ms = 1000.0
+    session._on_external_timecode(5000.0, 25.0)
+    assert session.transport.now_ms() == 4000.0
+    assert session.transport.playing is True
+
+    reply = _run(_handle_message(session, {"type": "set_timecode_chase", "enabled": False}))
+    assert reply is None
+    assert session.transport.external_sync is False
+    assert session.transport.playing is False   # fige la ou le TC s'est arrete
+    del type(session.timecode_input).running
+
+
 def test_save_bundle_reply_echoes_the_exact_path(tmp_path):
     """Format zip 2026-08-06 : plus de dossier dedie auto-cree, le fichier
     est ecrit exactement au chemin demande et la reponse le reflete."""

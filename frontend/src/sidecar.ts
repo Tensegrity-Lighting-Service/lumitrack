@@ -120,6 +120,7 @@ class SidecarClient {
   redo() { this.send({ type: 'redo' }) }
 
   // ---- PSN (§12.9: stays independent of edit vs. playback mode) ----
+  setTimecodeChase(enabled: boolean) { this.send({ type: 'set_timecode_chase', enabled }) }
   psnStart() { this.send({ type: 'psn_start' }) }
   psnStop() { this.send({ type: 'psn_stop' }) }
   updatePsnConfig(patch: {
@@ -185,6 +186,7 @@ class SidecarClient {
     referenceSpeedCms?: number; actorDiameterCm?: number
     gridOpacity?: number; gridShade?: number; snapToGrid?: boolean
     terrainGltfPath?: string | null
+    timecodeOffsetMs?: number
   }) {
     this.send({ type: 'update_project_settings', ...patch })
   }

@@ -85,7 +85,7 @@ function formatTimecodeMs(ms: number): string {
   return `${pad(h)}:${pad(m)}:${sec.toFixed(3).padStart(6, '0')}`
 }
 
-export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, blockContext, positions, onOpenBlockDetail }: {
+export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, blockContext, positions, timecode, onOpenBlockDetail }: {
   project: Project
   tMs: number
   playing: boolean
@@ -94,6 +94,9 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   selectedCueId: string | null
   selectedPointId: string | null
   onSelectCue: (cueId: string | null) => void
+  /** État du timecode In (Art-Net) quand le suivi est armé — badge à côté
+   * du temps : TC reçu (vert) ou en attente (orange). null = suivi off. */
+  timecode: { receiving: boolean; fps: number | null; hmsf: [number, number, number, number] | null } | null
   /** Contexte du bloc sélectionné (départ/cible résolus) — pilote le badge
    * de vitesse affiché directement sur le bloc, pas seulement dans
    * l'inspecteur ("la vitesse peut pas s'afficher dans le bloc même ?"). */
@@ -677,6 +680,16 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
           {playing ? '⏸' : '⏵'}
         </button>
         <span className="tl-timecode">{formatTimecodeMs(tMs)}</span>
+        {timecode && (
+          <span
+            className={`tl-tc-badge ${timecode.receiving ? 'tc-live' : 'tc-wait'}`}
+            title={t('timeline.timecodeInHint')}
+          >
+            {timecode.receiving && timecode.hmsf
+              ? `TC ${timecode.hmsf.map((n) => String(n).padStart(2, '0')).join(':')}${timecode.fps ? ` @${timecode.fps}` : ''}`
+              : t('timeline.timecodeWaiting')}
+          </span>
+        )}
         <span className="tl-toolbar-sep" />
         <button onClick={addCue} title={t('timeline.addCueHint')}>{t('timeline.addCue')}</button>
         {selectedCueId && <button onClick={deleteSelected}>{t('timeline.deleteCue')}</button>}

@@ -1103,3 +1103,11 @@
 }
 .window-controls button:hover { background: #2a2e37; color: #fff; }
 .window-controls .window-close:hover { background: #c42b1c; color: #fff; }
+
+/* Badge Timecode In (Art-Net) a cote du temps de transport (2026-08-06) */
+.tl-tc-badge {
+  font-family: monospace; font-size: 11px; padding: 1px 6px;
+  border-radius: 3px; align-self: center; white-space: nowrap;
+}
+.tl-tc-badge.tc-live { background: #123a1e; color: #4fe081; border: 1px solid #1f6b38; }
+.tl-tc-badge.tc-wait { background: #3a2a12; color: #e0a44f; border: 1px solid #6b4d1f; }

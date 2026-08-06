@@ -804,18 +804,36 @@ def test_format_timecode_with_and_without_frames():
     assert tc.format_timecode(90_500, fps=25) == "00:01:30:12"
 
 
+def _arttimecode_packet(frames, seconds, minutes, hours, tc_type, prot_ver=14):
+    return (b"Art-Net\x00" + struct.pack("<H", 0x9700)
+            + struct.pack(">H", prot_ver) + b"\x00\x00"
+            + struct.pack("<BBBBB", frames, seconds, minutes, hours, tc_type))
+
+
 def test_artnet_timecode_decode():
-    packet = (b"Art-Net\x00" + struct.pack("<H", 0x9700)
-              + struct.pack(">H", 14) + b"\x00\x00"
-              + struct.pack("<BBBBB", 12, 30, 1, 2, 1))  # 02:01:30:12 @25fps
-    ms, fps = tc.parse_artnet_timecode(packet)
+    ms, fps, hmsf = tc.parse_artnet_timecode(_arttimecode_packet(12, 30, 1, 2, 1))
     assert fps == 25.0
     assert ms == pytest.approx(tc.hmsf_to_ms(2, 1, 30, 12, 25.0))
+    assert hmsf == (2, 1, 30, 12)
 
 
 def test_artnet_ignores_other_opcodes():
     packet = b"Art-Net\x00" + struct.pack("<H", 0x5000) + b"\x00" * 20
     assert tc.parse_artnet_timecode(packet) is None
+
+
+def test_artnet_validation_follows_super_timecode_converter():
+    """Alignement sur l'ArtnetInput.h de fiverecords/SuperTimecodeConverter
+    (référence demandée 2026-08-06) : ProtVer < 14 rejeté, champs hors
+    bornes rejetés, cadence lue dans les bits 0-1 du Type même si un
+    émetteur mal formé met les bits réservés à 1."""
+    assert tc.parse_artnet_timecode(_arttimecode_packet(12, 30, 1, 2, 1, prot_ver=13)) is None
+    assert tc.parse_artnet_timecode(_arttimecode_packet(30, 0, 0, 0, 3)) is None   # frames > 29
+    assert tc.parse_artnet_timecode(_arttimecode_packet(0, 60, 0, 0, 3)) is None   # seconds > 59
+    assert tc.parse_artnet_timecode(_arttimecode_packet(0, 0, 0, 24, 3)) is None   # hours > 23
+    # Bits réservés non nuls : la cadence des bits 0-1 reste valide (25 ips).
+    _ms, fps, _hmsf = tc.parse_artnet_timecode(_arttimecode_packet(0, 0, 0, 0, 0xFD))
+    assert fps == 25.0
 
 
 # ----------------------------------------------------------- project ------

@@ -79,6 +79,9 @@ class ArtNetTimecodeReceiver:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self.last_error: Optional[str] = None
+        # Dernier timecode valide reçu, pour l'affichage (badge transport).
+        self.last_fps: Optional[float] = None
+        self.last_hmsf: Optional[tuple] = None
 
     def start(self) -> bool:
         if self._running:
@@ -118,7 +121,9 @@ class ArtNetTimecodeReceiver:
                 continue
             parsed = parse_artnet_timecode(data)
             if parsed is not None:
-                ms, fps = parsed
+                ms, fps, hmsf = parsed
+                self.last_fps = fps
+                self.last_hmsf = hmsf
                 try:
                     self.callback(ms, fps)
                 except Exception:  # never let a UI error kill the thread
@@ -126,19 +131,31 @@ class ArtNetTimecodeReceiver:
 
 
 def parse_artnet_timecode(data: bytes):
-    """Return ``(milliseconds, fps)`` for an Art-Net OpTimeCode packet, else None.
+    """Return ``(milliseconds, fps, (h, m, s, f))`` for an Art-Net
+    OpTimeCode packet, else None.
 
     Layout: ID[8] | OpCode u16 LE | ProtVer u16 BE | Filler[2] |
             Frames u8 | Seconds u8 | Minutes u8 | Hours u8 | Type u8
-    """
+
+    Validation alignée sur l'ArtnetInput.h de Super Timecode Converter
+    (https://github.com/fiverecords/SuperTimecodeConverter, MIT — la
+    référence demandée par Florian, 2026-08-06) : ProtVer big-endian >= 14
+    (exigence Art-Net 4), cadence dans les BITS 0-1 du Type (les bits 2-7
+    sont réservés — un émetteur mal formé ne doit pas faire retomber sur
+    un fps par défaut faux), champs hors bornes -> paquet rejeté."""
     if len(data) < 19 or not data.startswith(ARTNET_ID):
         return None
     opcode = struct.unpack_from("<H", data, 8)[0]
     if opcode != OP_TIMECODE:
         return None
+    prot_ver = struct.unpack_from(">H", data, 10)[0]
+    if prot_ver < 14:
+        return None
     frames, seconds, minutes, hours, tc_type = struct.unpack_from("<BBBBB", data, 14)
-    fps = ARTNET_TC_RATES.get(tc_type, 25.0)
-    return hmsf_to_ms(hours, minutes, seconds, frames, fps), fps
+    if hours > 23 or minutes > 59 or seconds > 59 or frames > 29:
+        return None
+    fps = ARTNET_TC_RATES[tc_type & 0x03]
+    return hmsf_to_ms(hours, minutes, seconds, frames, fps), fps, (hours, minutes, seconds, frames)
 
 
 # ------------------------------------------------------------------ MTC ----

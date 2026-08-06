@@ -29,6 +29,7 @@ from .core.timeline import (
     required_fade_ms_per_point, resolve_trajectories, MIN_AUTO_DURATION_MS,
 )
 from .core.engine import Transport, PsnBroadcaster
+from .core.timecode import ArtNetTimecodeReceiver
 
 logger = logging.getLogger("lumitrack.sidecar")
 
@@ -62,6 +63,9 @@ MUTATING_COMMANDS = {
     # Contrairement à update_psn_config (réseau/sortie) : la vitesse de
     # référence recalcule la durée de vrais blocs (contenu créatif).
     "update_project_settings",
+    # Réglage projet persisté (timecode In) : l'écho projet doit repartir
+    # pour que la case du menu reflète l'état réel.
+    "set_timecode_chase",
 }
 # Remplacement intégral du projet : l'historique d'un AUTRE projet n'a plus
 # de sens une fois chargé un nouveau, donc on le vide plutôt que de le
@@ -152,6 +156,11 @@ class Session:
         self.transport.set_duration(self.timeline.duration_ms)
         self.broadcaster = PsnBroadcaster(self.transport)
         self._apply_psn_config()
+        # "Timecode In" Art-Net (2026-08-06) : le récepteur pousse chaque
+        # paquet dans le Transport (thread-safe), qui ne le suit que si
+        # external_sync est armé — voir _apply_timecode_chase.
+        self.timecode_input = ArtNetTimecodeReceiver(self._on_external_timecode)
+        self._apply_timecode_chase()
         self.clients: set = set()
         self._undo_stack: list = []
         self._redo_stack: list = []
@@ -177,6 +186,27 @@ class Session:
         self.timeline = Timeline(project)
         self.transport.set_duration(self.timeline.duration_ms)
         self._apply_psn_config()
+        self._apply_timecode_chase()
+
+    def _on_external_timecode(self, tc_ms: float, fps: float):
+        """Depuis le thread du récepteur : le décalage projet (déjà présent
+        pour l'audio) recale le TC de régie sur le zéro de la timeline."""
+        self.transport.apply_external(tc_ms - self.project.timecode_offset_ms, fps)
+
+    def _apply_timecode_chase(self):
+        """Synchronise récepteur + transport avec le réglage projet — appelé
+        à l'init, à chaque changement de projet et par set_timecode_chase."""
+        if self.project.timecode_chase_enabled:
+            self.transport.external_sync = True
+            self.timecode_input.start()
+        else:
+            was_chasing = self.transport.external_sync
+            self.timecode_input.stop()
+            self.transport.external_sync = False
+            if was_chasing:
+                # Revenir à l'horloge interne sans embarquer l'état playing
+                # posé par apply_external : figé là où le TC s'est arrêté.
+                self.transport.pause()
 
     # ---- undo/redo ----
 
@@ -228,7 +258,7 @@ class Session:
     def tick_message(self) -> dict:
         t_ms = self.transport.now_ms()
         poses = self.timeline.positions_at(t_ms)
-        return {
+        msg = {
             "type": "tick",
             "tMs": t_ms,
             "playing": self.transport.playing,
@@ -238,6 +268,13 @@ class Session:
                 for pid, pose in poses.items()
             },
         }
+        if self.project.timecode_chase_enabled:
+            msg["timecode"] = {
+                "receiving": self.transport.external_is_live(),
+                "fps": self.timecode_input.last_fps,
+                "hmsf": list(self.timecode_input.last_hmsf) if self.timecode_input.last_hmsf else None,
+            }
+        return msg
 
     async def broadcast(self, message: dict):
         if not self.clients:
@@ -589,6 +626,22 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         if "terrainGltfPath" in msg:
             v = msg["terrainGltfPath"]
             session.project.terrain_gltf_path = str(v) if v else None
+        if "timecodeOffsetMs" in msg and msg["timecodeOffsetMs"] is not None:
+            session.project.timecode_offset_ms = float(msg["timecodeOffsetMs"])
+        return None
+
+    if msg_type == "set_timecode_chase":
+        # "Timecode In" Art-Net (2026-08-06) : armer/désarmer le suivi du
+        # timecode entrant. Réglage PROJET (persisté) ; l'échec de bind du
+        # port 6454 est remonté au demandeur sans laisser un état armé
+        # fantôme.
+        session.project.timecode_chase_enabled = bool(msg.get("enabled", False))
+        session._apply_timecode_chase()
+        if session.project.timecode_chase_enabled and not session.timecode_input.running:
+            session.project.timecode_chase_enabled = False
+            session.transport.external_sync = False
+            return {"type": "error",
+                    "message": f"Art-Net timecode: {session.timecode_input.last_error or 'bind failed'}"}
         return None
 
     if msg_type == "list_ifaces":

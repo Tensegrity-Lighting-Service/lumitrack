@@ -443,6 +443,13 @@ class Project:
     grid_shade: float = 0.15  # 0 = noir, 1 = blanc
     snap_to_grid: bool = False
 
+    # "Timecode In" (2026-08-06) : le transport suit un timecode Art-Net
+    # entrant (UDP 6454) au lieu de l'horloge interne — voir
+    # core/timecode.py (parsing aligné sur Super Timecode Converter, qui
+    # sert de routeur LTC/MTC -> Art-Net devant Lumitrack). Le décalage
+    # timecode_offset_ms existant est soustrait du TC reçu.
+    timecode_chase_enabled: bool = False
+
     # ---------- helpers ----------
 
     def ensure_backstage(self):
@@ -588,6 +595,7 @@ class Project:
             "audioDurationS": self.audio_duration_s,
             "bpm": self.bpm,
             "timecodeOffsetMs": self.timecode_offset_ms,
+            "timecodeChaseEnabled": self.timecode_chase_enabled,
             "psnSystemName": self.psn_system_name,
             "psnMcastIp": self.psn_mcast_ip,
             "psnPort": self.psn_port,
@@ -652,6 +660,7 @@ class Project:
             audio_duration_s=d.get("audioDurationS"),
             bpm=d.get("bpm"),
             timecode_offset_ms=float(d.get("timecodeOffsetMs", 0.0)),
+            timecode_chase_enabled=bool(d.get("timecodeChaseEnabled", False)),
             psn_system_name=d.get("psnSystemName", "Lumitrack"),
             psn_mcast_ip=d.get("psnMcastIp", "236.10.10.10"),
             psn_port=int(d.get("psnPort", 56565)),

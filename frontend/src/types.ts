@@ -208,6 +208,10 @@ export interface Project {
   gridOpacity: number
   gridShade: number
   snapToGrid: boolean
+  /** Suivi du timecode Art-Net entrant (UDP 6454) au lieu de l'horloge
+   * interne. Le décalage timecodeOffsetMs (déjà déclaré plus haut) est
+   * soustrait du TC reçu. */
+  timecodeChaseEnabled: boolean
   backstageZones: BackstageZone[]
   rosterGroups: RosterGroup[]
   fixtureMountPresets: FixtureMountPreset[]
@@ -234,6 +238,12 @@ export interface TickMessage {
   playing: boolean
   durationMs: number
   positions: Record<string, Pose>
+  /** Présent uniquement quand le suivi timecode (Art-Net) est armé. */
+  timecode?: {
+    receiving: boolean
+    fps: number | null
+    hmsf: [number, number, number, number] | null
+  }
 }
 
 // Block-edit context (§12.6): everything the scene needs to display a
