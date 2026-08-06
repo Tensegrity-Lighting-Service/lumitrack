@@ -582,6 +582,13 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             session.project.grid_shade = min(1.0, max(0.0, float(msg["gridShade"])))
         if "snapToGrid" in msg and msg["snapToGrid"] is not None:
             session.project.snap_to_grid = bool(msg["snapToGrid"])
+        # Remplacement/retrait du terrain 3D (2026-08-06) : null explicite =
+        # retirer (le frontend retombe sur son sol générique). Le fichier
+        # sera embarqué dans le zip à la prochaine sauvegarde comme les
+        # autres médias.
+        if "terrainGltfPath" in msg:
+            v = msg["terrainGltfPath"]
+            session.project.terrain_gltf_path = str(v) if v else None
         return None
 
     if msg_type == "list_ifaces":

@@ -1079,6 +1079,27 @@ def test_archive_is_pruned_beyond_max_versions(tmp_path):
     assert len(archived) == ARCHIVE_MAX_VERSIONS
 
 
+def test_save_keeps_media_from_previous_zip_when_source_vanishes(tmp_path):
+    """La reference est LE FICHIER .lumitrack (demande 2026-08-06) : une
+    fois l audio/le terrain embarques, supprimer ou deplacer le fichier
+    source ne doit pas faire perdre le media a la sauvegarde suivante —
+    l entree du zip precedent est conservee."""
+    import zipfile
+    project = _bundled_project(tmp_path)
+    file_path = str(tmp_path / "Show.lumitrack")
+    save_bundle(project, file_path)
+
+    os.remove(project.audio_path)  # la source disparait apres le 1er save
+    project.name = "v2"
+    save_bundle(project, file_path)
+
+    back = load_bundle(file_path)
+    assert back.name == "v2"
+    assert back.audio_path and os.path.isfile(back.audio_path)
+    with open(back.audio_path, "rb") as fh:
+        assert fh.read() == b"fake-audio-bytes"
+
+
 def test_legacy_flat_file_bundle_still_reads_and_converts_to_zip(tmp_path):
     """Format intermediaire (2026-07-31 -> 2026-08-06) : fichier JSON nu +
     dossiers media/ et archive/ a cote. Doit rester lisible, et la

@@ -984,6 +984,20 @@ function App() {
           sidecar.setAudio({ path: null })
         } },
         { separator: true } as const,
+        // Remplacement du terrain 3D (demande 2026-08-06 — jusqu'ici seul
+        // le projet de démo en posait un). Extensions = ce que le
+        // GLTFLoader de three.js sait lire : glb/gltf uniquement.
+        { label: t('menu.file.replaceTerrain'), onClick: async () => {
+          const path = await openDialog({
+            title: t('menu.file.replaceTerrainDialogTitle'),
+            filters: [{ name: t('menu.file.terrainFilter'), extensions: ['glb', 'gltf'] }],
+          })
+          if (typeof path === 'string') sidecar.updateProjectSettings({ terrainGltfPath: path })
+        } },
+        { label: t('menu.file.removeTerrain'), disabled: !project.terrainGltfPath, onClick: () => {
+          sidecar.updateProjectSettings({ terrainGltfPath: null })
+        } },
+        { separator: true } as const,
         { label: t('menu.file.save'), onClick: () => saveOrSaveAs(project.name) },
         { label: t('menu.file.saveAs'), onClick: async () => {
           const path = await pickSaveAsPath(project.name)

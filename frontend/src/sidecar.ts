@@ -184,6 +184,7 @@ class SidecarClient {
   updateProjectSettings(patch: {
     referenceSpeedCms?: number; actorDiameterCm?: number
     gridOpacity?: number; gridShade?: number; snapToGrid?: boolean
+    terrainGltfPath?: string | null
   }) {
     this.send({ type: 'update_project_settings', ...patch })
   }

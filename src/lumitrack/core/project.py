@@ -1006,15 +1006,32 @@ def save_bundle(project: Project, file_path: str) -> str:
             del kept_entries[name]
 
     # 3) Instantané courant, médias dédupliqués par hash de contenu.
+    #    LA RÉFÉRENCE EST LE .lumitrack (demande Florian 2026-08-06) : une
+    #    fois un média embarqué, la sauvegarde ne dépend plus jamais du
+    #    fichier source — s'il a été déplacé/supprimé depuis, on garde
+    #    l'entrée du zip précédent au lieu de perdre la référence.
+    previous_refs: dict = {}    # json_key -> nom d'entrée du zip précédent
+    if previous_current is not None:
+        try:
+            prev_snapshot = json.loads(previous_current)
+            for json_key in _MEDIA_JSON_KEYS.values():
+                rel = prev_snapshot.get(json_key)
+                if rel and rel.replace(os.sep, "/") in kept_entries:
+                    previous_refs[json_key] = rel.replace(os.sep, "/")
+        except (ValueError, AttributeError):
+            pass  # ancien état illisible : pas de repli possible
     snapshot = project.to_dict()
     media_to_add: dict = {}     # nom d'entrée zip -> chemin source disque
     for field_name in _MEDIA_FIELDS:
         source_path = getattr(project, field_name)
         json_key = _MEDIA_JSON_KEYS[field_name]
-        if not source_path or not os.path.isfile(source_path):
-            # Média introuvable sur disque (déplacé/supprimé) : ne pas
-            # inventer — la référence est perdue, comme avant.
+        if not source_path:
             snapshot[json_key] = None
+            continue
+        if not os.path.isfile(source_path):
+            # Source disparue : repli sur l'entrée déjà embarquée dans le
+            # zip précédent, sinon la référence est réellement perdue.
+            snapshot[json_key] = previous_refs.get(json_key)
             continue
         digest = _sha256_of(source_path)
         ext = os.path.splitext(source_path)[1]
