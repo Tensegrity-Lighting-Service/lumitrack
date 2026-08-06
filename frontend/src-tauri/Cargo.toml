@@ -25,3 +25,9 @@ tauri = { version = "2.11.3", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 # Vrais dialogues de fichiers (mission "navigateur plutot qu'un lien").
 tauri-plugin-dialog = "2"
+
+# Instance unique (2026-08-06) : un second lancement rend la main a la
+# fenetre deja ouverte au lieu de demarrer une deuxieme app (dont le
+# sidecar echouerait de toute facon sur le port 17845 deja pris).
+[target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
+tauri-plugin-single-instance = "2"

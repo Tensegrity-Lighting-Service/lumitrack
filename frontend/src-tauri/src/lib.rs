@@ -50,7 +50,23 @@ fn spawn_sidecar() -> std::io::Result<Child> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
+  let mut builder = tauri::Builder::default();
+
+  // Instance unique — DOIT etre le premier plugin enregistre (doc du
+  // plugin) : un second lancement ne cree rien, il ramene la fenetre de
+  // l'instance existante au premier plan.
+  #[cfg(not(any(target_os = "android", target_os = "ios")))]
+  {
+    builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+      if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+      }
+    }));
+  }
+
+  builder
     .plugin(tauri_plugin_dialog::init())
     .setup(|app| {
       if cfg!(debug_assertions) {
