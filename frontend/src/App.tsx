@@ -28,6 +28,7 @@ import { buildActorContextMenuSections, buildFocusPointContextMenuSections } fro
 import { CompassPicker } from './ui/CompassPicker'
 import { FocusPointSelect } from './ui/FocusPointSelect'
 import { PromptDialog, promptText } from './ui/promptDialog'
+import { setStageCenter, displayXM, displayYM, storeXCm, storeYCm } from './stageCoords'
 import {
   DndContext, DragOverlay, PointerSensor, pointerWithin, rectIntersection,
   useDraggable, useDroppable, useSensor, useSensors,
@@ -826,6 +827,10 @@ function App() {
   // useDroppable ICI, hors du DndContext rendu plus bas, ne s'enregistrait
   // jamais).
 
+  // Repère affiché = 3D absolu centré (2026-08-06) : rafraîchi à chaque
+  // rendu AVANT les enfants (inspecteurs), voir stageCoords.ts.
+  if (project) setStageCenter(project.stageWidthCm, project.stageHeightCm)
+
   const tMs = tick?.tMs ?? 0
   const playing = tick?.playing ?? false
   const durationMs = tick?.durationMs ?? 1000
@@ -1560,12 +1565,12 @@ function BackstagePanel({ project }: { project: Project }) {
           </div>
           <div className="backstage-grid">
             <label>{t('backstage.x')}
-              <NumericInput value={zone.xCm / 100} step={0.5}
-                onCommit={(v) => { if (v !== null) update(zone.id, { xCm: v * 100 }) }} />
+              <NumericInput value={displayXM(zone.xCm)} step={0.5}
+                onCommit={(v) => { if (v !== null) update(zone.id, { xCm: storeXCm(v) }) }} />
             </label>
             <label>{t('backstage.y')}
-              <NumericInput value={zone.yCm / 100} step={0.5}
-                onCommit={(v) => { if (v !== null) update(zone.id, { yCm: v * 100 }) }} />
+              <NumericInput value={displayYM(zone.yCm)} step={0.5}
+                onCommit={(v) => { if (v !== null) update(zone.id, { yCm: storeYCm(v) }) }} />
             </label>
             <label>{t('backstage.width')}
               <NumericInput value={zone.widthCm / 100} step={0.5}
@@ -2146,13 +2151,15 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
       {/* stopPropagation : cliquer dans un champ ne doit pas basculer la
           sélection de l'acteur portée par la carte entière. */}
       {!collapsed && <div className="activation-grid" onClick={(e) => e.stopPropagation()}>
+        {/* Repère affiché = 3D absolu centré (2026-08-06) : mêmes valeurs
+            que la sortie PSN, voir stageCoords.ts. */}
         <label>{t('cue.x')}
-          <NumericInput value={activation.targetXCm === null ? null : activation.targetXCm / 100} step={0.1} nullable
-            onCommit={(v) => set({ targetXCm: v === null ? null : v * 100 })} />
+          <NumericInput value={activation.targetXCm === null ? null : displayXM(activation.targetXCm)} step={0.1} nullable
+            onCommit={(v) => set({ targetXCm: v === null ? null : storeXCm(v) })} />
         </label>
         <label>{t('cue.y')}
-          <NumericInput value={activation.targetYCm === null ? null : activation.targetYCm / 100} step={0.1} nullable
-            onCommit={(v) => set({ targetYCm: v === null ? null : v * 100 })} />
+          <NumericInput value={activation.targetYCm === null ? null : displayYM(activation.targetYCm)} step={0.1} nullable
+            onCommit={(v) => set({ targetYCm: v === null ? null : storeYCm(v) })} />
         </label>
         <label>{t('cue.z')}
           <NumericInput value={activation.targetZCm === null ? null : activation.targetZCm / 100} step={0.1} nullable
