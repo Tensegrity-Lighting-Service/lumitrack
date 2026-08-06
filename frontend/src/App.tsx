@@ -497,6 +497,9 @@ function App() {
   const [fitToken, setFitToken] = useState(0)
   const [editingZone, setEditingZone] = useState(false)
   const [gridOpacity, setGridOpacity] = useState(0.5)
+  // Couleur de la grille : 0 = noir, 1 = blanc (2026-08-06) — le contraste
+  // dépend du terrain chargé, seul l'utilisateur peut trancher.
+  const [gridShade, setGridShade] = useState(0.15)
   // "Grille on/off" (menu contextuel terrain vide) : bascule à 0, garde la
   // dernière opacité non nulle pour la retrouver telle quelle en rallumant
   // plutôt que de retomber sur un défaut arbitraire.
@@ -919,18 +922,9 @@ function App() {
         { label: t('menu.view.editZone'), checked: editingZone, onClick: () => setEditingZone((v) => !v) },
       ],
     },
-    {
-      label: t('menu.output'),
-      items: [
-        {
-          label: psnRunning ? t('menu.output.stopPsn') : t('menu.output.startPsn'),
-          checked: psnRunning,
-          onClick: () => (psnRunning ? sidecar.psnStop() : sidecar.psnStart()),
-        },
-        { separator: true } as const,
-        { label: t('menu.output.psnSettings'), onClick: () => setShowPsnPanel(true) },
-      ],
-    },
+    // Menu "Sortie" fusionné dans "Réglages" (demande Florian 2026-08-06) :
+    // un seul menu pour tous les réglages, le panneau PSN devient la
+    // fenêtre "Réglages généraux".
     {
       label: t('menu.settings'),
       items: [
@@ -942,6 +936,21 @@ function App() {
           value: project.actorDiameterCm / 100, step: 0.05,
           onCommit: (v: number | null) => { if (v !== null && v > 0) sidecar.updateProjectSettings({ actorDiameterCm: v * 100 }) },
         } as const,
+        // Vitesse de référence déplacée ici depuis le popover de la grille
+        // (2026-08-06) : c'est un réglage GÉNÉRAL du projet, pas un réglage
+        // d'affichage du viewport.
+        {
+          numeric: true, label: t('viewport.referenceSpeed'), title: t('viewport.referenceSpeedHint'),
+          value: Math.round(project.referenceSpeedCms * 0.036 * 10) / 10, step: 0.5,
+          onCommit: (v: number | null) => { if (v !== null && v >= 0.5) sidecar.updateProjectSettings({ referenceSpeedCms: v / 0.036 }) },
+        } as const,
+        { separator: true } as const,
+        {
+          label: psnRunning ? t('menu.output.stopPsn') : t('menu.output.startPsn'),
+          checked: psnRunning,
+          onClick: () => (psnRunning ? sidecar.psnStop() : sidecar.psnStart()),
+        },
+        { label: t('menu.output.psnSettings'), onClick: () => setShowPsnPanel(true) },
       ],
     },
   ]
@@ -1149,6 +1158,7 @@ function App() {
           fitToken={fitToken}
           editingZone={editingZone}
           gridOpacity={gridOpacity}
+          gridShade={gridShade}
           snapToGrid={snapToGrid}
           zoomAction={zoomAction}
           onToggleGrid={toggleGrid}
@@ -1180,6 +1190,17 @@ function App() {
                     onChange={(e) => setGridOpacity(Number(e.target.value))}
                   />
                 </label>
+                {/* Couleur de la grille noir ↔ blanc (2026-08-06) : sur un
+                    terrain clair, une grille sombre est le bon choix — et
+                    inversement. L'utilisateur choisit son contraste. */}
+                <label>
+                  {t('viewport.gridColor')}
+                  <input
+                    type="range" min={0} max={1} step={0.05}
+                    value={gridShade}
+                    onChange={(e) => setGridShade(Number(e.target.value))}
+                  />
+                </label>
                 <label>
                   {t('viewport.terrainRotation')}
                   <NumericInput
@@ -1192,13 +1213,6 @@ function App() {
                   <NumericInput
                     value={project.gridSizeCm / 100} step={0.1}
                     onCommit={(v) => { if (v !== null && v >= 0.01) sidecar.updateStageMap({ gridSizeCm: v * 100 }) }}
-                  />
-                </label>
-                <label title={t('viewport.referenceSpeedHint')}>
-                  {t('viewport.referenceSpeed')}
-                  <NumericInput
-                    value={project.referenceSpeedCms * 0.036} step={0.5}
-                    onCommit={(v) => { if (v !== null && v >= 0.5) sidecar.updateProjectSettings({ referenceSpeedCms: v / 0.036 }) }}
                   />
                 </label>
               </div>
@@ -1384,6 +1398,14 @@ function ActorInspector({ project, selectedPointIds }: {
           </select>
         </label>
       </div>
+      <label className="psn-check" title={t('inspector.focusTargetHint')}>
+        <input
+          type="checkbox"
+          checked={point.isFocusTarget}
+          onChange={(e) => sidecar.updatePoint(point.id, { isFocusTarget: e.target.checked })}
+        />
+        {t('inspector.focusTarget')}
+      </label>
     </div>
   )
 }

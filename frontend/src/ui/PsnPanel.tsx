@@ -66,6 +66,88 @@ export function PsnPanel({ project, onClose }: {
         </div>
         {preview?.lastError && <p className="psn-error">{t('psn.socketError', { error: preview.lastError })}</p>}
 
+        <details className="settings-section" open>
+          <summary>{t('psn.mountPresetsTitle')}</summary>
+        <section>
+          <table className="psn-table">
+            <thead>
+              <tr>
+                <th>{t('psn.mountPresetName')}</th>
+                <th>{t('psn.mountPresetPitch')}</th>
+                <th>{t('psn.mountPresetTracksYaw')}</th>
+                <th>{t('psn.mountPresetRoll')}</th>
+                <th>{t('psn.mountPresetTracksYaw')}</th>
+                <th>{t('psn.mountPresetHeight')}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {project.fixtureMountPresets.map((preset) => {
+                const update = (patch: Partial<typeof preset>) => sidecar.setFixtureMountPresets(
+                  project.fixtureMountPresets.map((p) => (p.id === preset.id ? { ...p, ...patch } : p)))
+                return (
+                  <tr key={preset.id}>
+                    <td>
+                      <input
+                        value={preset.name}
+                        onChange={(e) => update({ name: e.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <NumericInput value={preset.basePitchDeg} step={5}
+                        onCommit={(v) => update({ basePitchDeg: v ?? 0 })} />
+                    </td>
+                    <td>
+                      <input type="checkbox" checked={preset.pitchTracksYaw}
+                        onChange={(e) => update({ pitchTracksYaw: e.target.checked })} />
+                    </td>
+                    <td>
+                      <NumericInput value={preset.baseRollDeg} step={5}
+                        onCommit={(v) => update({ baseRollDeg: v ?? 0 })} />
+                    </td>
+                    <td>
+                      <input type="checkbox" checked={preset.rollTracksYaw}
+                        onChange={(e) => update({ rollTracksYaw: e.target.checked })} />
+                    </td>
+                    <td>
+                      {/* Saisi en mètres (comme la hauteur de l'inspecteur
+                          acteur), stocké en cm scène. */}
+                      <NumericInput value={(preset.zOffsetCm ?? 0) / 100} step={0.1}
+                        onCommit={(v) => update({ zOffsetCm: (v ?? 0) * 100 })} />
+                    </td>
+                    <td>
+                      <button
+                        className="psn-preset-delete"
+                        title={t('psn.mountPresetDelete')}
+                        onClick={() => sidecar.setFixtureMountPresets(
+                          project.fixtureMountPresets.filter((p) => p.id !== preset.id))}
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <button
+            onClick={() => sidecar.setFixtureMountPresets([
+              ...project.fixtureMountPresets,
+              {
+                id: crypto.randomUUID(), name: t('psn.mountPresetDefaultName'),
+                basePitchDeg: 0, baseRollDeg: 0, pitchTracksYaw: false, rollTracksYaw: false,
+                zOffsetCm: 0,
+              },
+            ])}
+          >
+            {t('psn.mountPresetAdd')}
+          </button>
+          <p className="psn-note">{t('psn.mountPresetsNote')}</p>
+        </section>
+        </details>
+
+        <details className="settings-section" open>
+          <summary>{t('psn.sectionPsn')}</summary>
         <div className="psn-columns">
           <section>
             <h3>{t('psn.network')}</h3>
@@ -140,10 +222,12 @@ export function PsnPanel({ project, onClose }: {
             </div>
           </section>
         </div>
+        </details>
 
+        <details className="settings-section" open>
+          <summary>{t('psn.trackers')}</summary>
         <section>
-          <h3>{t('psn.trackers')}</h3>
-          <table className="psn-table">
+          <div className="psn-scroll"><table className="psn-table">
             <thead>
               <tr>
                 <th>{t('psn.tableActor')}</th><th>{t('psn.tableNumber')}</th>
@@ -156,8 +240,14 @@ export function PsnPanel({ project, onClose }: {
                   un groupe dans le roster réordonne project.points, et les
                   acteurs groupés se retrouvaient relégués en fin de tableau
                   — l'ID émis, lui, est stable (number/psnTrackerId). */}
+              {/* Les points de focus ne sont JAMAIS émis (engine.py saute
+                  is_focus_point) — les lister ici avec un ID de repli
+                  laissait croire à une collision avec un vrai acteur
+                  (question de Florian, 2026-08-06). L'index de repli reste
+                  calculé sur la liste COMPLÈTE, comme côté backend. */}
               {project.points
                 .map((pt, index) => ({ pt, resolved: pt.psnTrackerId ?? pt.number ?? index }))
+                .filter(({ pt }) => !pt.isFocusPoint)
                 .sort((a, b) => a.resolved - b.resolved)
                 .map(({ pt, resolved }) => {
                 return (
@@ -176,83 +266,15 @@ export function PsnPanel({ project, onClose }: {
                 )
               })}
             </tbody>
-          </table>
+          </table></div>
           <p className="psn-note">{t('psn.trackersNote')}</p>
         </section>
+        </details>
 
+        <details className="settings-section" open>
+          <summary>{t('psn.monitor')} {preview ? t('psn.monitorRateSuffix', { rateHz: preview.rateHz }) : ''}</summary>
         <section>
-          <h3>{t('psn.mountPresetsTitle')}</h3>
-          <table className="psn-table">
-            <thead>
-              <tr>
-                <th>{t('psn.mountPresetName')}</th>
-                <th>{t('psn.mountPresetPitch')}</th>
-                <th>{t('psn.mountPresetTracksYaw')}</th>
-                <th>{t('psn.mountPresetRoll')}</th>
-                <th>{t('psn.mountPresetTracksYaw')}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {project.fixtureMountPresets.map((preset) => {
-                const update = (patch: Partial<typeof preset>) => sidecar.setFixtureMountPresets(
-                  project.fixtureMountPresets.map((p) => (p.id === preset.id ? { ...p, ...patch } : p)))
-                return (
-                  <tr key={preset.id}>
-                    <td>
-                      <input
-                        value={preset.name}
-                        onChange={(e) => update({ name: e.target.value })}
-                      />
-                    </td>
-                    <td>
-                      <NumericInput value={preset.basePitchDeg} step={5}
-                        onCommit={(v) => update({ basePitchDeg: v ?? 0 })} />
-                    </td>
-                    <td>
-                      <input type="checkbox" checked={preset.pitchTracksYaw}
-                        onChange={(e) => update({ pitchTracksYaw: e.target.checked })} />
-                    </td>
-                    <td>
-                      <NumericInput value={preset.baseRollDeg} step={5}
-                        onCommit={(v) => update({ baseRollDeg: v ?? 0 })} />
-                    </td>
-                    <td>
-                      <input type="checkbox" checked={preset.rollTracksYaw}
-                        onChange={(e) => update({ rollTracksYaw: e.target.checked })} />
-                    </td>
-                    <td>
-                      <button
-                        className="psn-preset-delete"
-                        title={t('psn.mountPresetDelete')}
-                        onClick={() => sidecar.setFixtureMountPresets(
-                          project.fixtureMountPresets.filter((p) => p.id !== preset.id))}
-                      >
-                        ✕
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          <button
-            onClick={() => sidecar.setFixtureMountPresets([
-              ...project.fixtureMountPresets,
-              {
-                id: crypto.randomUUID(), name: t('psn.mountPresetDefaultName'),
-                basePitchDeg: 0, baseRollDeg: 0, pitchTracksYaw: false, rollTracksYaw: false,
-              },
-            ])}
-          >
-            {t('psn.mountPresetAdd')}
-          </button>
-          <p className="psn-note">{t('psn.mountPresetsNote')}</p>
-        </section>
-
-        <section>
-          <h3>{t('psn.monitor')} {preview ? t('psn.monitorRateSuffix', { rateHz: preview.rateHz }) : ''}</h3>
-          <table className="psn-table psn-mono">
+          <div className="psn-scroll"><table className="psn-table psn-mono">
             <thead>
               <tr>
                 <th>ID</th><th>{t('inspector.name')}</th>
@@ -278,8 +300,10 @@ export function PsnPanel({ project, onClose }: {
                 <tr><td colSpan={6} className="psn-note">{t('psn.monitorEmpty')}</td></tr>
               )}
             </tbody>
-          </table>
+          </table></div>
         </section>
+        </details>
+
       </div>
     </div>
   )

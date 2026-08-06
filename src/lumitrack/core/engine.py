@@ -235,7 +235,13 @@ class PsnBroadcaster:
             pose = poses.get(point.id)
             if pose is None:
                 continue  # never invent a position at (0,0)
-            x_m, y_m, z_m = transform.to_psn(pose.x_cm, pose.y_cm, pose.z_cm)
+            # Hauteur du tracker portée par le preset de montage (demande
+            # 2026-08-06) : un tube tenu à bout de bras ou monté sur pied
+            # n'émet pas à la même hauteur que le sol — offset appliqué en
+            # coordonnées scène, AVANT la transformation de sortie.
+            mount_preset = governing_mount_preset(project, point.id, t_ms)
+            z_off = float(mount_preset.get("zOffsetCm", 0.0)) if mount_preset else 0.0
+            x_m, y_m, z_m = transform.to_psn(pose.x_cm, pose.y_cm, pose.z_cm + z_off)
             yaw_rad = math.radians(pose.yaw_deg)
             # ORI = vecteur axe-angle : le lacet tourne autour de l'axe
             # VERTICAL de la convention de sortie (spec 2.03 : Y-up).
@@ -244,7 +250,6 @@ class PsnBroadcaster:
             # complète rX/rZ depuis rY (lacet déjà résolu) — gouverné par
             # les BLOCS (LTP par activation), jamais lu par la résolution
             # de lecture elle-même.
-            mount_preset = governing_mount_preset(project, point.id, t_ms)
             pitch_deg, roll_deg = apply_mount_preset(mount_preset, pose.yaw_deg)
             pitch_rad = math.radians(pitch_deg)
             roll_rad = math.radians(roll_deg)

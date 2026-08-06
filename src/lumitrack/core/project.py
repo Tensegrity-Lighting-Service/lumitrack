@@ -82,6 +82,13 @@ class Point:
     # pures), CE champ affecte la résolution (backstage_slot) — miroir Rust
     # nécessaire (native/src/model.rs::Point).
     is_focus_point: bool = False
+    # Un VRAI acteur qui sert AUSSI de cible de visée (demande 2026-08-06,
+    # "une chanteuse") : reste émis en PSN et placé backstage comme
+    # n'importe quel acteur — la seule différence est d'apparaître dans les
+    # listes de choix de focus du frontend. La résolution vise par id
+    # (resolved_xy), peu importe le type de point : convention d'édition
+    # pure, pas de miroir Rust.
+    is_focus_target: bool = False
 
     def resolved_tracker_id(self, fallback_index: int) -> int:
         if self.psn_tracker_id is not None:
@@ -101,6 +108,7 @@ class Point:
             "rosterGroupId": self.roster_group_id,
             "defaultTravelOrientationMode": self.default_travel_orientation_mode,
             "isFocusPoint": self.is_focus_point,
+            "isFocusTarget": self.is_focus_target,
         }
 
     @classmethod
@@ -121,6 +129,7 @@ class Point:
             roster_group_id=d.get("rosterGroupId"),
             default_travel_orientation_mode=mode,
             is_focus_point=bool(d.get("isFocusPoint", False)),
+            is_focus_target=bool(d.get("isFocusTarget", False)),
         )
 
 

@@ -24,6 +24,10 @@ export interface Point {
    * jamais émis en PSN, jamais placé en coulisse (mission "modes
    * d'orientation", 2026-08-04). */
   isFocusPoint: boolean
+  /** Vrai acteur qui sert AUSSI de cible de visée (ex. une chanteuse,
+   * 2026-08-06) : émis en PSN normalement, mais listé dans les choix de
+   * point de focus. */
+  isFocusTarget: boolean
 }
 
 /** Sous-groupe du roster — juste un nom, l'ordre/l'appartenance vivent sur
@@ -45,6 +49,10 @@ export interface FixtureMountPreset {
   baseRollDeg: number
   pitchTracksYaw: boolean
   rollTracksYaw: boolean
+  /** Hauteur d'émission du tracker (cm, coordonnées scène) — un tube tenu
+   * à bout de bras n'émet pas au sol. Optionnel : presets d'avant
+   * 2026-08-06 sans le champ = 0. */
+  zOffsetCm?: number
 }
 
 /** Zone backstage : rectangle nommé en coordonnées scène (souvent hors de

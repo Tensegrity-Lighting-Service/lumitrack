@@ -73,6 +73,21 @@ def test_build_trackers_puts_roll_on_the_axis_yaw_does_not_use():
     assert t.ori_y == math.radians(45.0)  # le roulis suit le lacet, sur ori_y (axe restant)
 
 
+def test_build_trackers_adds_preset_height_before_output_transform():
+    """"Hauteur du tracker" du preset (demande 2026-08-06) : offset Z en cm
+    scène, appliqué AVANT la transformation de sortie — un tube tenu à bout
+    de bras n'émet pas au sol. Preset sans le champ (d'avant l'ajout) = 0."""
+    project = _project_with_mounted_point()
+    broadcaster = _broadcaster_for(project)
+    base_y_m = broadcaster.build_trackers(0.0)[0].y_m  # hauteur par défaut de l'acteur
+
+    project.fixture_mount_presets[0]["zOffsetCm"] = 150.0
+    assert broadcaster.build_trackers(0.0)[0].y_m == base_y_m + 1.5  # up_axis="y" : Z scène -> Y PSN
+
+    del project.fixture_mount_presets[0]["zOffsetCm"]
+    assert broadcaster.build_trackers(0.0)[0].y_m == base_y_m
+
+
 def test_build_trackers_no_preset_is_unaffected():
     project = _project_with_mounted_point()
     project.cues[0].activations["a"].mount_preset_id = None

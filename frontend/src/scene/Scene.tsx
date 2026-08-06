@@ -128,14 +128,6 @@ function stageToLocal(x_cm: number, y_cm: number, z_cm: number): [number, number
   return [x_cm * CM_TO_M, z_cm * CM_TO_M, y_cm * CM_TO_M]
 }
 
-const SCENE_BACKGROUND = '#0c0d10'
-
-/** t=1 -> original color, t=0 -> faded into the scene background. Used as a
- * stand-in for opacity where a material has no such control (drei's Grid). */
-function mixTowardBackground(hex: string, t: number): string {
-  return new THREE.Color(hex).lerp(new THREE.Color(SCENE_BACKGROUND), 1 - t).getStyle()
-}
-
 export interface PlanarBounds {
   minX: number
   maxX: number
@@ -1555,7 +1547,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
 function SceneContent({
   project, positions, tMs, selectedPointId, selectedPointIds, selectedCueId, blockContext, onSelectPoint, onSelectPoints,
   onSelectCue, onLassoRect, cameraLocked, fitToken, editingZone,
-  gridOpacity, snapToGrid, zoomAction, dropHandleRef, onToggleGrid, onFitToWindow,
+  gridOpacity, gridShade, snapToGrid, zoomAction, dropHandleRef, onToggleGrid, onFitToWindow,
 }: {
   project: Project
   positions: Record<string, Pose>
@@ -1572,6 +1564,7 @@ function SceneContent({
   fitToken: number
   editingZone: boolean
   gridOpacity: number
+  gridShade: number
   snapToGrid: boolean
   zoomAction: { token: number; factor: number }
   dropHandleRef: React.RefObject<SceneHandle | null>
@@ -2491,11 +2484,22 @@ function SceneContent({
     return pointId === selectedPointId ? 'highlight' : 'dim'
   }
 
-  // drei's Grid has no true opacity/alpha control (its shader material
-  // doesn't expose one) — faded toward the background colour instead, which
-  // reads the same way visually for a HUD-style grid over a dark scene.
-  const gridCellColor = useMemo(() => mixTowardBackground('#2b2f38', gridOpacity), [gridOpacity])
-  const gridSectionColor = useMemo(() => mixTowardBackground('#3a3f4a', gridOpacity), [gridOpacity])
+  // drei's Grid n'a pas de vrai canal alpha — l'« opacité » est simulée en
+  // couleur. Nouveau modèle (2026-08-06, "le slider est inversé") : la
+  // teinte de base est un GRIS choisi noir↔blanc par l'utilisateur
+  // (gridShade — le contraste dépend du terrain chargé), et l'opacité
+  // fond ce gris vers le gris moyen 0.5 (quasi neutre sur la plupart des
+  // sols) : curseur à droite = grille plus franche, TOUJOURS. L'ancien
+  // modèle fondait vers le fond SOMBRE de l'app : sur un terrain clair,
+  // MOINS d'opacité donnait des lignes plus noires donc PLUS visibles.
+  const gridCellColor = useMemo(() => {
+    const v = 0.5 + (gridShade - 0.5) * Math.min(1, gridOpacity * 0.85)
+    return new THREE.Color(v, v, v).getStyle()
+  }, [gridShade, gridOpacity])
+  const gridSectionColor = useMemo(() => {
+    const v = 0.5 + (gridShade - 0.5) * Math.min(1, gridOpacity)
+    return new THREE.Color(v, v, v).getStyle()
+  }, [gridShade, gridOpacity])
 
   return (
     <>
@@ -2742,6 +2746,7 @@ export const Scene = forwardRef<SceneHandle, {
   fitToken: number
   editingZone: boolean
   gridOpacity: number
+  gridShade: number
   snapToGrid: boolean
   zoomAction: { token: number; factor: number }
   onToggleGrid: () => void

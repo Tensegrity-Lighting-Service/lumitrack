@@ -139,6 +139,7 @@ class SidecarClient {
     homeZoneId?: string | null; rosterGroupId?: string | null
     defaultTravelOrientationMode?: 'fixed' | 'path' | 'focus'
     isFocusPoint?: boolean
+    isFocusTarget?: boolean
   }) {
     this.send({ type: 'update_point', pointId, ...patch })
   }

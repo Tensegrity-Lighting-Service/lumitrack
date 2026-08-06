@@ -10,7 +10,10 @@ export function FocusPointSelect({ points, value, onChange }: {
   onChange: (id: string | null) => void
 }) {
   const t = useT()
-  const focusPoints = points.filter((p) => p.isFocusPoint)
+  // Les acteurs marqués "servir de point de focus" (une chanteuse que les
+  // autres visent, 2026-08-06) sont visables au même titre que les vrais
+  // repères — la résolution vise par id, peu importe le type de point.
+  const focusPoints = points.filter((p) => p.isFocusPoint || p.isFocusTarget)
   return (
     <select value={value ?? ''} onChange={(e) => onChange(e.target.value || null)}>
       <option value="">{t('cue.focusPointNone')}</option>

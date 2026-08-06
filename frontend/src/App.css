@@ -1073,3 +1073,13 @@
   background: color-mix(in srgb, #4F6DF5 25%, transparent);
   color: #8fa6ff; border-color: #4F6DF5;
 }
+
+/* Sections repliables du panneau Réglages généraux (2026-08-06) */
+.settings-section { margin-bottom: 10px; }
+.settings-section > summary {
+  cursor: pointer; font-size: 13px; font-weight: 600; color: #cfd3dc;
+  padding: 4px 0; user-select: none;
+}
+.settings-section > summary:hover { color: #fff; }
+/* Sous-fenêtre scrollable pour les longs tableaux (trackers, moniteur) */
+.psn-scroll { max-height: 260px; overflow-y: auto; border: 1px solid #1d1d24; border-radius: 4px; padding: 0 6px; }

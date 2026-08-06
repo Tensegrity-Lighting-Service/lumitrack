@@ -639,6 +639,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             point.default_travel_orientation_mode = msg["defaultTravelOrientationMode"]
         if "isFocusPoint" in msg:
             point.is_focus_point = bool(msg["isFocusPoint"])
+        if "isFocusTarget" in msg:
+            point.is_focus_target = bool(msg["isFocusTarget"])
         return None
 
     if msg_type == "delete_point":
