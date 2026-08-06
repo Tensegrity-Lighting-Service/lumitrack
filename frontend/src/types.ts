@@ -211,6 +211,12 @@ export interface Project {
   /** Suivi du timecode Art-Net entrant (UDP 6454) au lieu de l'horloge
    * interne. Le décalage timecodeOffsetMs (déjà déclaré plus haut) est
    * soustrait du TC reçu. */
+  /** Offset global de sortie (m, additif, indépendant des presets) —
+   * appliqué en tout dernier ; Z = hauteur. */
+  outputOffsetXM: number
+  outputOffsetYM: number
+  outputOffsetZM: number
+  outputRotationDeg: number
   timecodeChaseEnabled: boolean
   /** Carte réseau d'écoute du timecode Art-Net — '0.0.0.0' = toutes. */
   timecodeIfaceIp: string

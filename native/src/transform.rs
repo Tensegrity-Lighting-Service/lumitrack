@@ -28,6 +28,14 @@ pub struct OutputTransform {
     /// ancien comportement coin (tests unitaires purs).
     pub stage_width_cm: f64,
     pub stage_height_cm: f64,
+    /// Offset GLOBAL de sortie (2026-08-06, "descendre les astera de
+    /// 12 m") : additif, indépendant des presets, appliqué en TOUT
+    /// dernier — rotation autour de l'origine puis translation, z =
+    /// hauteur. En mètres.
+    pub output_offset_x_m: f64,
+    pub output_offset_y_m: f64,
+    pub output_offset_z_m: f64,
+    pub output_rotation_deg: f64,
 }
 
 impl Default for OutputTransform {
@@ -39,6 +47,8 @@ impl Default for OutputTransform {
             stage_map_origin_x_m: 0.0, stage_map_origin_z_m: 0.0,
             stage_map_rotation_deg: 0.0,
             stage_width_cm: 0.0, stage_height_cm: 0.0,
+            output_offset_x_m: 0.0, output_offset_y_m: 0.0,
+            output_offset_z_m: 0.0, output_rotation_deg: 0.0,
         }
     }
 }
@@ -60,6 +70,18 @@ impl OutputTransform {
         if self.invert_x { x = -x; }
         if self.invert_y { y = -y; }
         if self.swap_xy { std::mem::swap(&mut x, &mut y); }
+
+        // Offset global de sortie : rotation autour de l'origine (= centre
+        // de la scène) puis translation, en tout dernier.
+        let mut z = z;
+        if self.output_rotation_deg != 0.0 {
+            let (sa, ca) = self.output_rotation_deg.to_radians().sin_cos();
+            let (rx, ry) = (x * ca + y * sa, -x * sa + y * ca);
+            x = rx; y = ry;
+        }
+        x += self.output_offset_x_m;
+        y += self.output_offset_y_m;
+        z += self.output_offset_z_m;
         (x, y, z)
     }
 
@@ -164,6 +186,26 @@ mod tests_stage_map {
         let (x, y, _z) = t.to_metres(0.0, 0.0, 0.0);
         assert!((x - -25.0).abs() < 1e-9);
         assert!((y - -15.0).abs() < 1e-9);
+    }
+
+    /// Oracle : test_core.py::test_output_offset_and_rotation_apply_last
+    /// — l'offset global (2026-08-06, "descendre les astera de 12 m") est
+    /// additif et vient en TOUT dernier : rotation autour de l'origine puis
+    /// translation, hauteur comprise.
+    #[test]
+    fn output_offset_and_rotation_apply_last() {
+        let t = OutputTransform {
+            stage_width_cm: 5000.0, stage_height_cm: 3000.0,
+            output_offset_z_m: -12.0, output_rotation_deg: 90.0,
+            output_offset_x_m: 1.0,
+            ..Default::default()
+        };
+        // Point 1 m à l'est du centre, hauteur 1.5 m : rotation 90° l'amène
+        // sur -y, puis +1 m d'offset X, hauteur 1.5 - 12 = -10.5.
+        let (x, y, z) = t.to_metres(2600.0, 1500.0, 150.0);
+        assert!((x - 1.0).abs() < 1e-9);
+        assert!((y - -1.0).abs() < 1e-9);
+        assert!((z - -10.5).abs() < 1e-9);
     }
 
     /// Oracle : test_core.py::test_stage_map_folds_before_origin_invert_swap

@@ -879,7 +879,9 @@ class OutputTransform:
                  swap_xy: bool = False, up_axis: str = "y",
                  stage_map_origin_x_m: float = 0.0, stage_map_origin_z_m: float = 0.0,
                  stage_map_rotation_deg: float = 0.0,
-                 stage_width_cm: float = 0.0, stage_height_cm: float = 0.0):
+                 stage_width_cm: float = 0.0, stage_height_cm: float = 0.0,
+                 output_offset_x_m: float = 0.0, output_offset_y_m: float = 0.0,
+                 output_offset_z_m: float = 0.0, output_rotation_deg: float = 0.0):
         # Logique de CENTRE (demande Florian 2026-08-06, "le 0,0 doit être
         # le centre du terrain dans tous les cas") : le repère stage-local
         # est centré sur la zone de jeu — (0,0) émis en PSN = centre du
@@ -898,6 +900,12 @@ class OutputTransform:
         self.stage_map_origin_x_m = stage_map_origin_x_m
         self.stage_map_origin_z_m = stage_map_origin_z_m
         self.stage_map_rotation_deg = stage_map_rotation_deg
+        # Offset global de sortie (2026-08-06) : additif, indépendant des
+        # presets, appliqué en TOUT dernier — voir to_metres.
+        self.output_offset_x_m = output_offset_x_m
+        self.output_offset_y_m = output_offset_y_m
+        self.output_offset_z_m = output_offset_z_m
+        self.output_rotation_deg = output_rotation_deg
 
     def to_metres(self, x_cm: float, y_cm: float, z_cm: float = 0.0):
         # Stage-local metres (the fine-trim origin, in the rectangle's own
@@ -922,6 +930,18 @@ class OutputTransform:
             y = -y
         if self.swap_xy:
             x, y = y, x
+
+        # Offset GLOBAL de sortie (2026-08-06, "descendre les astera de
+        # 12 m") : recalage additif du monde reçu par la prévisu, appliqué
+        # en TOUT dernier — rotation autour de l'origine (= centre de la
+        # scène, même sens que stage_map), puis translation. z = hauteur.
+        if self.output_rotation_deg:
+            ang = math.radians(self.output_rotation_deg)
+            ca, sa = math.cos(ang), math.sin(ang)
+            x, y = x * ca + y * sa, -x * sa + y * ca
+        x += self.output_offset_x_m
+        y += self.output_offset_y_m
+        z += self.output_offset_z_m
         return x, y, z
 
     def to_psn(self, x_cm: float, y_cm: float, z_cm: float = 0.0):
@@ -948,4 +968,8 @@ class OutputTransform:
             stage_map_rotation_deg=project.stage_map_rotation_deg,
             stage_width_cm=project.stage_width_cm,
             stage_height_cm=project.stage_height_cm,
+            output_offset_x_m=project.output_offset_x_m,
+            output_offset_y_m=project.output_offset_y_m,
+            output_offset_z_m=project.output_offset_z_m,
+            output_rotation_deg=project.output_rotation_deg,
         )

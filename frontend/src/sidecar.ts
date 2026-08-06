@@ -131,6 +131,8 @@ class SidecarClient {
     originXCm?: number; originYCm?: number
     invertX?: boolean; invertY?: boolean; swapXy?: boolean
     upAxis?: 'y' | 'z'
+    outputOffsetXM?: number; outputOffsetYM?: number; outputOffsetZM?: number
+    outputRotationDeg?: number
   }) {
     this.send({ type: 'update_psn_config', ...patch })
   }

@@ -443,6 +443,17 @@ class Project:
     grid_shade: float = 0.15  # 0 = noir, 1 = blanc
     snap_to_grid: bool = False
 
+    # Offset GLOBAL de sortie (demande 2026-08-06, "mon Depence je dois
+    # descendre les astera de 12 m") : purement ADDITIF, indépendant des
+    # presets d'orientation, appliqué en TOUT dernier dans OutputTransform
+    # (après centre/placement/inversions/swap) — un recalage du monde reçu
+    # par la prévisu, rien d'autre. En mètres ; z = hauteur. Stocké dans la
+    # sauvegarde comme le reste du repère de sortie.
+    output_offset_x_m: float = 0.0
+    output_offset_y_m: float = 0.0
+    output_offset_z_m: float = 0.0
+    output_rotation_deg: float = 0.0
+
     # "Timecode In" (2026-08-06) : le transport suit un timecode Art-Net
     # entrant (UDP 6454) au lieu de l'horloge interne — voir
     # core/timecode.py (parsing aligné sur Super Timecode Converter, qui
@@ -598,6 +609,10 @@ class Project:
             "audioDurationS": self.audio_duration_s,
             "bpm": self.bpm,
             "timecodeOffsetMs": self.timecode_offset_ms,
+            "outputOffsetXM": self.output_offset_x_m,
+            "outputOffsetYM": self.output_offset_y_m,
+            "outputOffsetZM": self.output_offset_z_m,
+            "outputRotationDeg": self.output_rotation_deg,
             "timecodeChaseEnabled": self.timecode_chase_enabled,
             "timecodeIfaceIp": self.timecode_iface_ip,
             "psnSystemName": self.psn_system_name,
@@ -664,6 +679,10 @@ class Project:
             audio_duration_s=d.get("audioDurationS"),
             bpm=d.get("bpm"),
             timecode_offset_ms=float(d.get("timecodeOffsetMs", 0.0)),
+            output_offset_x_m=float(d.get("outputOffsetXM", 0.0)),
+            output_offset_y_m=float(d.get("outputOffsetYM", 0.0)),
+            output_offset_z_m=float(d.get("outputOffsetZM", 0.0)),
+            output_rotation_deg=float(d.get("outputRotationDeg", 0.0)),
             timecode_chase_enabled=bool(d.get("timecodeChaseEnabled", False)),
             timecode_iface_ip=d.get("timecodeIfaceIp", "0.0.0.0"),
             psn_system_name=d.get("psnSystemName", "Lumitrack"),

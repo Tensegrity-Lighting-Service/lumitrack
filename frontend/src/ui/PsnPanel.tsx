@@ -234,6 +234,28 @@ export function PsnPanel({ project, onClose }: {
                   onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ originYCm: v * 100 }) }} />
               </label>
             </div>
+            {/* Offset GLOBAL de sortie (2026-08-06, "descendre les astera
+                de 12 m") : additif, indépendant des presets, appliqué en
+                tout dernier. Z = hauteur. */}
+            <h3>{t('psn.outputOffsetTitle')}</h3>
+            <div className="psn-grid2">
+              <label>{t('psn.outputOffsetX')}
+                <NumericInput value={project.outputOffsetXM ?? 0} step={0.1}
+                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ outputOffsetXM: v }) }} />
+              </label>
+              <label>{t('psn.outputOffsetY')}
+                <NumericInput value={project.outputOffsetYM ?? 0} step={0.1}
+                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ outputOffsetYM: v }) }} />
+              </label>
+              <label>{t('psn.outputOffsetZ')}
+                <NumericInput value={project.outputOffsetZM ?? 0} step={0.5}
+                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ outputOffsetZM: v }) }} />
+              </label>
+              <label>{t('psn.outputRotation')}
+                <NumericInput value={project.outputRotationDeg ?? 0} step={15}
+                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ outputRotationDeg: v }) }} />
+              </label>
+            </div>
             <div className="psn-checks">
               <label className="psn-check">
                 <input type="checkbox" checked={project.transformInvertX}

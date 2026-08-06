@@ -590,6 +590,12 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             "invertY": ("transform_invert_y", bool),
             "swapXy": ("transform_swap_xy", bool),
             "upAxis": ("transform_up_axis", str),
+            # Offset global de sortie (2026-08-06) : additif, en metres,
+            # applique en tout dernier dans OutputTransform.
+            "outputOffsetXM": ("output_offset_x_m", float),
+            "outputOffsetYM": ("output_offset_y_m", float),
+            "outputOffsetZM": ("output_offset_z_m", float),
+            "outputRotationDeg": ("output_rotation_deg", float),
         }
         for key, (attr, cast) in mapping.items():
             if key in msg and msg[key] is not None:

@@ -712,6 +712,23 @@ def test_from_project_always_centres():
     assert t.to_metres(3000, 2000) == (0.0, 0.0, 0.0)
 
 
+def test_output_offset_and_rotation_apply_last():
+    """Offset GLOBAL de sortie (2026-08-06, "descendre les astera de 12 m") :
+    additif, independant des presets, applique en TOUT dernier — rotation
+    autour de l origine puis translation, hauteur comprise."""
+    t = OutputTransform(stage_width_cm=5000, stage_height_cm=3000,
+                        output_offset_z_m=-12.0, output_rotation_deg=90.0,
+                        output_offset_x_m=1.0)
+    x, y, z = t.to_metres(2600, 1500, 150)
+    assert abs(x - 1.0) < 1e-9      # rotation 90 deg : +x local part en -y, puis +1 m
+    assert abs(y - -1.0) < 1e-9
+    assert abs(z - -10.5) < 1e-9    # 1.5 m - 12 m
+
+    p = Project(name="o", stage_width_cm=5000, stage_height_cm=3000)
+    p.output_offset_z_m = -12.0
+    assert OutputTransform.from_project(p).to_metres(2500, 1500, 0)[2] == -12.0
+
+
 def test_transform_cm_to_metres_with_origin_and_invert():
     t = OutputTransform(origin_x_cm=2500, origin_y_cm=1500, invert_y=True)
     x, y, z = t.to_metres(3050, 3505, z_cm=180)
