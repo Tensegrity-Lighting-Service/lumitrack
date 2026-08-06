@@ -30,6 +30,10 @@ class Transport:
         self.external_sync = False
         self.last_external_fps: Optional[float] = None
         self._last_external_wall = 0.0
+        # Le TC pilote ACTIVEMENT (au moins un paquet reçu, pas encore
+        # tombé) : sert à détecter la transition signal -> silence pour
+        # figer une seule fois puis rendre la main au manuel.
+        self._external_driving = False
 
     def set_duration(self, duration_ms: float):
         with self._lock:
@@ -45,7 +49,20 @@ class Transport:
 
     def now_ms(self) -> float:
         with self._lock:
-            if not self._playing or self.external_sync:
+            if self.external_sync:
+                if self.external_is_live():
+                    return self._t_ms
+                if self._external_driving:
+                    # Le TC vient de tomber (fix 2026-08-06, "quand on
+                    # arrête le TC le soft s'arrête pas") : figer NET là où
+                    # il s'est arrêté et rendre la main au transport manuel
+                    # — le prochain paquet reprendra le pilotage tout seul.
+                    self._external_driving = False
+                    self._playing = False
+                    return self._t_ms
+                # Pas de signal : transport manuel normal (lecture interne,
+                # seek, molette) pour pouvoir continuer à travailler.
+            if not self._playing:
                 return self._t_ms
             elapsed = (time.monotonic() - self._started_wall) * 1000.0
             t = self._started_t + elapsed
@@ -57,8 +74,8 @@ class Transport:
 
     def play(self):
         with self._lock:
-            if self.external_sync:
-                return
+            if self.external_sync and self.external_is_live():
+                return  # esclave du TC : play manuel sans effet
             self._started_wall = time.monotonic()
             self._started_t = self._t_ms
             self._playing = True
@@ -85,8 +102,11 @@ class Transport:
             self.last_external_fps = fps
             self._last_external_wall = time.monotonic()
             if self.external_sync:
+                # Reprise automatique : le TC qui revient reprend la main
+                # sur toute lecture manuelle en cours (2026-08-06).
                 self._t_ms = max(0.0, t_ms)
                 self._playing = True
+                self._external_driving = True
 
     def external_is_live(self, timeout_s: float = 1.0) -> bool:
         return bool(self._last_external_wall) and (

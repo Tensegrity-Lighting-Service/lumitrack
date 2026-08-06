@@ -385,7 +385,10 @@ class Project:
     audio_duration_s: Optional[float] = None
     bpm: Optional[float] = None
     # Offset between incoming timecode and project time zero.
-    timecode_offset_ms: float = 0.0
+    # 1 h par défaut (demande 2026-08-06) : convention répandue de caler le
+    # début du show à 01:00:00:00 — un NOUVEAU projet suit le TC de régie
+    # sans réglage. Les projets existants gardent leur valeur sauvegardée.
+    timecode_offset_ms: float = 3_600_000.0
     # PSN output settings that travel with the project (§13.1.9).
     psn_system_name: str = "Lumitrack"
     psn_mcast_ip: str = "236.10.10.10"

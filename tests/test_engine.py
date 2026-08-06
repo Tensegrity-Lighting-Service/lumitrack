@@ -126,3 +126,28 @@ def test_mount_preset_is_governed_by_blocks_ltp():
     broadcaster = _broadcaster_for(project)
     assert broadcaster.build_trackers(2500.0)[0].ori_x == math.radians(45.0)
     assert broadcaster.build_trackers(3500.0)[0].ori_x == 0.0
+
+
+def test_timecode_loss_freezes_then_allows_manual_and_resumes():
+    """Chase TC (fix 2026-08-06) : perte de signal = lecture figee NET et
+    transport manuel rendu ; retour du signal = reprise automatique du
+    pilotage par-dessus toute lecture manuelle en cours."""
+    import time as _time
+    t = Transport()
+    t.set_duration(60000)
+    t.external_sync = True
+    t.apply_external(5000.0, 25.0)
+    assert t.now_ms() == 5000.0
+    assert t.playing is True
+
+    t._last_external_wall = _time.monotonic() - 2.0   # signal tombe
+    assert t.now_ms() == 5000.0                       # fige la ou il etait
+    assert t.playing is False
+
+    t.play()                                          # manuel autorise
+    _time.sleep(0.05)
+    assert t.now_ms() > 5000.0
+
+    t.apply_external(8000.0, 25.0)                    # le TC revient
+    assert t.now_ms() == 8000.0
+    assert t.playing is True
