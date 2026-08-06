@@ -1305,6 +1305,10 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
   // Position réelle du curseur, entretenue pendant tout le cycle de vie du
   // composant (utilisée par le facteur d'écartement ci-dessus).
   const cursorRef = useRef({ x: 0, y: 0 })
+  // Groupe racine : porte la matrice MONDE héritée du StageGroup (le
+  // terrain peut être placé/tourné dans le monde) — indispensable pour
+  // projeter correctement le centre à l'écran.
+  const rootRef = useRef<THREE.Group>(null)
 
   // Filet de sécurité : si PivotControls ne redéclenche pas onDragEnd pour
   // une raison ou une autre (relâchement hors fenêtre, sélection changée
@@ -1368,7 +1372,14 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
       // Centre du groupe projeté à l'écran + distance initiale du curseur :
       // le facteur d'écartement suivra le curseur RÉEL (pas le facteur de
       // PivotControls, relatif à la taille du gizmo — l'écart traînait).
-      const ndc = new THREE.Vector3(...stageToLocal(centerX, centerY, 0)).project(camera)
+      // localToWorld d'abord (fix 2026-08-06, "tu l'as juste inversée") :
+      // stageToLocal donne des coordonnées LOCALES au StageGroup, et le
+      // terrain est placé/tourné dans le monde — projeter le point local
+      // tel quel plaçait le "centre écran" ailleurs, et le rapport de
+      // distances pouvait s'inverser selon la direction du geste.
+      const world = new THREE.Vector3(...stageToLocal(centerX, centerY, 0))
+      rootRef.current?.parent?.localToWorld(world)
+      const ndc = world.project(camera)
       const rect = gl.domElement.getBoundingClientRect()
       const screenCx = rect.left + ((ndc.x + 1) / 2) * rect.width
       const screenCy = rect.top + ((1 - ndc.y) / 2) * rect.height
@@ -1502,7 +1513,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
   ].map((v) => new THREE.Vector3(v.x, 0.02, v.z))
 
   return (
-    <group>
+    <group ref={rootRef}>
       {/* Contour de l'étendue de la sélection — PivotControls ne dessine
           que le gizmo au pivot, pas un cadre autour de l'étendue. */}
       <Line points={outline} color="#ffffff" lineWidth={2} transparent opacity={0.9}
