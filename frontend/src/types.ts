@@ -53,6 +53,9 @@ export interface FixtureMountPreset {
    * à bout de bras n'émet pas au sol. Optionnel : presets d'avant
    * 2026-08-06 sans le champ = 0. */
   zOffsetCm?: number
+  /** Offset rY (degrés) AJOUTÉ au lacet résolu du plan — un tube monté
+   * « à l'envers » se corrige ici sans toucher aux trajectoires. */
+  yawOffsetDeg?: number
 }
 
 /** Zone backstage : rectangle nommé en coordonnées scène (souvent hors de
@@ -217,6 +220,11 @@ export interface Project {
   outputOffsetYM: number
   outputOffsetZM: number
   outputRotationDeg: number
+  /** Offsets d'orientation globaux (degrés) ajoutés aux axes ori émis —
+   * fin de la chaîne additive lacet → preset → global. */
+  outputOriXDeg: number
+  outputOriYDeg: number
+  outputOriZDeg: number
   timecodeChaseEnabled: boolean
   /** Carte réseau d'écoute du timecode Art-Net — '0.0.0.0' = toutes. */
   timecodeIfaceIp: string

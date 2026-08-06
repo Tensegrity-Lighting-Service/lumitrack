@@ -695,6 +695,24 @@ def test_easing_is_bounded_and_anchored(name):
 
 # --------------------------------------------------------- transform ------
 
+def test_newer_save_format_is_refused_with_clear_message():
+    """Garde anti-retrogradation (2026-08-06) : un fichier ecrit par une
+    version PLUS RECENTE (version de schema superieure) est refuse net —
+    jamais ouvert a moitie ni re-sauvegarde ampute. Les fichiers plus
+    anciens restent ouvrables (defauts pour les champs manquants)."""
+    import pytest as _pytest
+    from lumitrack.core.project import PROJECT_VERSION
+    d = Project(name="v").to_dict()
+    assert d["version"] == PROJECT_VERSION
+    assert d["appVersion"]                      # marqueur informatif present
+    d["version"] = PROJECT_VERSION + 1
+    d["appVersion"] = "9.9.9"
+    with _pytest.raises(ValueError, match="9.9.9"):
+        Project.from_dict(d)
+    # Roundtrip normal inchange.
+    assert Project.from_dict(Project(name="v").to_dict()).name == "v"
+
+
 def test_centre_frame_puts_stage_centre_at_origin():
     """Logique de CENTRE (demande 2026-08-06, "le 0,0 doit etre le centre du
     terrain dans tous les cas") : avec les dimensions de la zone

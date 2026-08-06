@@ -78,6 +78,7 @@ export function PsnPanel({ project, onClose }: {
                 <th>{t('psn.mountPresetRoll')}</th>
                 <th>{t('psn.mountPresetTracksYaw')}</th>
                 <th>{t('psn.mountPresetHeight')}</th>
+                <th>{t('psn.mountPresetYawOffset')}</th>
                 <th></th>
               </tr>
             </thead>
@@ -116,6 +117,12 @@ export function PsnPanel({ project, onClose }: {
                         onCommit={(v) => update({ zOffsetCm: (v ?? 0) * 100 })} />
                     </td>
                     <td>
+                      {/* Offset rY additif sur le lacet du plan (2026-08-06,
+                          "que les tubes tournent dans le bon sens"). */}
+                      <NumericInput value={preset.yawOffsetDeg ?? 0} step={90}
+                        onCommit={(v) => update({ yawOffsetDeg: v ?? 0 })} />
+                    </td>
+                    <td>
                       <button
                         className="psn-preset-delete"
                         title={t('psn.mountPresetDelete')}
@@ -136,7 +143,7 @@ export function PsnPanel({ project, onClose }: {
               {
                 id: crypto.randomUUID(), name: t('psn.mountPresetDefaultName'),
                 basePitchDeg: 0, baseRollDeg: 0, pitchTracksYaw: false, rollTracksYaw: false,
-                zOffsetCm: 0,
+                zOffsetCm: 0, yawOffsetDeg: 0,
               },
             ])}
           >
@@ -254,6 +261,21 @@ export function PsnPanel({ project, onClose }: {
               <label>{t('psn.outputRotation')}
                 <NumericInput value={project.outputRotationDeg ?? 0} step={15}
                   onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ outputRotationDeg: v }) }} />
+              </label>
+              {/* Offsets d'ORIENTATION globaux (2026-08-06) : degrés ajoutés
+                  aux axes ori ÉMIS — fin de la chaîne additive
+                  lacet résolu → preset (rX/rZ + offset rY) → global. */}
+              <label>{t('psn.outputOriX')}
+                <NumericInput value={project.outputOriXDeg ?? 0} step={15}
+                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ outputOriXDeg: v }) }} />
+              </label>
+              <label>{t('psn.outputOriY')}
+                <NumericInput value={project.outputOriYDeg ?? 0} step={15}
+                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ outputOriYDeg: v }) }} />
+              </label>
+              <label>{t('psn.outputOriZ')}
+                <NumericInput value={project.outputOriZDeg ?? 0} step={15}
+                  onCommit={(v) => { if (v !== null) sidecar.updatePsnConfig({ outputOriZDeg: v }) }} />
               </label>
             </div>
             <div className="psn-checks">

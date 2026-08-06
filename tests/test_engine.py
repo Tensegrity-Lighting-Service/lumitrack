@@ -151,3 +151,29 @@ def test_timecode_loss_freezes_then_allows_manual_and_resumes():
     t.apply_external(8000.0, 25.0)                    # le TC revient
     assert t.now_ms() == 8000.0
     assert t.playing is True
+
+
+def test_preset_yaw_offset_adds_to_plan_yaw():
+    """Offset rY du preset (2026-08-06) : degres AJOUTES au lacet resolu du
+    plan — un tube monte a l envers se corrige au preset, trajectoires
+    intactes."""
+    project = _project_with_mounted_point()   # lacet fixe a 45 deg
+    project.fixture_mount_presets[0]["yawOffsetDeg"] = 90.0
+    broadcaster = _broadcaster_for(project)
+    t = broadcaster.build_trackers(0.0)[0]
+    assert t.ori_y == math.radians(45.0 + 90.0)   # up_axis="y" : lacet en ori_y
+
+
+def test_global_ori_offsets_add_to_emitted_axes():
+    """Offsets d orientation GLOBAUX (2026-08-06) : fin de la chaine
+    additive, ajoutes aux axes ori tels qu emis (= ce que le moniteur
+    affiche)."""
+    project = _project_with_mounted_point()   # pitch preset 90, lacet 45
+    project.output_ori_x_deg = 10.0
+    project.output_ori_y_deg = 20.0
+    project.output_ori_z_deg = 30.0
+    broadcaster = _broadcaster_for(project)
+    t = broadcaster.build_trackers(0.0)[0]
+    assert abs(t.ori_x - math.radians(90.0 + 10.0)) < 1e-9
+    assert abs(t.ori_y - math.radians(45.0 + 20.0)) < 1e-9
+    assert abs(t.ori_z - math.radians(0.0 + 30.0)) < 1e-9

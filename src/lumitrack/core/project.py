@@ -31,7 +31,18 @@ from datetime import datetime, timezone
 from typing import Optional
 
 PROJECT_FORMAT = "Lumitrack"
-PROJECT_VERSION = 2
+# Version du SCHÉMA de sauvegarde (2026-08-06, "met un marqueur dans la
+# sauvegarde avec la version") : à INCRÉMENTER à chaque changement de
+# format qui rendrait le fichier illisible par une app plus ancienne.
+# from_dict REFUSE d'ouvrir un fichier de version supérieure ("mettez à
+# jour Lumitrack") — ouvrir un fichier plus ancien reste toujours possible
+# (les champs manquants prennent leurs valeurs par défaut).
+# v3 (2026-08-06) : offsets d'orientation globaux + rY par preset,
+# marqueur appVersion.
+PROJECT_VERSION = 3
+# Version de l'APP qui a écrit le fichier — purement informatif (message
+# d'erreur utile, diagnostic). À garder alignée sur tauri.conf.json.
+APP_VERSION = "0.2.1"
 
 # Marqueur de l'ancien format de bundle (dossier = paquet, manifest.json +
 # media/ + versions/) — conservé uniquement pour la lecture rétrocompatible,
@@ -456,6 +467,14 @@ class Project:
     output_offset_y_m: float = 0.0
     output_offset_z_m: float = 0.0
     output_rotation_deg: float = 0.0
+    # Offsets d'ORIENTATION globaux (2026-08-06, "dans le GLOBAL met toutes
+    # les rotations partout disponibles, que tout soit une chaîne qui
+    # s'additionne") : degrés AJOUTÉS aux axes ori_x/ori_y/ori_z ÉMIS,
+    # tels qu'affichés dans le moniteur — en tout dernier de la chaîne
+    # lacet résolu -> preset (rX/rZ + offset rY) -> offsets globaux.
+    output_ori_x_deg: float = 0.0
+    output_ori_y_deg: float = 0.0
+    output_ori_z_deg: float = 0.0
 
     # "Timecode In" (2026-08-06) : le transport suit un timecode Art-Net
     # entrant (UDP 6454) au lieu de l'horloge interne — voir
@@ -602,6 +621,7 @@ class Project:
         return {
             "format": PROJECT_FORMAT,
             "version": PROJECT_VERSION,
+            "appVersion": APP_VERSION,
             "name": self.name,
             "stageWidthCm": self.stage_width_cm,
             "stageHeightCm": self.stage_height_cm,
@@ -616,6 +636,9 @@ class Project:
             "outputOffsetYM": self.output_offset_y_m,
             "outputOffsetZM": self.output_offset_z_m,
             "outputRotationDeg": self.output_rotation_deg,
+            "outputOriXDeg": self.output_ori_x_deg,
+            "outputOriYDeg": self.output_ori_y_deg,
+            "outputOriZDeg": self.output_ori_z_deg,
             "timecodeChaseEnabled": self.timecode_chase_enabled,
             "timecodeIfaceIp": self.timecode_iface_ip,
             "psnSystemName": self.psn_system_name,
@@ -667,6 +690,17 @@ class Project:
     def from_dict(cls, d: dict) -> "Project":
         if d.get("format") != PROJECT_FORMAT:
             raise ValueError(f"Not a {PROJECT_FORMAT} project file")
+        # Garde anti-rétrogradation (2026-08-06) : un fichier écrit par une
+        # version PLUS RÉCENTE de l'app peut contenir des données que cette
+        # version ne sait pas interpréter — refus net plutôt qu'une
+        # ouverture silencieusement fausse (et une re-sauvegarde qui
+        # perdrait les champs inconnus).
+        if int(d.get("version", 1)) > PROJECT_VERSION:
+            written_by = d.get("appVersion", "?")
+            raise ValueError(
+                f"Ce projet a été sauvegardé par Lumitrack {written_by} "
+                f"(format v{int(d['version'])}) — cette version de l'app ne lit "
+                f"que le format v{PROJECT_VERSION} au plus. Mettez à jour Lumitrack.")
         if int(d.get("version", 1)) < 2:
             raise ValueError(
                 "This project uses the v1 Formation model and can't be "
@@ -686,6 +720,9 @@ class Project:
             output_offset_y_m=float(d.get("outputOffsetYM", 0.0)),
             output_offset_z_m=float(d.get("outputOffsetZM", 0.0)),
             output_rotation_deg=float(d.get("outputRotationDeg", 0.0)),
+            output_ori_x_deg=float(d.get("outputOriXDeg", 0.0)),
+            output_ori_y_deg=float(d.get("outputOriYDeg", 0.0)),
+            output_ori_z_deg=float(d.get("outputOriZDeg", 0.0)),
             timecode_chase_enabled=bool(d.get("timecodeChaseEnabled", False)),
             timecode_iface_ip=d.get("timecodeIfaceIp", "0.0.0.0"),
             psn_system_name=d.get("psnSystemName", "Lumitrack"),

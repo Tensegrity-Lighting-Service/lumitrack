@@ -596,6 +596,11 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             "outputOffsetYM": ("output_offset_y_m", float),
             "outputOffsetZM": ("output_offset_z_m", float),
             "outputRotationDeg": ("output_rotation_deg", float),
+            # Offsets d'orientation globaux (2026-08-06) : degres ajoutes
+            # aux axes ori emis, fin de la chaine additive.
+            "outputOriXDeg": ("output_ori_x_deg", float),
+            "outputOriYDeg": ("output_ori_y_deg", float),
+            "outputOriZDeg": ("output_ori_z_deg", float),
         }
         for key, (attr, cast) in mapping.items():
             if key in msg and msg[key] is not None:

@@ -133,6 +133,7 @@ class SidecarClient {
     upAxis?: 'y' | 'z'
     outputOffsetXM?: number; outputOffsetYM?: number; outputOffsetZM?: number
     outputRotationDeg?: number
+    outputOriXDeg?: number; outputOriYDeg?: number; outputOriZDeg?: number
   }) {
     this.send({ type: 'update_psn_config', ...patch })
   }
