@@ -23,7 +23,9 @@ if not exist "%USERPROFILE%\.tauri\lumitrack-updater.key" (
   echo ECHEC : cle de signature introuvable ^(%USERPROFILE%\.tauri\lumitrack-updater.key^).
   exit /b 1
 )
-set "TAURI_SIGNING_PRIVATE_KEY_PATH=%USERPROFILE%\.tauri\lumitrack-updater.key"
+rem Tauri v2 lit TAURI_SIGNING_PRIVATE_KEY (chemin OU contenu) — la
+rem variante _PATH n'est pas reconnue par le build.
+set "TAURI_SIGNING_PRIVATE_KEY=%USERPROFILE%\.tauri\lumitrack-updater.key"
 set "TAURI_SIGNING_PRIVATE_KEY_PASSWORD="
 
 echo.
