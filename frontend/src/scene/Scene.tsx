@@ -2535,9 +2535,14 @@ function SceneContent({
       <StageGroup project={project} groupRef={stageGroupRef}>
         {!project.terrainGltfPath && <GenericFloor widthM={widthM} heightM={heightM} />}
 
-        {/* +3 cm : la grille se dessinait À la hauteur du plancher du
-            terrain (y=0 des deux côtés) — le test de profondeur la faisait
-            disparaître sous le sol. Fix « grille invisible » 2026-07-29. */}
+        {/* Grille en SURIMPRESSION, sans test de profondeur (fix
+            « le grid ne s'affiche toujours pas », 2026-08-06) : le +3 cm
+            du fix 2026-07-29 supposait un sol de terrain à y=0 — le
+            plancher d'un GLB réel (aréna) peut être plus haut et
+            enterrait la grille sous le sol. En vue du dessus
+            orthographique, la profondeur n'apporte rien : la grille se
+            dessine par-dessus le terrain, toujours visible. depthWrite
+            false pour ne masquer personne d'autre. */}
         <Grid
           position={[widthM / 2, 0.03, heightM / 2]}
           args={[widthM, heightM]}
@@ -2547,6 +2552,9 @@ function SceneContent({
           sectionColor={gridSectionColor}
           fadeDistance={span * 6}
           infiniteGrid={false}
+          renderOrder={2}
+          material-depthTest={false}
+          material-depthWrite={false}
         />
 
         <ZoneOutline widthM={widthM} heightM={heightM} editing={editingZone} />
