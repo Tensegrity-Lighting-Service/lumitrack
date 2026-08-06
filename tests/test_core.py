@@ -965,140 +965,150 @@ def _bundled_project(tmp_path, audio_bytes=b"fake-audio-bytes"):
     return project
 
 
-def test_save_bundle_creates_its_own_dedicated_folder(tmp_path):
-    """Bug réel (2026-07-31) : "Enregistrer sous" ne fait que choisir un
-    chemin de fichier — naviguer dans un dossier existant ("Sauvegarde/")
-    et taper juste "Demo.lumitrack" mettait media/archive DIRECTEMENT dans
-    "Sauvegarde/", partagés avec n'importe quel autre projet qui s'y
-    sauvegarderait. Chaque projet doit vivre dans son propre dossier."""
+def test_save_bundle_writes_a_single_standard_zip_file(tmp_path):
+    """Format 2026-08-06 (demande Florian : "une archive proprietaire basee
+    sur du zip standard pour envoyer les fichiers facilement via Gmail") :
+    la sauvegarde est UN fichier .lumitrack = un zip standard, ecrit
+    exactement au chemin demande — plus de dossier dedie, plus de media/
+    a cote."""
+    import zipfile
     project = _bundled_project(tmp_path)
-    naive_path = str(tmp_path / "Sauvegarde" / "Demo.lumitrack")
+    file_path = str(tmp_path / "Sauvegarde" / "Demo.lumitrack")
 
-    real_path = save_bundle(project, naive_path)
+    real_path = save_bundle(project, file_path)
 
-    assert real_path == str(tmp_path / "Sauvegarde" / "Demo" / "Demo.lumitrack")
-    assert os.path.isfile(real_path)
-    assert not os.path.isfile(naive_path)  # jamais écrit au chemin naïf
-    assert (tmp_path / "Sauvegarde" / "Demo" / "media").is_dir()
-    assert not (tmp_path / "Sauvegarde" / "media").exists()  # pas mélangé au parent
+    assert real_path == file_path
+    assert zipfile.is_zipfile(real_path)
+    assert not (tmp_path / "Sauvegarde" / "media").exists()
+    with zipfile.ZipFile(real_path) as zf:
+        names = zf.namelist()
+        assert "project.json" in names
+        assert any(n.startswith("media/") and n.endswith(".m4a") for n in names)
 
     back = load_bundle(real_path)
     assert back.name == "Bundled"
-
-
-def test_save_bundle_does_not_double_nest_when_already_in_own_folder(tmp_path):
-    project = _bundled_project(tmp_path)
-    already_own = str(tmp_path / "Demo" / "Demo.lumitrack")
-
-    real_path = save_bundle(project, already_own)
-
-    assert real_path == already_own
-    assert not (tmp_path / "Demo" / "Demo").exists()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="icône de dossier = convention Windows Explorer uniquement")
-def test_save_bundle_sets_a_windows_folder_icon(tmp_path):
-    project = _bundled_project(tmp_path)
-    bundle_dir = tmp_path / "IconShow"
-    file_path = str(bundle_dir / f"IconShow{BUNDLE_FILE_EXT}")
-
-    save_bundle(project, file_path)
-
-    ini_path = bundle_dir / "desktop.ini"
-    icon_path = bundle_dir / ".lumitrack.ico"
-    assert ini_path.is_file()
-    assert icon_path.is_file()
-    assert "IconResource=.lumitrack.ico,0" in ini_path.read_text(encoding="utf-8")
-
-    # Idempotent : un second save ne doit ni échouer ni dupliquer quoi que
-    # ce soit (desktop.ini existant = no-op côté icône).
-    save_bundle(project, file_path)
-    assert ini_path.is_file()
-
-
-def test_bundle_roundtrip_dedupes_media_by_hash(tmp_path):
-    project = _bundled_project(tmp_path)
-    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
-
-    save_bundle(project, file_path)
-    # Re-save without changing the audio: must not create a second media file.
-    save_bundle(project, file_path)
-
-    media_dir = tmp_path / "Show" / "media"
-    audio_copies = list(media_dir.glob("*.m4a"))
-    assert len(audio_copies) == 1
-
-    back = load_bundle(file_path)
-    assert back.name == "Bundled"
-    assert back.audio_path and back.audio_path.endswith(".m4a")
+    # Le media est extrait vers un vrai fichier lisible par le frontend.
+    assert back.audio_path and os.path.isfile(back.audio_path)
     with open(back.audio_path, "rb") as fh:
         assert fh.read() == b"fake-audio-bytes"
 
 
-def test_resaving_archives_the_previous_file_not_overwrites_blindly(tmp_path):
+def test_bundle_zip_dedupes_media_by_hash(tmp_path):
+    import zipfile
     project = _bundled_project(tmp_path)
-    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+    file_path = str(tmp_path / "Show.lumitrack")
+
+    save_bundle(project, file_path)
+    # Re-save sans changer l'audio : une seule entree media dans le zip.
+    save_bundle(project, file_path)
+
+    with zipfile.ZipFile(file_path) as zf:
+        audio_entries = [n for n in zf.namelist() if n.endswith(".m4a")]
+    assert len(audio_entries) == 1
+
+
+def test_resaving_archives_the_previous_state_inside_the_zip(tmp_path):
+    import zipfile
+    project = _bundled_project(tmp_path)
+    file_path = str(tmp_path / "Show.lumitrack")
 
     save_bundle(project, file_path)
     project.name = "Bundled v2"
     save_bundle(project, file_path)
 
-    archive_dir = tmp_path / "Show" / "archive"
-    archived = list(archive_dir.glob(f"*{BUNDLE_FILE_EXT}"))
-    assert len(archived) == 1
-    with open(archived[0], encoding="utf-8") as fh:
-        assert json.load(fh)["name"] == "Bundled"  # l'ancienne version, pas la nouvelle
+    with zipfile.ZipFile(file_path) as zf:
+        archived = [n for n in zf.namelist() if n.startswith("archive/")]
+        assert len(archived) == 1
+        assert json.loads(zf.read(archived[0]))["name"] == "Bundled"
 
     # Le fichier courant, lui, porte bien la nouvelle version.
     assert load_bundle(file_path).name == "Bundled v2"
 
 
 def test_first_save_never_creates_an_archive_entry(tmp_path):
+    import zipfile
     project = _bundled_project(tmp_path)
-    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+    file_path = str(tmp_path / "Show.lumitrack")
     save_bundle(project, file_path)
-    assert not (tmp_path / "Show" / "archive").exists()
+    with zipfile.ZipFile(file_path) as zf:
+        assert not [n for n in zf.namelist() if n.startswith("archive/")]
 
 
 def test_list_archive_reports_newest_first(tmp_path):
-    import time
-
     project = _bundled_project(tmp_path)
-    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+    file_path = str(tmp_path / "Show.lumitrack")
     save_bundle(project, file_path)
-    time.sleep(1.01)  # l'horodatage du nom a une résolution de la seconde
     project.name = "v2"
+    save_bundle(project, file_path)
+    project.name = "v3"
     save_bundle(project, file_path)
 
     entries = list_archive(file_path)
-    assert len(entries) == 1
+    assert len(entries) == 2
     assert entries[0]["name"].startswith("Show_")
-    assert entries[0]["name"].endswith(BUNDLE_FILE_EXT)
+    assert entries[0]["name"].endswith(".json")
+    # Le plus recent d abord (tri par nom, horodatage zero-prefixe).
+    assert entries[0]["name"] > entries[1]["name"]
 
 
 def test_load_bundle_can_restore_a_specific_archived_version(tmp_path):
     project = _bundled_project(tmp_path)
-    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
-    save_bundle(project, file_path)  # "Bundled" archivé au prochain save
+    file_path = str(tmp_path / "Show.lumitrack")
+    save_bundle(project, file_path)  # "Bundled" archive au prochain save
     project.name = "Bundled v2"
     save_bundle(project, file_path)
 
     entries = list_archive(file_path)
     restored = load_bundle(file_path, archived_name=entries[0]["name"])
     assert restored.name == "Bundled"
-    # Les médias de la version archivée restent résolubles (même dossier media/).
+    # Les medias de la version archivee restent resolubles (memes entrees
+    # media/ du zip).
     assert restored.audio_path and os.path.isfile(restored.audio_path)
 
 
 def test_archive_is_pruned_beyond_max_versions(tmp_path):
+    import zipfile
     project = _bundled_project(tmp_path)
-    file_path = str(tmp_path / "Show" / f"Show{BUNDLE_FILE_EXT}")
+    file_path = str(tmp_path / "Show.lumitrack")
     save_bundle(project, file_path)
     for i in range(ARCHIVE_MAX_VERSIONS + 5):
         project.name = f"v{i}"
         save_bundle(project, file_path)
-    archive_dir = tmp_path / "Show" / "archive"
-    assert len(list(archive_dir.glob(f"*{BUNDLE_FILE_EXT}"))) == ARCHIVE_MAX_VERSIONS
+    with zipfile.ZipFile(file_path) as zf:
+        archived = [n for n in zf.namelist() if n.startswith("archive/")]
+    assert len(archived) == ARCHIVE_MAX_VERSIONS
+
+
+def test_legacy_flat_file_bundle_still_reads_and_converts_to_zip(tmp_path):
+    """Format intermediaire (2026-07-31 -> 2026-08-06) : fichier JSON nu +
+    dossiers media/ et archive/ a cote. Doit rester lisible, et la
+    sauvegarde suivante convertit au zip en archivant l ancien etat."""
+    import zipfile
+    project = _bundled_project(tmp_path)
+    bundle_dir = tmp_path / "OldFlat"
+    media_dir = bundle_dir / "media"
+    media_dir.mkdir(parents=True)
+    digest = "cafebabe"
+    shutil.copyfile(project.audio_path, media_dir / f"{digest}.m4a")
+    snapshot = project.to_dict()
+    snapshot["audioPath"] = f"media/{digest}.m4a"
+    file_path = str(bundle_dir / "OldFlat.lumitrack")
+    with open(file_path, "w", encoding="utf-8") as fh:
+        json.dump(snapshot, fh)
+
+    back = load_bundle(file_path)
+    assert back.name == "Bundled"
+    assert back.audio_path and os.path.isfile(back.audio_path)
+
+    # La sauvegarde re-ecrit en zip, ancien etat archive dedans.
+    back.name = "Converted"
+    save_bundle(back, file_path)
+    assert zipfile.is_zipfile(file_path)
+    with zipfile.ZipFile(file_path) as zf:
+        archived = [n for n in zf.namelist() if n.startswith("archive/")]
+        assert len(archived) == 1
+        assert json.loads(zf.read(archived[0]))["name"] == "Bundled"
+    assert load_bundle(file_path).name == "Converted"
 
 
 def test_legacy_directory_bundle_still_reads(tmp_path):

@@ -56,16 +56,15 @@ def test_unknown_transport_action_is_reported_as_error():
     assert reply is not None and reply["type"] == "error"
 
 
-def test_save_bundle_reply_reflects_the_auto_created_folder(tmp_path):
-    """save_bundle peut rediriger vers un dossier dédié (core/project.py::
-    _ensure_own_folder) — le sidecar doit répondre avec le chemin RÉEL, pas
-    un écho brut de la demande, sinon le frontend retiendrait un "chemin
-    courant" qui n'existe pas."""
+def test_save_bundle_reply_echoes_the_exact_path(tmp_path):
+    """Format zip 2026-08-06 : plus de dossier dedie auto-cree, le fichier
+    est ecrit exactement au chemin demande et la reponse le reflete."""
     session = Session()
-    naive_path = str(tmp_path / "Sauvegarde" / "Demo.lumitrack")
-    reply = _run(_handle_message(session, {"type": "save_bundle", "path": naive_path}))
-    expected = str(tmp_path / "Sauvegarde" / "Demo" / "Demo.lumitrack")
-    assert reply == {"type": "saved", "path": expected}
+    file_path = str(tmp_path / "Sauvegarde" / "Demo.lumitrack")
+    reply = _run(_handle_message(session, {"type": "save_bundle", "path": file_path}))
+    assert reply == {"type": "saved", "path": file_path}
+    import zipfile
+    assert zipfile.is_zipfile(file_path)
 
 
 def test_save_bundle_list_archive_and_load_bundle_wire_protocol(tmp_path):

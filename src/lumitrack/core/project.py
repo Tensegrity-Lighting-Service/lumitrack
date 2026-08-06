@@ -859,36 +859,40 @@ def import_stancz(path: str, media_dir: Optional[str] = None) -> Project:
 
 # ------------------------------------------------------------ .bundle -----
 #
-# Format revu le 2026-07-31 (arbitrage Florian) : le fichier PORTE
-# l'extension, pas le dossier — plus proche d'un logiciel classique
-# (Premiere, Reaper) qu'un paquet à la macOS. Un projet est un dossier
-# ordinaire (n'importe quel nom) contenant :
+# Format revu le 2026-08-06 (demande Florian : "une archive propriétaire
+# basée sur du zip standard pour envoyer les fichiers facilement via
+# Gmail") : UN SEUL FICHIER .lumitrack = une archive ZIP standard :
 #
-#   MonShow/
-#   |-- MonShow.lumitrack        état courant (JSON — Project.to_dict(),
-#   |                            format/version déjà auto-descriptifs,
-#   |                            pas besoin d'un manifest.json séparé)
+#   MonShow.lumitrack  (zip)
+#   |-- project.json             état courant (Project.to_dict())
 #   |-- media/<sha256>.<ext>     dépendances (audio/3D/image) dédupliquées
-#   |                            par hash de contenu — inchangé
-#   `-- archive/NAME_YYYY-MM-DD_HH-MM-SS.lumitrack
+#   |                            par hash de contenu
+#   `-- archive/NAME_YYYY-MM-DD_HH-MM-SS-µs.json
 #                                copie de l'état PRÉCÉDENT à chaque
-#                                sauvegarde explicite, purgée au-delà de
-#                                ARCHIVE_MAX_VERSIONS (les plus anciennes
+#                                sauvegarde, purgée au-delà de
+#                                ARCHIVE_MAX_VERSIONS (plus anciennes
 #                                d'abord)
 #
-# Le fichier n'est jamais écrasé sans que l'ancien contenu soit d'abord
-# archivé : aucune sauvegarde n'est jamais perdue.
+# Le fichier n'est jamais écrasé sans que l'ancien état soit d'abord
+# archivé DANS le zip : aucune sauvegarde n'est jamais perdue, et tout
+# voyage dans un unique fichier joignable à un mail. À l'ouverture, les
+# médias sont extraits vers un cache local (LOCALAPPDATA/Lumitrack/
+# media-cache, noms = hash de contenu donc idempotent) pour que le
+# frontend puisse les lire par chemin de fichier ordinaire.
 #
-# Ancien format (avant cette date, encore lisible pour ne rien perdre des
-# projets déjà sauvegardés) : le DOSSIER lui-même était le paquet
-# (manifest.json + media/ + versions/NNNN.json + versions/latest.json).
-# Lecture seule — voir `_load_legacy_directory_bundle` : un projet ouvert
-# ainsi n'a pas de chemin .lumitrack connu, "Enregistrer" redevient
-# "Enregistrer sous" pour repartir sur le nouveau format sans mélanger les
-# deux dans le même dossier.
+# Anciens formats, encore LISIBLES (la sauvegarde convertit au zip) :
+# - 2026-07-31 -> 2026-08-06 : fichier JSON nu + dossiers media/ et
+#   archive/ à côté (le contenu du fichier devient la première entrée
+#   d'archive du zip à la conversion) ;
+# - avant le 2026-07-31 : le DOSSIER était le paquet (manifest.json +
+#   versions/), voir _load_legacy_directory_bundle.
 
 BUNDLE_FILE_EXT = ".lumitrack"
 ARCHIVE_MAX_VERSIONS = 50
+
+_PROJECT_ENTRY = "project.json"
+_MEDIA_PREFIX = "media/"
+_ARCHIVE_PREFIX = "archive/"
 
 _MEDIA_FIELDS = ("floor_image_path", "terrain_gltf_path", "audio_path")
 _MEDIA_JSON_KEYS = {
@@ -906,30 +910,41 @@ def _sha256_of(path: str) -> str:
     return h.hexdigest()
 
 
-def _media_dir(bundle_dir: str) -> str:
-    return os.path.join(bundle_dir, "media")
+def _media_cache_dir() -> str:
+    """Cache local d'extraction des médias (l'app lit audio/terrain/image
+    par chemin de fichier ordinaire, pas depuis le zip). Noms = hash de
+    contenu : ré-extraire le même média est un no-op, deux projets
+    partageant un média partagent l'entrée. Jamais purgé automatiquement —
+    supprimable sans risque, il se reconstruit à l'ouverture suivante."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "Lumitrack", "media-cache")
 
 
-def _archive_dir(bundle_dir: str) -> str:
-    return os.path.join(bundle_dir, "archive")
-
-
-def _prune_archive(archive_dir: str):
-    """Garde les ARCHIVE_MAX_VERSIONS entrées les plus récentes, supprime le
-    reste. Tri par NOM (l'horodatage y est encodé, zéro-préfixé et donc
-    trie correctement en texte) plutôt que par mtime du système de
-    fichiers : plusieurs sauvegardes rapprochées peuvent partager la même
-    résolution de mtime selon le disque, jamais la même chaîne de nom."""
-    names = sorted(n for n in os.listdir(archive_dir) if n.endswith(BUNDLE_FILE_EXT))
-    excess = len(names) - ARCHIVE_MAX_VERSIONS
-    for name in names[:max(0, excess)]:
-        os.remove(os.path.join(archive_dir, name))
+def _archive_entry_names(names: list) -> list:
+    return sorted(n for n in names if n.startswith(_ARCHIVE_PREFIX) and n != _ARCHIVE_PREFIX)
 
 
 def list_archive(file_path: str) -> list:
     """-> [{"name", "mtime" (iso8601)}, ...] le plus récent d'abord, pour le
-    panneau "Historique des versions" du frontend."""
-    archive_dir = _archive_dir(os.path.dirname(file_path) or ".")
+    panneau "Historique des versions" du frontend. Les noms retournés se
+    repassent tels quels à load_bundle(archived_name=...)."""
+    if not os.path.isfile(file_path):
+        return []
+    if zipfile.is_zipfile(file_path):
+        entries = []
+        with zipfile.ZipFile(file_path) as zf:
+            for name in _archive_entry_names(zf.namelist()):
+                info = zf.getinfo(name)
+                mtime = datetime(*info.date_time, tzinfo=timezone.utc)
+                entries.append({"name": name[len(_ARCHIVE_PREFIX):],
+                                "mtime": mtime.isoformat()})
+        # Tri par NOM (l'horodatage y est encodé, zéro-préfixé, donc trie
+        # correctement en texte) — le date_time zip n'a qu'une résolution
+        # de 2 s, insuffisante pour départager des sauvegardes rapprochées.
+        entries.sort(key=lambda e: e["name"], reverse=True)
+        return entries
+    # Ancien format fichier+dossiers : archive/ à côté du fichier.
+    archive_dir = os.path.join(os.path.dirname(file_path) or ".", "archive")
     if not os.path.isdir(archive_dir):
         return []
     entries = []
@@ -939,134 +954,113 @@ def list_archive(file_path: str) -> list:
         full = os.path.join(archive_dir, name)
         mtime = datetime.fromtimestamp(os.path.getmtime(full), tz=timezone.utc)
         entries.append({"name": name, "mtime": mtime.isoformat()})
-    # Tri par NOM (même raison que _prune_archive) ; mtime n'est reporté que
-    # pour l'affichage humain dans le panneau historique.
     entries.sort(key=lambda e: e["name"], reverse=True)
     return entries
 
 
-def _write_media_and_snapshot(project: Project, bundle_dir: str) -> dict:
-    media_dir = _media_dir(bundle_dir)
-    os.makedirs(media_dir, exist_ok=True)
+def save_bundle(project: Project, file_path: str) -> str:
+    """Écrit `project` dans `file_path` : une archive zip .lumitrack
+    autonome (voir l'en-tête de section). Si le fichier existe déjà — zip
+    OU ancien format JSON nu — son état courant est d'abord recopié dans
+    archive/ à l'intérieur du nouveau zip (purgé à ARCHIVE_MAX_VERSIONS) :
+    jamais d'écrasement sans copie. Écriture atomique (fichier temporaire
+    puis os.replace) : une coupure en plein milieu ne corrompt pas la
+    sauvegarde précédente. Retourne le chemin écrit (= l'argument)."""
+    bundle_dir = os.path.dirname(file_path) or "."
+    os.makedirs(bundle_dir, exist_ok=True)
+
+    # 1) Récupérer l'existant : entrées média + archives du zip précédent,
+    #    et l'état courant précédent à archiver.
+    kept_entries: dict = {}     # nom d'entrée zip -> bytes
+    previous_current = None
+    if os.path.isfile(file_path):
+        if zipfile.is_zipfile(file_path):
+            with zipfile.ZipFile(file_path) as zf:
+                for name in zf.namelist():
+                    if name.startswith((_MEDIA_PREFIX, _ARCHIVE_PREFIX)) and not name.endswith("/"):
+                        kept_entries[name] = zf.read(name)
+                if _PROJECT_ENTRY in zf.namelist():
+                    previous_current = zf.read(_PROJECT_ENTRY)
+        else:
+            # Conversion d'un ancien fichier JSON nu : son contenu devient
+            # la première entrée d'archive du zip. Ses médias (dossier
+            # media/ à côté) rentrent dans le zip via les chemins absolus
+            # déjà réhydratés du projet en mémoire ; les entrées de
+            # l'ancien dossier archive/ ne sont PAS migrées (elles restent
+            # lisibles sur place tant que le dossier existe).
+            with open(file_path, "rb") as fh:
+                previous_current = fh.read()
+
+    # 2) Archiver l'état précédent + purge.
+    stem = os.path.splitext(os.path.basename(file_path))[0]
+    if previous_current is not None:
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S-%f")
+        archived_name = f"{_ARCHIVE_PREFIX}{stem}_{timestamp}.json"
+        n = 1
+        while archived_name in kept_entries:
+            n += 1
+            archived_name = f"{_ARCHIVE_PREFIX}{stem}_{timestamp}-{n}.json"
+        kept_entries[archived_name] = previous_current
+        archives = _archive_entry_names(list(kept_entries))
+        for name in archives[:max(0, len(archives) - ARCHIVE_MAX_VERSIONS)]:
+            del kept_entries[name]
+
+    # 3) Instantané courant, médias dédupliqués par hash de contenu.
     snapshot = project.to_dict()
+    media_to_add: dict = {}     # nom d'entrée zip -> chemin source disque
     for field_name in _MEDIA_FIELDS:
         source_path = getattr(project, field_name)
         json_key = _MEDIA_JSON_KEYS[field_name]
-        if not source_path:
+        if not source_path or not os.path.isfile(source_path):
+            # Média introuvable sur disque (déplacé/supprimé) : ne pas
+            # inventer — la référence est perdue, comme avant.
             snapshot[json_key] = None
-            continue
-        if source_path.startswith("media" + os.sep) or source_path.startswith("media/"):
-            snapshot[json_key] = source_path.replace(os.sep, "/")
             continue
         digest = _sha256_of(source_path)
         ext = os.path.splitext(source_path)[1]
-        dest_name = f"{digest}{ext}"
-        dest_path = os.path.join(media_dir, dest_name)
-        if not os.path.exists(dest_path):
-            shutil.copyfile(source_path, dest_path)
-        snapshot[json_key] = f"media/{dest_name}"
-    return snapshot
+        entry_name = f"{_MEDIA_PREFIX}{digest}{ext}"
+        if entry_name not in kept_entries:
+            media_to_add[entry_name] = source_path
+        snapshot[json_key] = entry_name
 
-
-def _find_app_icon() -> Optional[str]:
-    """Chemin de l'icône de l'app (frontend/src-tauri/icons/icon.ico),
-    relatif au dépôt — comme `_demo_project` le fait déjà pour le terrain
-    de démo. Suppose un lancement depuis le dépôt (dev, `python -m
-    lumitrack`) : à revoir une fois l'app empaquetée (§12.13, jamais fait),
-    où les ressources devront être adressées différemment."""
-    # project.py est un niveau plus profond que sidecar.py (src/lumitrack/
-    # core/project.py contre src/lumitrack/sidecar.py) : un dirname() de plus.
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    icon_path = os.path.join(repo_root, "frontend", "src-tauri", "icons", "icon.ico")
-    return icon_path if os.path.isfile(icon_path) else None
-
-
-def _ensure_folder_icon(bundle_dir: str):
-    """Icône de dossier distinctive pour un projet Lumitrack (desktop.ini +
-    IconResource, convention Windows Explorer) — purement cosmétique,
-    jamais bloquant : ignore silencieusement hors Windows, si l'icône
-    source est introuvable, ou en cas d'erreur (droits, disque en lecture
-    seule...). N'agit qu'une fois (si desktop.ini existe déjà, no-op)."""
-    if sys.platform != "win32":
-        return
-    ini_path = os.path.join(bundle_dir, "desktop.ini")
-    if os.path.isfile(ini_path):
-        return
-    icon_source = _find_app_icon()
-    if icon_source is None:
-        return
+    # 4) Écriture atomique du nouveau zip.
+    tmp_path = file_path + ".tmp"
     try:
-        icon_dest = os.path.join(bundle_dir, ".lumitrack.ico")
-        shutil.copyfile(icon_source, icon_dest)
-        with open(ini_path, "w", encoding="utf-8") as fh:
-            fh.write("[.ShellClassInfo]\nIconResource=.lumitrack.ico,0\n")
-        import ctypes
-        FILE_ATTRIBUTE_READONLY = 0x1
-        FILE_ATTRIBUTE_HIDDEN = 0x2
-        FILE_ATTRIBUTE_SYSTEM = 0x4
-        ctypes.windll.kernel32.SetFileAttributesW(icon_dest, FILE_ATTRIBUTE_HIDDEN)
-        ctypes.windll.kernel32.SetFileAttributesW(ini_path, FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)
-        # Marqueur Windows conventionnel pour "ce dossier a des réglages
-        # d'affichage personnalisés" — pas une vraie protection en écriture.
-        ctypes.windll.kernel32.SetFileAttributesW(bundle_dir, FILE_ATTRIBUTE_READONLY)
-    except OSError:
-        pass
-
-
-def _ensure_own_folder(file_path: str) -> str:
-    """-> chemin de fichier éventuellement corrigé pour vivre dans SON
-    PROPRE dossier (dossier/dossier.lumitrack), jamais mélangé avec
-    d'autres projets. Le dialogue "Enregistrer sous" ne fait que choisir un
-    chemin de fichier : si l'utilisateur navigue dans un dossier existant
-    ("Sauvegarde/") et tape juste un nom ("Demo.lumitrack"), le dossier
-    parent immédiat ne porte pas déjà ce nom — media/archive/icône y
-    seraient alors posés directement dans "Sauvegarde/", partagés (et donc
-    mélangés) avec n'importe quel AUTRE projet qui s'y sauvegarderait aussi
-    (constaté 2026-07-31 : "il n'a pas créé de dossier, il a juste tout mis
-    là où j'étais"). Idempotent : si le dossier parent porte déjà le nom du
-    fichier (un re-save normal), rien ne change."""
-    stem = os.path.splitext(os.path.basename(file_path))[0]
-    parent_dir = os.path.dirname(file_path) or "."
-    if os.path.basename(os.path.normpath(parent_dir)) == stem:
-        return file_path
-    own_dir = os.path.join(parent_dir, stem)
-    return os.path.join(own_dir, os.path.basename(file_path))
-
-
-def save_bundle(project: Project, file_path: str) -> str:
-    """Write `project` to `file_path` (a .lumitrack file) — or to a
-    dedicated subfolder next to it sharing the file's own name, if
-    `file_path` doesn't already live in one (see `_ensure_own_folder`).
-    If a file already exists at the resolved path, it is archived first
-    (timestamped copy in archive/, pruned to ARCHIVE_MAX_VERSIONS) — never
-    overwritten without a copy. Media is deduped by content hash into
-    media/, alongside the resolved directory. Returns the resolved
-    `file_path` actually written (may differ from the argument)."""
-    file_path = _ensure_own_folder(file_path)
-    bundle_dir = os.path.dirname(file_path) or "."
-    os.makedirs(bundle_dir, exist_ok=True)
-    _ensure_folder_icon(bundle_dir)
-
-    if os.path.isfile(file_path):
-        archive_dir = _archive_dir(bundle_dir)
-        os.makedirs(archive_dir, exist_ok=True)
-        stem = os.path.splitext(os.path.basename(file_path))[0]
-        # Microsecondes + suffixe anti-collision : deux sauvegardes rapides
-        # (ou une horloge à faible résolution) ne doivent jamais écraser
-        # silencieusement une entrée d'archive précédente.
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S-%f")
-        archived_name = f"{stem}_{timestamp}{BUNDLE_FILE_EXT}"
-        n = 1
-        while os.path.exists(os.path.join(archive_dir, archived_name)):
-            n += 1
-            archived_name = f"{stem}_{timestamp}-{n}{BUNDLE_FILE_EXT}"
-        shutil.copyfile(file_path, os.path.join(archive_dir, archived_name))
-        _prune_archive(archive_dir)
-
-    snapshot = _write_media_and_snapshot(project, bundle_dir)
-    with open(file_path, "w", encoding="utf-8") as fh:
-        json.dump(snapshot, fh, indent=2, ensure_ascii=False)
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(_PROJECT_ENTRY,
+                        json.dumps(snapshot, indent=2, ensure_ascii=False))
+            for name, data in kept_entries.items():
+                zf.writestr(name, data)
+            for name, source in media_to_add.items():
+                zf.write(source, name)
+        os.replace(tmp_path, file_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
     return file_path
+
+
+def _extract_media(zf, snapshot: dict, bundle_dir: str):
+    """Réhydrate les clés média de `snapshot` en chemins de fichiers réels :
+    extraction vers le cache local si l'entrée est dans le zip, sinon repli
+    sur un fichier posé à côté (archives converties de l'ancien format)."""
+    names = set(zf.namelist())
+    cache_dir = _media_cache_dir()
+    for json_key in _MEDIA_JSON_KEYS.values():
+        rel = snapshot.get(json_key)
+        if not rel:
+            continue
+        rel_posix = rel.replace(os.sep, "/")
+        if rel_posix in names:
+            os.makedirs(cache_dir, exist_ok=True)
+            dest = os.path.join(cache_dir, os.path.basename(rel_posix))
+            if not os.path.isfile(dest):
+                with zf.open(rel_posix) as src, open(dest, "wb") as out:
+                    shutil.copyfileobj(src, out)
+            snapshot[json_key] = dest
+        else:
+            candidate = os.path.join(bundle_dir, rel.replace("/", os.sep))
+            snapshot[json_key] = candidate if os.path.isfile(candidate) else None
 
 
 def _rehydrate_media_paths(snapshot: dict, bundle_dir: str):
@@ -1095,16 +1089,25 @@ def _load_legacy_directory_bundle(bundle_dir: str) -> Project:
 
 
 def load_bundle(file_path: str, archived_name: Optional[str] = None) -> Project:
-    """Load a project from a .lumitrack file. Pass `archived_name` (a name
-    returned by `list_archive`) to load a specific archived version instead
-    of the current one. Falls back to reading the legacy directory-bundle
-    format when `file_path` points at such a directory (read-only —
-    saving always writes the current file+archive format)."""
+    """Charge un projet depuis un fichier .lumitrack. `archived_name` (un
+    nom renvoyé par `list_archive`) charge cette version archivée plutôt
+    que l'état courant. Trois formats acceptés : zip (courant), fichier
+    JSON nu + dossiers (2026-07-31 -> 2026-08-06), dossier-paquet (avant).
+    Seule la SAUVEGARDE convertit — charger ne modifie jamais le fichier."""
     if os.path.isdir(file_path):
         return _load_legacy_directory_bundle(file_path)
 
     bundle_dir = os.path.dirname(file_path) or "."
-    real_path = (os.path.join(_archive_dir(bundle_dir), archived_name)
+    if zipfile.is_zipfile(file_path):
+        with zipfile.ZipFile(file_path) as zf:
+            entry = (_ARCHIVE_PREFIX + archived_name if archived_name is not None
+                     else _PROJECT_ENTRY)
+            snapshot = json.loads(zf.read(entry).decode("utf-8"))
+            _extract_media(zf, snapshot, bundle_dir)
+        return Project.from_dict(snapshot)
+
+    # Ancien format fichier JSON nu (+ media/ et archive/ à côté).
+    real_path = (os.path.join(bundle_dir, "archive", archived_name)
                  if archived_name is not None else file_path)
     with open(real_path, encoding="utf-8") as fh:
         snapshot = json.load(fh)
