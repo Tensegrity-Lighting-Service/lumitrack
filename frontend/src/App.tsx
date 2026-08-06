@@ -9,6 +9,8 @@ import {
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow, Window as TauriWindow } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 // Source unique du numéro de version public affiché dans la barre de titre
 // (demande 2026-08-06) : la version de l'app packagée, pas celle du
 // package.json frontend (restée à 0.0.0).
@@ -546,6 +548,27 @@ function App() {
     const timer = window.setTimeout(revealMainWindow, 10_000)
     return () => window.clearTimeout(timer)
   }, [revealMainWindow])
+
+  // Ouverture par l'Explorateur (association .lumitrack, 2026-08-06) :
+  // seul le sidecar sait charger un projet — on attend donc d'être
+  // connecté avant de demander le fichier passé au lancement (double-clic
+  // app fermée), et on écoute "open-file" (double-clic app déjà ouverte,
+  // relayé par le callback single-instance côté Rust). Hors Tauri : no-op.
+  const startupFileHandledRef = useRef(false)
+  useEffect(() => {
+    if (!connected || startupFileHandledRef.current) return
+    startupFileHandledRef.current = true
+    invoke<string | null>('startup_file')
+      .then((path) => { if (path) sidecar.loadBundle(path) })
+      .catch(() => { /* hors Tauri */ })
+  }, [connected])
+  useEffect(() => {
+    let unlisten: (() => void) | null = null
+    listen<string>('open-file', (e) => { if (e.payload) sidecar.loadBundle(e.payload) })
+      .then((fn) => { unlisten = fn })
+      .catch(() => { /* hors Tauri */ })
+    return () => { unlisten?.() }
+  }, [])
 
   const [rosterWidth, setRosterWidth] = useState(220)
   // Sous-groupes du roster repliés (purement local à cette session — pas

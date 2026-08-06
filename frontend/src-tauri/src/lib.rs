@@ -13,6 +13,17 @@ use tauri::Manager;
 /// with CREATE_NO_WINDOW so no console window ever flashes for end users.
 struct SidecarProcess(Mutex<Option<Child>>);
 
+/// Fichier .lumitrack passé en argument au lancement (double-clic sur un
+/// projet dans l'Explorateur, via l'association de fichier du bundle) —
+/// interrogé par le frontend une fois connecté au sidecar, qui seul sait
+/// charger un projet (§13.1.7).
+#[tauri::command]
+fn startup_file() -> Option<String> {
+  std::env::args()
+    .nth(1)
+    .filter(|a| a.to_lowercase().ends_with(".lumitrack"))
+}
+
 fn spawn_sidecar() -> std::io::Result<Child> {
   let mut cmd = if cfg!(debug_assertions) {
     // `cargo tauri dev` runs with cwd = frontend/src-tauri, so the repo's
@@ -72,16 +83,26 @@ pub fn run() {
   // l'instance existante au premier plan.
   #[cfg(not(any(target_os = "android", target_os = "ios")))]
   {
-    builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+    builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
       if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
+        // Double-clic sur un .lumitrack alors que l'app tourne déjà : le
+        // second lancement nous relaie son argv — transmettre le fichier
+        // au frontend, qui demandera le chargement au sidecar.
+        if let Some(path) = argv.into_iter().skip(1)
+          .find(|a| a.to_lowercase().ends_with(".lumitrack"))
+        {
+          use tauri::Emitter;
+          let _ = win.emit("open-file", path);
+        }
       }
     }));
   }
 
   builder
+    .invoke_handler(tauri::generate_handler![startup_file])
     .plugin(tauri_plugin_dialog::init())
     .setup(|app| {
       if cfg!(debug_assertions) {

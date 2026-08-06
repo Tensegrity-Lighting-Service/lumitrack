@@ -46,6 +46,14 @@
     "active": true,
     "targets": "all",
     "externalBin": ["binaries/lumitrack-sidecar"],
+    "fileAssociations": [
+      {
+        "ext": ["lumitrack"],
+        "name": "Lumitrack",
+        "description": "Projet Lumitrack",
+        "mimeType": "application/x-lumitrack"
+      }
+    ],
     "windows": {
       "nsis": {
         "installerHooks": "./windows/hooks.nsi"
