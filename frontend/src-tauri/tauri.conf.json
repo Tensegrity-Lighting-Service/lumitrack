@@ -1,8 +1,16 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Lumitrack",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "eu.lumitrack.editor",
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI4NDFEQTBFREJGRUQxMjIKUldRaTBmN2JEdHBCdUYwTEhpK3I3L2lGU3RlMXltM2xLbis3ck51N1N2MVB0WFUwZmxqR05IVE4K",
+      "endpoints": [
+        "https://github.com/Tensegrity-Lighting-Service/lumitrack/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -45,6 +53,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "externalBin": ["binaries/lumitrack-sidecar"],
     "fileAssociations": [
       {

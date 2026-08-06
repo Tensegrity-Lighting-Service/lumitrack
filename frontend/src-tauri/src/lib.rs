@@ -101,8 +101,17 @@ pub fn run() {
     }));
   }
 
+  // Mises à jour signées via GitHub Releases (latest.json) — le frontend
+  // vérifie au démarrage et propose installer/plus tard/voir la page.
+  #[cfg(not(any(target_os = "android", target_os = "ios")))]
+  {
+    builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+  }
+
   builder
     .invoke_handler(tauri::generate_handler![startup_file])
+    .plugin(tauri_plugin_process::init())
+    .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_dialog::init())
     .setup(|app| {
       if cfg!(debug_assertions) {

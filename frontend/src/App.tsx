@@ -28,6 +28,7 @@ import { buildActorContextMenuSections, buildFocusPointContextMenuSections } fro
 import { CompassPicker } from './ui/CompassPicker'
 import { FocusPointSelect } from './ui/FocusPointSelect'
 import { PromptDialog, promptText } from './ui/promptDialog'
+import { UpdateDialog } from './ui/UpdateDialog'
 import { setStageCenter, displayXM, displayYM, storeXCm, storeYCm } from './stageCoords'
 import {
   DndContext, DragOverlay, PointerSensor, pointerWithin, rectIntersection,
@@ -1422,6 +1423,7 @@ function App() {
       {showAddActors && <AddActorsPanel project={project} onClose={() => setShowAddActors(false)} />}
       <ContextMenu />
       <PromptDialog />
+      <UpdateDialog />
       <footer className="timeline-dock">
         {showBlockDetail && selectedCue && (
           <BlockDetailPanel
