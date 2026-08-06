@@ -1228,6 +1228,7 @@ function App() {
                 cue={selectedCue}
                 selectedPointIds={selectedPointIds}
                 projectPoints={project.points}
+                mountPresets={project.fixtureMountPresets}
               />
             )}
             {selectedCue && selectedPointId && (
@@ -1691,10 +1692,11 @@ const EASING_NAMES = ['linear', 'smooth', 'ease-in', 'ease-out', 'bounce', 'spri
  * le bloc. Valeur affichée = commune si partagée, sinon vide (« mixte »).
  * Chaque changement écrit N set_activation — le backend reste la seule
  * source de vérité, comme partout. */
-function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
+function GroupTimingPanel({ cue, selectedPointIds, projectPoints, mountPresets }: {
   cue: Cue
   selectedPointIds: string[]
   projectPoints: Point[]
+  mountPresets: FixtureMountPreset[]
 }) {
   const t = useT()
   const [staggerMs, setStaggerMs] = useState(100)
@@ -1702,8 +1704,33 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
   const acts = activated.map((id) => cue.activations[id])
   const shared = <T,>(get: (a: Activation) => T): T | null =>
     acts.length && acts.every((a) => get(a) === get(acts[0])) ? get(acts[0]) : null
+  // Variante qui distingue "valeur partagée = null" de "(mixte)" — pour le
+  // preset (null = "ne rien changer" est une vraie valeur partagée).
+  const sharedVal = <T,>(get: (a: Activation) => T): { mixed: boolean; value: T | null } => {
+    if (!acts.length) return { mixed: true, value: null }
+    const v = get(acts[0])
+    return acts.every((a) => get(a) === v) ? { mixed: false, value: v } : { mixed: true, value: null }
+  }
   const sharedFade = shared((a) => a.fadeMs)
   const sharedEasing = shared((a) => a.easing)
+  const sharedTravelMode = shared((a) => a.travelOrientationMode)
+  const sharedTravelYaw = shared((a) => a.travelFixedYawDeg)
+  const sharedTravelFocus = sharedVal((a) => a.travelFocusPointId ?? null)
+  const sharedArrivalMode = shared((a) => a.arrivalOrientationMode)
+  const sharedArrivalYaw = shared((a) => a.arrivalFixedYawDeg)
+  const sharedArrivalFocus = sharedVal((a) => a.arrivalFocusPointId ?? null)
+  const sharedPreset = sharedVal((a) => a.mountPresetId ?? null)
+  const sharedYawTurn = shared((a) => a.yawTurnMs)
+
+  // Édition groupée de l'orientation (2026-08-06, "dans réglages groupés
+  // j'ai que le timing") : même patch pour tous les acteurs activés de la
+  // sélection, UN message groupé, chacun marqué personnalisé
+  // (orientationOverridden) comme l'édition individuelle.
+  const applyOrientation = (patch: Record<string, unknown>) => {
+    sidecar.setActivations(cue.id, activated.map((id) => ({
+      pointId: id, ...patch, orientationOverridden: true,
+    })))
+  }
 
   const applyAll = (patch: { fadeMs?: number; easing?: string }) => {
     // Une édition groupée est aussi une personnalisation manuelle : sort du
@@ -1765,6 +1792,90 @@ function GroupTimingPanel({ cue, selectedPointIds, projectPoints }: {
                 onCommit={(v) => setStaggerMs(Math.max(0, v ?? 0))} />
             </label>
             <button onClick={applyStagger}>{t('cue.staggerApply')}</button>
+          </div>
+          <h3>{t('cue.groupOrientationTitle')}</h3>
+          <div className="activation-orientation">
+            <div className="activation-orientation-phase">
+              <h4>{t('cue.travelPhase')}</h4>
+              <label>{t('cue.travelMode')}
+                <select
+                  value={sharedTravelMode ?? ''}
+                  onChange={(e) => { if (e.target.value) applyOrientation({ travelOrientationMode: e.target.value }) }}
+                >
+                  {sharedTravelMode === null && <option value="">{t('cue.curveMixed')}</option>}
+                  <option value="fixed">{t('cue.rotationFixed')}</option>
+                  <option value="path">{t('cue.rotationPath')}</option>
+                  <option value="focus">{t('cue.rotationFocus')}</option>
+                </select>
+              </label>
+              {sharedTravelMode === 'fixed' && (
+                <>
+                  <label>{t('cue.yaw')}
+                    <NumericInput value={sharedTravelYaw} step={5} nullable
+                      onCommit={(v) => { if (v !== null) applyOrientation({ travelFixedYawDeg: v }) }} />
+                  </label>
+                  <CompassPicker valueDeg={sharedTravelYaw ?? Number.NaN}
+                    onPick={(d) => applyOrientation({ travelFixedYawDeg: d })} />
+                </>
+              )}
+              {sharedTravelMode === 'focus' && (
+                <label>{t('cue.focusPoint')}
+                  <FocusPointSelect points={projectPoints} value={sharedTravelFocus.value}
+                    onChange={(id) => applyOrientation({ travelFocusPointId: id })} />
+                </label>
+              )}
+            </div>
+            <div className="activation-orientation-phase">
+              <h4>{t('cue.arrivalPhase')}</h4>
+              <label>{t('cue.arrivalMode')}
+                <select
+                  value={sharedArrivalMode ?? ''}
+                  onChange={(e) => { if (e.target.value) applyOrientation({ arrivalOrientationMode: e.target.value }) }}
+                >
+                  {sharedArrivalMode === null && <option value="">{t('cue.curveMixed')}</option>}
+                  <option value="hold">{t('cue.arrivalHold')}</option>
+                  <option value="fixed">{t('cue.rotationFixed')}</option>
+                  <option value="focus">{t('cue.rotationFocus')}</option>
+                </select>
+              </label>
+              {sharedArrivalMode === 'fixed' && (
+                <>
+                  <label>{t('cue.yaw')}
+                    <NumericInput value={sharedArrivalYaw} step={5} nullable
+                      onCommit={(v) => { if (v !== null) applyOrientation({ arrivalFixedYawDeg: v }) }} />
+                  </label>
+                  <CompassPicker valueDeg={sharedArrivalYaw ?? Number.NaN}
+                    onPick={(d) => applyOrientation({ arrivalFixedYawDeg: d })} />
+                </>
+              )}
+              {sharedArrivalMode === 'focus' && (
+                <label>{t('cue.focusPoint')}
+                  <FocusPointSelect points={projectPoints} value={sharedArrivalFocus.value}
+                    onChange={(id) => applyOrientation({ arrivalFocusPointId: id })} />
+                </label>
+              )}
+            </div>
+            <div className="activation-orientation-phase">
+              <h4>{t('cue.mountPreset')}</h4>
+              <label>
+                <select
+                  value={sharedPreset.mixed ? '' : (sharedPreset.value ? sharedPreset.value : '~nochange~')}
+                  onChange={(e) => {
+                    if (!e.target.value) return
+                    applyOrientation({ mountPresetId: e.target.value === '~nochange~' ? null : e.target.value })
+                  }}
+                >
+                  {sharedPreset.mixed && <option value="">{t('cue.curveMixed')}</option>}
+                  <option value="~nochange~">{t('cue.mountPresetNoChange')}</option>
+                  {mountPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </label>
+              <label>{t('cue.yawTurn')}
+                <NumericInput value={sharedYawTurn === null ? null : sharedYawTurn / 1000} step={0.1} nullable
+                  title={t('cue.yawTurnHint')}
+                  onCommit={(v) => { if (v !== null && v >= 0) applyOrientation({ yawTurnMs: v * 1000 }) }} />
+              </label>
+            </div>
           </div>
         </>
       )}
