@@ -25,6 +25,21 @@ fn spawn_sidecar() -> std::io::Result<Child> {
       .stderr(Stdio::inherit());
     c
   } else {
+    // Un sidecar ORPHELIN (app tuée sans passer par CloseRequested, cf.
+    // CONCEPTION.md 14.6 — même problème que le .bat de dev règle en
+    // libérant le port 17845) garderait le port et ferait échouer le
+    // nôtre en silence. L'instance unique garantit qu'aucune AUTRE app
+    // Lumitrack ne tourne : tout lumitrack-sidecar.exe vivant ici est un
+    // orphelin, à terminer avant de lancer le nôtre.
+    #[cfg(windows)]
+    {
+      use std::os::windows::process::CommandExt;
+      let _ = Command::new("taskkill")
+        .args(["/F", "/IM", "lumitrack-sidecar.exe"])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .status();
+    }
+
     // Tauri strips the platform-triple suffix when bundling: the installed
     // file sits next to the app exe as plain `lumitrack-sidecar.exe`.
     let exe_dir = std::env::current_exe()?
@@ -94,9 +109,31 @@ pub fn run() {
     })
     .on_window_event(|window, event| {
       if let tauri::WindowEvent::CloseRequested { .. } = event {
+        // Uniquement la fenêtre PRINCIPALE (fix 2026-08-06) : le splash se
+        // ferme programmatiquement quelques secondes après le démarrage
+        // (App.tsx::revealMainWindow) — sans ce filtre, SA fermeture
+        // consommait le handle et tuait le sidecar de l'app vivante.
+        if window.label() != "main" {
+          return;
+        }
         if let Some(state) = window.app_handle().try_state::<SidecarProcess>() {
           if let Some(mut child) = state.0.lock().unwrap().take() {
+            // PyInstaller --onefile = DEUX processus (bootloader + python
+            // extrait) : kill() ne tue que le bootloader et ORPHELINISE
+            // l'enfant, qui garde le port 17845 (constaté à l'installation
+            // du 2026-08-06, "Error opening file for writing"). taskkill
+            // /T termine l'arbre entier ; kill()/wait() en filet (dev =
+            // python direct, un seul processus).
+            #[cfg(windows)]
+            {
+              use std::os::windows::process::CommandExt;
+              let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &child.id().to_string()])
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .status();
+            }
             let _ = child.kill();
+            let _ = child.wait();
           }
         }
       }
