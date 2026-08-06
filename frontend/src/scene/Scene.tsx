@@ -1227,16 +1227,16 @@ function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZo
  * (le centre du groupe sélectionné) — plus prévisible pour "resserrer/
  * écarter une formation", à valider à l'usage.
  */
-function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, controlsRef, snapToGrid, gridSizeCm, dragActiveRef, ensureGestureCue }: {
+function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, controlsRef, snapToGrid, gridSizeCm, dragActiveRef, resolveGestureCue }: {
   project: Project
   positions: Record<string, Pose>
   selectedCueId: string
-  /** Fournit le cue où écrire le geste — le bloc actif, ou un bloc
-   * "Entrée" créé au playhead s'il n'y en a aucun (fix 2026-08-05 : le
-   * gizmo se saisissait mais ne déplaçait rien sans bloc actif, sans
-   * aucun retour visuel — "je n'arrive pas à déplacer le groupe
-   * sélectionné avec le gizmo"). */
-  ensureGestureCue: () => string
+  /** Fournit le cue où écrire le geste — le bloc actif, sinon le bloc
+   * GOUVERNANT les membres au playhead (fix 2026-08-06 : "quand je bouge
+   * une sélection alors qu'il y a un bloc au playhead il crée un nouveau
+   * bloc au lieu d'éditer l'actuel"), sinon un bloc créé au playhead
+   * (fix 2026-08-05 : gizmo silencieusement inerte sans bloc actif). */
+  resolveGestureCue: (pointIds: string[]) => string
   selectedPointIds: string[]
   controlsRef: React.RefObject<MapControlsImpl | null>
   snapToGrid: boolean
@@ -1245,7 +1245,7 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
    * composant a son propre dragRef, invisible sans ce pont. */
   dragActiveRef: React.RefObject<boolean>
 }) {
-  const { camera } = useThree()
+  const { camera, gl } = useThree()
 
   type Member = {
     pointId: string; baseX: number; baseY: number
@@ -1292,10 +1292,19 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     centerY: number
     lastTheta: number
     lastSent: number
-    /** Cue où ce geste écrit (bloc actif ou bloc créé par
-     * ensureGestureCue au début du geste). */
+    /** Cue où ce geste écrit (bloc actif, gouvernant, ou créé au début
+     * du geste — voir resolveGestureCue). */
     cueId: string
+    /** Écartement (poignées sphères) : distance ÉCRAN curseur→centre au
+     * début du geste + centre projeté à l'écran (fix 2026-08-06, "ça
+     * n'écarte pas autant que je tire") — le facteur de PivotControls
+     * est relatif à la taille du gizmo, pas au curseur réel, l'écart
+     * traînait derrière la souris. On suit le curseur nous-mêmes. */
+    resize: { startDist: number; screenCx: number; screenCy: number } | null
   } | null>(null)
+  // Position réelle du curseur, entretenue pendant tout le cycle de vie du
+  // composant (utilisée par le facteur d'écartement ci-dessus).
+  const cursorRef = useRef({ x: 0, y: 0 })
 
   // Filet de sécurité : si PivotControls ne redéclenche pas onDragEnd pour
   // une raison ou une autre (relâchement hors fenêtre, sélection changée
@@ -1314,11 +1323,16 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     const onGlobalPointerUp = () => {
       if (dragRef.current) handleDragEndRef.current()
     }
+    const onGlobalPointerMove = (e: PointerEvent) => {
+      cursorRef.current = { x: e.clientX, y: e.clientY }
+    }
     window.addEventListener('pointerup', onGlobalPointerUp)
     window.addEventListener('pointercancel', onGlobalPointerUp)
+    window.addEventListener('pointermove', onGlobalPointerMove, { capture: true, passive: true })
     return () => {
       window.removeEventListener('pointerup', onGlobalPointerUp)
       window.removeEventListener('pointercancel', onGlobalPointerUp)
+      window.removeEventListener('pointermove', onGlobalPointerMove, { capture: true })
     }
   }, [])
 
@@ -1344,11 +1358,24 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
   const handleDragStart: NonNullable<React.ComponentProps<typeof PivotControls>['onDragStart']> = (props) => {
     const members = membersNow()
     if (members.length === 0) return
-    // Sans bloc actif, le geste en crée un au playhead (ensureGestureCue) —
-    // avant, il était silencieusement ignoré : gizmo saisissable mais
-    // inerte, aucun retour (signalé 2026-08-05).
-    const cueId = ensureGestureCue()
-    dragRef.current = { kind: kindFor(props.component), members, centerX, centerY, lastTheta: 0, lastSent: 0, cueId }
+    // Bloc actif > bloc gouvernant au playhead > création (resolveGestureCue,
+    // fixes 2026-08-05/06) — avant, le geste était silencieusement ignoré
+    // puis créait un bloc même quand un bloc gouvernait déjà les acteurs.
+    const cueId = resolveGestureCue(members.map((m) => m.pointId))
+    const kind = kindFor(props.component)
+    let resize: { startDist: number; screenCx: number; screenCy: number } | null = null
+    if (kind === 'resize') {
+      // Centre du groupe projeté à l'écran + distance initiale du curseur :
+      // le facteur d'écartement suivra le curseur RÉEL (pas le facteur de
+      // PivotControls, relatif à la taille du gizmo — l'écart traînait).
+      const ndc = new THREE.Vector3(...stageToLocal(centerX, centerY, 0)).project(camera)
+      const rect = gl.domElement.getBoundingClientRect()
+      const screenCx = rect.left + ((ndc.x + 1) / 2) * rect.width
+      const screenCy = rect.top + ((1 - ndc.y) / 2) * rect.height
+      const startDist = Math.max(8, Math.hypot(cursorRef.current.x - screenCx, cursorRef.current.y - screenCy))
+      resize = { startDist, screenCx, screenCy }
+    }
+    dragRef.current = { kind, members, centerX, centerY, lastTheta: 0, lastSent: 0, cueId, resize }
     dragActiveRef.current = true
     if (controlsRef.current) controlsRef.current.enabled = false
   }
@@ -1359,6 +1386,20 @@ function SelectionTransform({ project, positions, selectedCueId, selectedPointId
     const now = performance.now()
     if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
     drag.lastSent = now
+
+    // Écartement : facteur = rapport des distances ÉCRAN curseur→centre —
+    // l'écart suit exactement le geste ("ça n'écarte pas autant que je
+    // tire", 2026-08-06). Homothétie autour du centre du groupe.
+    if (drag.kind === 'resize' && drag.resize) {
+      const dist = Math.hypot(cursorRef.current.x - drag.resize.screenCx, cursorRef.current.y - drag.resize.screenCy)
+      const factor = Math.max(0.02, dist / drag.resize.startDist)
+      sidecar.setActivations(drag.cueId, drag.members.map((m) => ({
+        pointId: m.pointId,
+        targetXCm: drag.centerX + (m.baseX - drag.centerX) * factor,
+        targetYCm: drag.centerY + (m.baseY - drag.centerY) * factor,
+      })))
+      return
+    }
 
     let effectiveDelta = deltaL
     if (drag.kind === 'move' && snapToGrid && gridSizeCm > 0) {
@@ -1581,10 +1622,27 @@ function SceneContent({
   // groupe sélectionné avec le gizmo") : le geste était silencieusement
   // ignoré — la boîte s'affichait, le gizmo se saisissait, mais rien ne
   // bougeait, sans aucun retour.
-  const ensureGestureCue = (): string => {
+  const resolveGestureCue = (pointIds: string[]): string => {
     if (selectedCueId) return selectedCueId
+    // Bloc GOUVERNANT au playhead d'abord (fix 2026-08-06, "il crée un
+    // nouveau bloc au lieu d'éditer l'actuel") : même règle LTP que le
+    // geste libre — le premier membre gouverné désigne le bloc.
+    const t = tMsRef.current
+    const proj = liveRef.current.project
+    for (const id of pointIds) {
+      let best: { cueId: string; effStart: number } | null = null
+      for (const cue of proj.cues) {
+        const act = cue.activations[id]
+        if (!act || (act.targetXCm === null && act.targetYCm === null)) continue
+        const effStart = cue.startMs + act.startOffsetMs
+        if (effStart <= t && (!best || effStart >= best.effStart)) {
+          best = { cueId: cue.id, effStart }
+        }
+      }
+      if (best) { onSelectCue(best.cueId); return best.cueId }
+    }
     const cueId = crypto.randomUUID()
-    sidecar.addCue('Entrée', tMsRef.current, 2000, '#4FF5E0', 0, cueId)
+    sidecar.addCue('Entrée', t, 2000, '#4FF5E0', 0, cueId)
     onSelectCue(cueId)
     return cueId
   }
@@ -2525,7 +2583,7 @@ function SceneContent({
                 pose={pose}
                 color={point.color}
                 selected={selectedPointIds.includes(point.id)}
-                draggable={true /* toujours : sans bloc actif, le geste en crée un (ensureGestureCue) */}
+                draggable={true /* toujours : sans bloc actif, le geste route vers le bloc gouvernant ou en crée un */}
                 opacity={opacity}
                 radiusM={(project.actorDiameterCm / 2) * CM_TO_M}
                 onPointerDown={(e) => handleActorPointerDown(e, point.id)}
@@ -2558,7 +2616,7 @@ function SceneContent({
             snapToGrid={snapToGrid}
             gridSizeCm={project.gridSizeCm}
             dragActiveRef={boxDragActiveRef}
-            ensureGestureCue={ensureGestureCue}
+            resolveGestureCue={resolveGestureCue}
           />
         )}
 
