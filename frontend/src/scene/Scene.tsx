@@ -919,11 +919,12 @@ function ZoneHandles({ project, widthM, heightM, stageGroupRef, controlsRef, sna
         if (handle.axis !== 'z') newWidthM = Math.max(0.1, handle.fx === 1 ? localDx : -localDx)
         if (handle.axis !== 'x') newHeightM = Math.max(0.1, handle.fz === 1 ? localDz : -localDz)
 
-        // Where the anchor sits relative to the *new* origin — rotate that
-        // back into world space and subtract from the anchor's (fixed)
-        // world position to get the new origin.
-        const anchorNewLocalX = newWidthM * (1 - handle.fx)
-        const anchorNewLocalZ = newHeightM * (1 - handle.fz)
+        // Where the anchor sits relative to the *new* CENTRE (logique de
+        // centre 2026-08-06 : l'origine est le centre du rectangle) —
+        // rotate that back into world space and subtract from the anchor's
+        // (fixed) world position to get the new origin.
+        const anchorNewLocalX = newWidthM * (1 - handle.fx) - newWidthM / 2
+        const anchorNewLocalZ = newHeightM * (1 - handle.fz) - newHeightM / 2
         const rotatedX = anchorNewLocalX * cos0 + anchorNewLocalZ * sin0
         const rotatedZ = -anchorNewLocalX * sin0 + anchorNewLocalZ * cos0
 
@@ -973,8 +974,10 @@ function ZoneHandles({ project, widthM, heightM, stageGroupRef, controlsRef, sna
     const sin0 = Math.sin(rotRad0)
     const originXM = project.stageMapOriginXM
     const originZM = project.stageMapOriginZM
-    const anchorLocalX = (1 - handle.fx) * widthM
-    const anchorLocalZ = (1 - handle.fz) * heightM
+    // Coordonnées locales de l'ancre PAR RAPPORT AU CENTRE (logique de
+    // centre 2026-08-06) — l'origine du rectangle est son centre.
+    const anchorLocalX = (1 - handle.fx) * widthM - widthM / 2
+    const anchorLocalZ = (1 - handle.fz) * heightM - heightM / 2
     const anchorWorldX = originXM + anchorLocalX * cos0 + anchorLocalZ * sin0
     const anchorWorldZ = originZM + (-anchorLocalX * sin0 + anchorLocalZ * cos0)
     dragRef.current = {
@@ -1034,9 +1037,20 @@ function StageGroup({ project, groupRef, children }: {
   children: React.ReactNode
 }) {
   const rotationRad = THREE.MathUtils.degToRad(project.stageMapRotationDeg)
+  // Logique de CENTRE (2026-08-06, "le 0,0 doit être le centre du terrain
+  // dans tous les cas") : stageMapOrigin place le CENTRE de la zone de jeu
+  // dans le monde du terrain et la rotation pivote autour de lui — même
+  // convention que OutputTransform.to_metres (Python + Rust). Le ref reste
+  // sur le groupe INTERNE (repère coin 0..w des enfants) pour que toutes
+  // les conversions monde<->scène existantes traversent l'offset sans
+  // rien savoir du changement.
+  const wM = project.stageWidthCm * CM_TO_M
+  const hM = project.stageHeightCm * CM_TO_M
   return (
-    <group ref={groupRef} position={[project.stageMapOriginXM, 0, project.stageMapOriginZM]} rotation={[0, rotationRad, 0]}>
-      {children}
+    <group position={[project.stageMapOriginXM, 0, project.stageMapOriginZM]} rotation={[0, rotationRad, 0]}>
+      <group ref={groupRef} position={[-wM / 2, 0, -hM / 2]}>
+        {children}
+      </group>
     </group>
   )
 }
@@ -1745,9 +1759,12 @@ function SceneContent({
     const cos = Math.cos(rotRad), sin = Math.sin(rotRad)
     // Same Y-rotation convention Three.js applies to the group's own
     // `rotation` prop (verified against DarkenMask's hole alignment).
+    // Logique de centre (2026-08-06) : lx/lz sont mesurés depuis le CENTRE
+    // du rectangle, comme dans StageGroup et OutputTransform.
     const toWorldX = (lx: number, lz: number) => project.stageMapOriginXM + lx * cos + lz * sin
     const toWorldZ = (lx: number, lz: number) => project.stageMapOriginZM + (-lx * sin + lz * cos)
-    const corners = [[0, 0], [widthM, 0], [widthM, heightM], [0, heightM]]
+    const hw = widthM / 2, hh = heightM / 2
+    const corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]
       .map(([lx, lz]) => [toWorldX(lx, lz), toWorldZ(lx, lz)])
     const minX = Math.min(...corners.map((c) => c[0]))
     const maxX = Math.max(...corners.map((c) => c[0]))

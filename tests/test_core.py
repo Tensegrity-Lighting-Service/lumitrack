@@ -695,6 +695,23 @@ def test_easing_is_bounded_and_anchored(name):
 
 # --------------------------------------------------------- transform ------
 
+def test_centre_frame_puts_stage_centre_at_origin():
+    """Logique de CENTRE (demande 2026-08-06, "le 0,0 doit etre le centre du
+    terrain dans tous les cas") : avec les dimensions de la zone
+    renseignees (ce que from_project fait toujours), le centre du plateau
+    sort a (0,0) et un coin a (-w/2, -h/2)."""
+    t = OutputTransform(stage_width_cm=5000, stage_height_cm=3000)
+    assert t.to_metres(2500, 1500) == (0.0, 0.0, 0.0)
+    x, y, _z = t.to_metres(0, 0)
+    assert (x, y) == (-25.0, -15.0)
+
+
+def test_from_project_always_centres():
+    p = Project(name="c", stage_width_cm=6000, stage_height_cm=4000)
+    t = OutputTransform.from_project(p)
+    assert t.to_metres(3000, 2000) == (0.0, 0.0, 0.0)
+
+
 def test_transform_cm_to_metres_with_origin_and_invert():
     t = OutputTransform(origin_x_cm=2500, origin_y_cm=1500, invert_y=True)
     x, y, z = t.to_metres(3050, 3505, z_cm=180)

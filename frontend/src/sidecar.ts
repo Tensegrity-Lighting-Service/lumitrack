@@ -120,7 +120,9 @@ class SidecarClient {
   redo() { this.send({ type: 'redo' }) }
 
   // ---- PSN (§12.9: stays independent of edit vs. playback mode) ----
-  setTimecodeChase(enabled: boolean) { this.send({ type: 'set_timecode_chase', enabled }) }
+  setTimecodeChase(enabled?: boolean, ifaceIp?: string) {
+    this.send({ type: 'set_timecode_chase', enabled, ifaceIp })
+  }
   psnStart() { this.send({ type: 'psn_start' }) }
   psnStop() { this.send({ type: 'psn_stop' }) }
   updatePsnConfig(patch: {

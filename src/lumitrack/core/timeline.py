@@ -878,7 +878,17 @@ class OutputTransform:
                  invert_x: bool = False, invert_y: bool = False,
                  swap_xy: bool = False, up_axis: str = "y",
                  stage_map_origin_x_m: float = 0.0, stage_map_origin_z_m: float = 0.0,
-                 stage_map_rotation_deg: float = 0.0):
+                 stage_map_rotation_deg: float = 0.0,
+                 stage_width_cm: float = 0.0, stage_height_cm: float = 0.0):
+        # Logique de CENTRE (demande Florian 2026-08-06, "le 0,0 doit être
+        # le centre du terrain dans tous les cas") : le repère stage-local
+        # est centré sur la zone de jeu — (0,0) émis en PSN = centre du
+        # plateau, stage_map_origin place ce CENTRE dans le monde du
+        # terrain, et la rotation pivote autour de lui. Dimensions à 0 =
+        # ancien comportement coin (utilisé par les tests unitaires purs) ;
+        # from_project passe toujours les vraies dimensions.
+        self.stage_width_cm = stage_width_cm
+        self.stage_height_cm = stage_height_cm
         self.origin_x_cm = origin_x_cm
         self.origin_y_cm = origin_y_cm
         self.invert_x = invert_x
@@ -893,8 +903,8 @@ class OutputTransform:
         # Stage-local metres (the fine-trim origin, in the rectangle's own
         # top-left-origin frame — same pivot the stage-map rotation below
         # applies around, matching `StageGroup` in Scene.tsx).
-        lx = (x_cm - self.origin_x_cm) / 100.0
-        ly = (y_cm - self.origin_y_cm) / 100.0
+        lx = (x_cm - self.stage_width_cm / 2.0 - self.origin_x_cm) / 100.0
+        ly = (y_cm - self.stage_height_cm / 2.0 - self.origin_y_cm) / 100.0
         z = z_cm / 100.0
 
         # Place into the terrain's own world frame: identical rigid
@@ -924,10 +934,6 @@ class OutputTransform:
             return x, h, y
         return x, y, h
 
-    def centre_on(self, project: Project):
-        self.origin_x_cm = project.stage_width_cm / 2.0
-        self.origin_y_cm = project.stage_height_cm / 2.0
-
     @classmethod
     def from_project(cls, project: Project) -> "OutputTransform":
         return cls(
@@ -940,4 +946,6 @@ class OutputTransform:
             stage_map_origin_x_m=project.stage_map_origin_x_m,
             stage_map_origin_z_m=project.stage_map_origin_z_m,
             stage_map_rotation_deg=project.stage_map_rotation_deg,
+            stage_width_cm=project.stage_width_cm,
+            stage_height_cm=project.stage_height_cm,
         )

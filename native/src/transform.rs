@@ -22,6 +22,12 @@ pub struct OutputTransform {
     pub stage_map_origin_x_m: f64,
     pub stage_map_origin_z_m: f64,
     pub stage_map_rotation_deg: f64,
+    /// Logique de CENTRE (2026-08-06) : le repère stage-local est centré
+    /// sur la zone de jeu — (0,0) = centre du plateau, stage_map_origin
+    /// place ce centre, la rotation pivote autour. Dimensions à 0 =
+    /// ancien comportement coin (tests unitaires purs).
+    pub stage_width_cm: f64,
+    pub stage_height_cm: f64,
 }
 
 impl Default for OutputTransform {
@@ -32,6 +38,7 @@ impl Default for OutputTransform {
             up_axis: "y".to_string(),
             stage_map_origin_x_m: 0.0, stage_map_origin_z_m: 0.0,
             stage_map_rotation_deg: 0.0,
+            stage_width_cm: 0.0, stage_height_cm: 0.0,
         }
     }
 }
@@ -39,8 +46,8 @@ impl Default for OutputTransform {
 impl OutputTransform {
     pub fn to_metres(&self, x_cm: f64, y_cm: f64, z_cm: f64) -> (f64, f64, f64) {
         // Métres locales à la zone (repère du réglage fin origin_*_cm).
-        let lx = (x_cm - self.origin_x_cm) / 100.0;
-        let ly = (y_cm - self.origin_y_cm) / 100.0;
+        let lx = (x_cm - self.stage_width_cm / 2.0 - self.origin_x_cm) / 100.0;
+        let ly = (y_cm - self.stage_height_cm / 2.0 - self.origin_y_cm) / 100.0;
         let z = z_cm / 100.0;
 
         // Placement dans le repère monde du terrain : même transform
@@ -143,6 +150,20 @@ mod tests_stage_map {
         let (x, y, _z) = t.to_metres(100.0, 0.0, 0.0); // 1m le long de +X local
         assert!(x.abs() < 1e-9);
         assert!((y - -1.0).abs() < 1e-9);
+    }
+
+    /// Oracle : test_core.py::test_centre_frame_puts_stage_centre_at_origin
+    /// — logique de centre (2026-08-06) : avec les dimensions de la zone
+    /// renseignées et tout le reste aux défauts, le CENTRE du plateau sort
+    /// à (0,0) et un coin à (-w/2, -h/2).
+    #[test]
+    fn centre_frame_puts_stage_centre_at_origin() {
+        let t = OutputTransform { stage_width_cm: 5000.0, stage_height_cm: 3000.0, ..Default::default() };
+        let (x, y, _z) = t.to_metres(2500.0, 1500.0, 0.0);
+        assert!(x.abs() < 1e-9 && y.abs() < 1e-9);
+        let (x, y, _z) = t.to_metres(0.0, 0.0, 0.0);
+        assert!((x - -25.0).abs() < 1e-9);
+        assert!((y - -15.0).abs() < 1e-9);
     }
 
     /// Oracle : test_core.py::test_stage_map_folds_before_origin_invert_swap

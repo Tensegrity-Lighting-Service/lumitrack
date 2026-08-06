@@ -449,6 +449,9 @@ class Project:
     # sert de routeur LTC/MTC -> Art-Net devant Lumitrack). Le décalage
     # timecode_offset_ms existant est soustrait du TC reçu.
     timecode_chase_enabled: bool = False
+    # Carte réseau d'écoute du timecode Art-Net — "0.0.0.0" = toutes les
+    # interfaces (même convention que psn_iface_ip côté sortie).
+    timecode_iface_ip: str = "0.0.0.0"
 
     # ---------- helpers ----------
 
@@ -596,6 +599,7 @@ class Project:
             "bpm": self.bpm,
             "timecodeOffsetMs": self.timecode_offset_ms,
             "timecodeChaseEnabled": self.timecode_chase_enabled,
+            "timecodeIfaceIp": self.timecode_iface_ip,
             "psnSystemName": self.psn_system_name,
             "psnMcastIp": self.psn_mcast_ip,
             "psnPort": self.psn_port,
@@ -661,6 +665,7 @@ class Project:
             bpm=d.get("bpm"),
             timecode_offset_ms=float(d.get("timecodeOffsetMs", 0.0)),
             timecode_chase_enabled=bool(d.get("timecodeChaseEnabled", False)),
+            timecode_iface_ip=d.get("timecodeIfaceIp", "0.0.0.0"),
             psn_system_name=d.get("psnSystemName", "Lumitrack"),
             psn_mcast_ip=d.get("psnMcastIp", "236.10.10.10"),
             psn_port=int(d.get("psnPort", 56565)),

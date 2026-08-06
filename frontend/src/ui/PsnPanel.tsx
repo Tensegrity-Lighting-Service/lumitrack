@@ -147,6 +147,37 @@ export function PsnPanel({ project, onClose }: {
         </details>
 
         <details className="settings-section" open>
+          <summary>{t('psn.sectionTimecode')}</summary>
+        <section>
+          {/* Timecode In Art-Net uniquement (arbitrage 2026-08-06) : le LTC/
+              MTC se convertit avec Super Timecode Converter en amont. */}
+          <label className="psn-check">
+            <input type="checkbox" checked={project.timecodeChaseEnabled}
+              onChange={(e) => sidecar.setTimecodeChase(e.target.checked)} />
+            {t('psn.timecodeEnable')}
+          </label>
+          <label>{t('psn.networkInterface')}
+            <select
+              value={project.timecodeIfaceIp ?? '0.0.0.0'}
+              onChange={(e) => sidecar.setTimecodeChase(undefined, e.target.value)}
+            >
+              {!addresses.includes(project.timecodeIfaceIp) && (
+                <option value={project.timecodeIfaceIp}>{project.timecodeIfaceIp}</option>
+              )}
+              {addresses.map((a) => (
+                <option key={a} value={a}>{a === '0.0.0.0' ? t('psn.networkAuto') : a}</option>
+              ))}
+            </select>
+          </label>
+          <label>{t('menu.settings.timecodeOffset')}
+            <NumericInput value={Math.round((project.timecodeOffsetMs ?? 0) / 100) / 10} step={0.5}
+              onCommit={(v) => { if (v !== null) sidecar.updateProjectSettings({ timecodeOffsetMs: v * 1000 }) }} />
+          </label>
+          <p className="psn-note">{t('psn.timecodeNote')}</p>
+        </section>
+        </details>
+
+        <details className="settings-section" open>
           <summary>{t('psn.sectionPsn')}</summary>
         <div className="psn-columns">
           <section>

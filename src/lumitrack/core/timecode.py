@@ -79,6 +79,8 @@ class ArtNetTimecodeReceiver:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self.last_error: Optional[str] = None
+        # Le bind sur l'interface demandée a échoué -> écoute sur 0.0.0.0.
+        self.fell_back = False
         # Dernier timecode valide reçu, pour l'affichage (badge transport).
         self.last_fps: Optional[float] = None
         self.last_hmsf: Optional[tuple] = None
@@ -86,11 +88,22 @@ class ArtNetTimecodeReceiver:
     def start(self) -> bool:
         if self._running:
             return True
+        # Repli à la Super Timecode Converter (ArtnetInput.h::start) : si le
+        # bind sur l'interface choisie échoue (câble débranché, IP qui a
+        # changé), on retombe sur toutes les interfaces plutôt que de
+        # laisser le show sans timecode — fell_back le signale à l'UI.
+        self.fell_back = False
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._sock.settimeout(0.5)
-            self._sock.bind((self.bind_ip, self.port))
+            try:
+                self._sock.bind((self.bind_ip, self.port))
+            except OSError:
+                if self.bind_ip == "0.0.0.0":
+                    raise
+                self._sock.bind(("0.0.0.0", self.port))
+                self.fell_back = True
         except OSError as exc:
             self.last_error = str(exc)
             self._sock = None

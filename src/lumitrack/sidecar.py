@@ -197,6 +197,11 @@ class Session:
         """Synchronise récepteur + transport avec le réglage projet — appelé
         à l'init, à chaque changement de projet et par set_timecode_chase."""
         if self.project.timecode_chase_enabled:
+            # Changement de carte réseau à chaud : re-bind sur la nouvelle.
+            if (self.timecode_input.running
+                    and self.timecode_input.bind_ip != self.project.timecode_iface_ip):
+                self.timecode_input.stop()
+            self.timecode_input.bind_ip = self.project.timecode_iface_ip
             self.transport.external_sync = True
             self.timecode_input.start()
         else:
@@ -635,7 +640,10 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         # timecode entrant. Réglage PROJET (persisté) ; l'échec de bind du
         # port 6454 est remonté au demandeur sans laisser un état armé
         # fantôme.
-        session.project.timecode_chase_enabled = bool(msg.get("enabled", False))
+        if "ifaceIp" in msg and msg["ifaceIp"]:
+            session.project.timecode_iface_ip = str(msg["ifaceIp"])
+        if "enabled" in msg:
+            session.project.timecode_chase_enabled = bool(msg["enabled"])
         session._apply_timecode_chase()
         if session.project.timecode_chase_enabled and not session.timecode_input.running:
             session.project.timecode_chase_enabled = False

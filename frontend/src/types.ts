@@ -212,6 +212,8 @@ export interface Project {
    * interne. Le décalage timecodeOffsetMs (déjà déclaré plus haut) est
    * soustrait du TC reçu. */
   timecodeChaseEnabled: boolean
+  /** Carte réseau d'écoute du timecode Art-Net — '0.0.0.0' = toutes. */
+  timecodeIfaceIp: string
   backstageZones: BackstageZone[]
   rosterGroups: RosterGroup[]
   fixtureMountPresets: FixtureMountPreset[]
