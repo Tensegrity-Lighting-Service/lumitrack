@@ -38,6 +38,12 @@ import { openContextMenu } from '../ui/contextMenuStore'
 import { buildActorContextMenuSections, buildFocusPointContextMenuSections } from '../ui/actorContextMenu'
 import { t } from '../i18n'
 
+// Outils du hit-test 2D des acteurs (module-level, reutilises).
+const PICK_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+const PICK_RAYCASTER = new THREE.Raycaster()
+const PICK_HIT = new THREE.Vector3()
+const PICK_NDC = new THREE.Vector2()
+
 // Reference STABLE pour 'aucun tick encore' (evite un nouvel objet par rendu).
 const EMPTY_POSITIONS: Record<string, Pose> = {}
 import { CM_TO_M, DRAG_SEND_INTERVAL_MS, HANDLE_PX, stageToLocal, ScreenSizedHandle, type DragKind } from './sceneShared'
@@ -252,18 +258,15 @@ function GenericFloor({ widthM, heightM }: { widthM: number; heightM: number }) 
   )
 }
 
-const Actor = memo(function Actor({ pose, color, selected, draggable, opacity, radiusM, onPointerDown, onContextMenu }: {
+const Actor = memo(function Actor({ pose, color, selected, opacity, radiusM }: {
   pose: Pose
   color: string
   selected: boolean
-  draggable: boolean
   /** 1 in live view; dimmed in block-edit mode, where the live state is
    * context and the targets/trajectories are the subject (§12.6). */
   opacity: number
   /** Réglage projet (menu Réglages), pas une constante — cf. ACTOR_RADIUS_M. */
   radiusM: number
-  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
-  onContextMenu?: (e: ThreeEvent<MouseEvent>) => void
 }) {
   const [x_cm, y_cm, z_cm, yaw_deg] = pose
   const [x, y, z] = stageToLocal(x_cm, y_cm, z_cm)
@@ -284,10 +287,6 @@ const Actor = memo(function Actor({ pose, color, selected, draggable, opacity, r
       // travers). Même formule que TargetGhost — les deux DOIVENT bouger
       // ensemble.
       rotation={[0, Math.PI / 2 - yawRad, 0]}
-      onPointerDown={onPointerDown}
-      onContextMenu={onContextMenu}
-      onPointerOver={() => { document.body.style.cursor = draggable ? 'grab' : 'pointer' }}
-      onPointerOut={() => { document.body.style.cursor = 'auto' }}
     >
       {/* Disque plat vu du dessus — plus une sphère 3D, qui perdait de sa
           taille apparente sous l'éclairage/l'ombrage en vue du dessus.
@@ -313,16 +312,11 @@ const Actor = memo(function Actor({ pose, color, selected, draggable, opacity, r
           <meshBasicMaterial color="#ffffff" transparent opacity={opacity} depthTest={false} side={THREE.DoubleSide} />
         </mesh>
       )}
-      {/* Larger invisible hit target: the visible marker is small, dragging
-          shouldn't require pixel-perfect aim on it. */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} visible={false}>
-        <circleGeometry args={[r * 1.8, 12]} />
-      </mesh>
     </group>
   )
 }, (a, b) =>
   a.pose[0] === b.pose[0] && a.pose[1] === b.pose[1] && a.pose[2] === b.pose[2] && a.pose[3] === b.pose[3]
-  && a.color === b.color && a.selected === b.selected && a.draggable === b.draggable
+  && a.color === b.color && a.selected === b.selected
   && a.opacity === b.opacity && a.radiusM === b.radiusM)
 
 /** Numéro Stancz si défini, sinon initiales/abrégé du nom (jamais vide —
@@ -1835,6 +1829,14 @@ function SceneContent({
       // transformation multi-sélection a déjà pris le geste (son propre
       // dragRef est privé à SelectionTransform, d'où ce ref partagé).
       if (e.button !== 0 || dragRef.current || editingZone || boxDragActiveRef.current) return
+      // Hit-test 2D maison : un acteur sous le curseur prend le geste
+      // (les acteurs ne sont plus des objets interactifs R3F).
+      const hitActor = actorAtCursorRef.current(e)
+      if (hitActor) {
+        hitObjectRef.current = true
+        actorDownRef.current(e, hitActor)
+        return
+      }
       const rect = dom.getBoundingClientRect()
       lassoRef.current = {
         x0: e.clientX - rect.left, y0: e.clientY - rect.top,
@@ -1945,6 +1947,21 @@ function SceneContent({
     dom.addEventListener('pointermove', onMove)
     dom.addEventListener('pointerup', endDrag)
     dom.addEventListener('pointerleave', endDrag)
+    // Curseur 'grab' au survol d'un acteur (hit-test 2D, throttle rAF,
+    // ecriture du curseur uniquement sur CHANGEMENT pour ne pas ecraser
+    // les curseurs poses par les elements R3F restants).
+    let hoverRaf = 0
+    let hoverOn = false
+    const onHoverMove = (e: PointerEvent) => {
+      if (hoverRaf || dragRef.current || boxDragActiveRef.current) return
+      hoverRaf = requestAnimationFrame(() => {
+        hoverRaf = 0
+        const over = actorAtCursorRef.current(e) !== null
+        if (over && !hoverOn) { hoverOn = true; document.body.style.cursor = 'grab' }
+        else if (!over && hoverOn) { hoverOn = false; document.body.style.cursor = 'auto' }
+      })
+    }
+    dom.addEventListener('pointermove', onHoverMove, { passive: true })
     dom.addEventListener('pointerdown', lassoStart)
     dom.addEventListener('pointermove', lassoMove)
     dom.addEventListener('pointerup', lassoEnd)
@@ -1954,6 +1971,8 @@ function SceneContent({
       dom.removeEventListener('pointermove', onMove)
       dom.removeEventListener('pointerup', endDrag)
       dom.removeEventListener('pointerleave', endDrag)
+      dom.removeEventListener('pointermove', onHoverMove)
+      if (hoverRaf) cancelAnimationFrame(hoverRaf)
       dom.removeEventListener('pointerdown', lassoStart)
       dom.removeEventListener('pointermove', lassoMove)
       dom.removeEventListener('pointerup', lassoEnd)
@@ -2126,6 +2145,17 @@ function SceneContent({
       // séparé et déjà en place — ne rien faire ici pour ce cas).
       if (e.type !== 'contextmenu') return
       e.preventDefault()
+      // Les acteurs ne sont plus interactifs R3F : le clic droit sur l'un
+      // d'eux atterrit ici — router vers SON menu (hit-test 2D).
+      const hitActor = actorAtCursorRef.current(e)
+      if (hitActor) {
+        const point = project.points.find((p) => p.id === hitActor)
+        if (point) {
+          onSelectPoint(hitActor)
+          openContextMenu(e.clientX, e.clientY, buildActorContextMenuSections(point, project))
+          return
+        }
+      }
       openContextMenu(e.clientX, e.clientY, [
         [
           { label: gridOpacity > 0 ? t('contextMenu.gridOff') : t('contextMenu.gridOn'), onClick: onToggleGrid },
@@ -2318,13 +2348,48 @@ function SceneContent({
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
-  const handleActorContextMenu = (e: ThreeEvent<MouseEvent>, pointId: string) => {
-    e.stopPropagation()
-    e.nativeEvent.preventDefault()
-    const point = project.points.find((p) => p.id === pointId)
-    if (!point) return
-    onSelectPoint(pointId)
-    openContextMenu(e.clientX, e.clientY, buildActorContextMenuSections(point, project))
+  // ---- Hit-test 2D maison des acteurs (audit fluidite 2026-08-07) ----
+  // En vue orthographique du dessus, "quel acteur est sous le curseur" est
+  // un simple test de distance en cm — pas besoin du raycast triangle par
+  // triangle de R3F sur ~300 meshes a chaque pointermove (LE cout du drop
+  // pendant les deplacements sur petite machine). Les fantomes/waypoints/
+  // poignees (peu nombreux, montes seulement en edition) restent en R3F.
+  const actorAtCursor = (e: { clientX: number; clientY: number }): string | null => {
+    if (!stageGroupRef.current) return null
+    const rect = gl.domElement.getBoundingClientRect()
+    PICK_NDC.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    )
+    PICK_RAYCASTER.setFromCamera(PICK_NDC, camera)
+    if (!PICK_RAYCASTER.ray.intersectPlane(PICK_PLANE, PICK_HIT)) return null
+    const local = stageGroupRef.current.worldToLocal(PICK_HIT.clone())
+    const cx = local.x / CM_TO_M
+    const cy = local.z / CM_TO_M
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const minPickCm = (12 / zoom) / CM_TO_M   // rayon de saisie plancher ~12 px
+    const pickR = Math.max(project.actorDiameterCm / 2 + 10, minPickCm)
+    let best: string | null = null
+    let bestD = Infinity
+    for (const p of project.points) {
+      if (p.isFocusPoint) continue           // les focus gardent leur marqueur R3F
+      const pose = positionsRef.current[p.id]
+      if (!pose) continue
+      const d = Math.hypot(pose[0] - cx, pose[1] - cy)
+      if (d < pickR && d < bestD) { bestD = d; best = p.id }
+    }
+    return best
+  }
+  const actorAtCursorRef = useRef(actorAtCursor)
+  actorAtCursorRef.current = actorAtCursor
+  const actorDownRef = useRef<(native: PointerEvent, pointId: string) => void>(() => {})
+  actorDownRef.current = (native, pointId) => {
+    handleActorPointerDown({
+      stopPropagation: () => {},
+      ctrlKey: native.ctrlKey,
+      metaKey: native.metaKey,
+      nativeEvent: native,
+    } as unknown as ThreeEvent<PointerEvent>, pointId)
   }
 
   const handleFocusPointContextMenu = (e: ThreeEvent<MouseEvent>, pointId: string) => {
@@ -2446,15 +2511,16 @@ function SceneContent({
           }
           return (
             <group key={point.id}>
+              {/* Purement affichage (hit-test 2D maison, 2026-08-07) : la
+                  saisie/le clic droit passent par le pointerdown DOM +
+                  actorAtCursor — 79 groupes sortis du raycast R3F qui
+                  tournait a CHAQUE pointermove. */}
               <Actor
                 pose={pose}
                 color={point.color}
                 selected={selectedPointIds.includes(point.id)}
-                draggable={true /* toujours : sans bloc actif, le geste route vers le bloc gouvernant ou en crée un */}
                 opacity={opacity}
                 radiusM={(project.actorDiameterCm / 2) * CM_TO_M}
-                onPointerDown={(e) => handleActorPointerDown(e, point.id)}
-                onContextMenu={(e) => handleActorContextMenu(e, point.id)}
               />
               <ActorLabel text={actorLabelText(point)} xCm={pose[0]} yCm={pose[1]} zCm={pose[2]} opacity={opacity}
                 scale={inBackstage ? 0.55 : 1} />
