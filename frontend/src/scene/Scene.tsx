@@ -25,7 +25,7 @@
 // outline/handles) is nested inside one <StageGroup> so it only has to
 // reason in the rectangle's own local metres — the group's transform does
 // the placement once, rather than every child re-deriving it.
-import { Suspense, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { Suspense, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
 import { OrthographicCamera, MapControls, useGLTF, Line } from '@react-three/drei'
 import type { MapControls as MapControlsImpl } from 'three-stdlib'
@@ -87,8 +87,12 @@ const FOCUS_MARKER_PX = 16
 const PATH_HANDLE_PX = 6
 // Live-state dimming in block-edit mode (§12.6): activated actors stay
 // readable, the rest is context; the ghosts/trajectories are the subject.
-const EDIT_ACTIVATED_OPACITY = 0.45
-const EDIT_BYSTANDER_OPACITY = 0.18
+// Transparence du mode edition SUPPRIMEE (demande 2026-08-07, 'supprime
+// la transparence des acteurs lorsqu'un bloc est selectionne') : les
+// acteurs restent pleinement lisibles, seuls ghosts/trajectoires
+// gardent leur systeme d'emphase.
+const EDIT_ACTIVATED_OPACITY = 1
+const EDIT_BYSTANDER_OPACITY = 1
 const SNAP_MAX_POINTS = 4000 // subsampled if the floor layer is denser than this
 // How close to the terrain's own minimum Y counts as "floor level". Height-
 // based, not name-based: any venue survey has *some* ground plane, but node
@@ -190,7 +194,7 @@ function GenericFloor({ widthM, heightM }: { widthM: number; heightM: number }) 
   )
 }
 
-function Actor({ pose, color, selected, draggable, opacity, radiusM, onPointerDown, onContextMenu }: {
+const Actor = memo(function Actor({ pose, color, selected, draggable, opacity, radiusM, onPointerDown, onContextMenu }: {
   pose: Pose
   color: string
   selected: boolean
@@ -258,7 +262,10 @@ function Actor({ pose, color, selected, draggable, opacity, radiusM, onPointerDo
       </mesh>
     </group>
   )
-}
+}, (a, b) =>
+  a.pose[0] === b.pose[0] && a.pose[1] === b.pose[1] && a.pose[2] === b.pose[2] && a.pose[3] === b.pose[3]
+  && a.color === b.color && a.selected === b.selected && a.draggable === b.draggable
+  && a.opacity === b.opacity && a.radiusM === b.radiusM)
 
 /** Numéro Stancz si défini, sinon initiales/abrégé du nom (jamais vide —
  * un acteur sans numéro ni nom reste identifiable). */
@@ -288,7 +295,7 @@ function focusPointLabelText(point: Point): string {
  * n'importe quelle couleur d'acteur. Positionné à la hauteur réelle de
  * l'acteur mais hors de son groupe pivoté : le numéro ne doit jamais
  * tourner avec le lacet (yaw), contrairement au cône directionnel. */
-function ActorLabel({ text, xCm, yCm, zCm, opacity, scale = 1 }: {
+const ActorLabel = memo(function ActorLabel({ text, xCm, yCm, zCm, opacity, scale = 1 }: {
   text: string; xCm: number; yCm: number; zCm: number; opacity: number
   /** Réduit la taille écran fixe du badge — les acteurs entassés en
    * backstage (nombreux, espacement réel serré) faisaient se chevaucher les
@@ -327,7 +334,7 @@ function ActorLabel({ text, xCm, yCm, zCm, opacity, scale = 1 }: {
       <meshBasicMaterial map={texture} transparent opacity={opacity} depthTest={false} depthWrite={false} />
     </mesh>
   )
-}
+})
 
 /** Visual weight of one block-edit element, driven by actor selection
  * (§12.6): no actor selected → every trajectory reads equally; an actor
@@ -2057,7 +2064,7 @@ function SceneContent({
     // Glisser un acteur DÉJÀ dans la sélection multiple ne la casse pas :
     // c'est le geste "transformer la sélection". Hors sélection : simple.
     if (!inSelection) onSelectPoint(pointId)
-    const pose = positions[pointId]
+    const pose = positionsRef.current[pointId]
     if (!pose) return
     // Actor height only depends on the group's Y-axis rotation, which never
     // touches Y — so local height == world height regardless of the

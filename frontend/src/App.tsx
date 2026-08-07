@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { Scene, type SceneHandle } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
@@ -296,7 +296,7 @@ function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }
  * onClick (Ctrl/Maj/clic simple) : le PointerSensor de dnd-kit n'intercepte
  * le geste qu'au-delà d'un seuil de mouvement, un simple clic remonte donc
  * normalement (voir activationConstraint dans App). */
-function RosterPointRow({ point, project, selected, moving, offstage, onSelect, dropLine }: {
+const RosterPointRow = memo(function RosterPointRow({ point, project, selected, moving, offstage, onSelect, dropLine }: {
   point: Point
   project: Project
   selected: boolean
@@ -346,7 +346,9 @@ function RosterPointRow({ point, project, selected, moving, offstage, onSelect, 
       {offstage && <span className="offstage" title={t('roster.offstage')}>•</span>}
     </li>
   )
-}
+}, (a, b) =>
+  a.point === b.point && a.selected === b.selected && a.moving === b.moving
+  && a.offstage === b.offstage && a.dropLine === b.dropLine)
 
 /** Prochaine lettre libre (A, B, C…) pour nommer un nouveau point de focus
  * — compteur SÉPARÉ du numéro des acteurs (mission "modes d'orientation",
