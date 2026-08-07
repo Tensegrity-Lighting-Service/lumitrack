@@ -31,7 +31,7 @@ export function stageToLocal(x_cm: number, y_cm: number, z_cm: number): [number,
  * (e.g. [1,1,1] square, [0.35,1,1] a bar elongated along Z) — actual size
  * comes entirely from the per-frame scale below. Unlit meshBasicMaterial:
  * these are a 2D editing overlay, not scene-lit geometry. */
-export function ScreenSizedHandle({ position, sizePx, args, color, onPointerDown, cursor, renderOrder }: {
+export function ScreenSizedHandle({ position, sizePx, args, color, onPointerDown, cursor, renderOrder, hitScale = 2.6 }: {
   position: [number, number, number]
   sizePx: number
   args: [number, number, number]
@@ -39,8 +39,12 @@ export function ScreenSizedHandle({ position, sizePx, args, color, onPointerDown
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
   cursor: string
   renderOrder: number
+  /** Facteur de la zone de saisie invisible (2.6 par défaut — la
+   * TransformBox monte plus haut, retour 2026-08-07 : "zone de survol
+   * trop faible"). */
+  hitScale?: number
 }) {
-  // Zone de saisie ÉLARGIE : un carré invisible ~2.6x autour de la poignée
+  // Zone de saisie ÉLARGIE : un carré invisible autour de la poignée
   // visible — attraper une poignée ne demande plus une visée au pixel.
   const hitRef = useRef<THREE.Mesh>(null)
   const ref = useRef<THREE.Mesh>(null)
@@ -48,7 +52,7 @@ export function ScreenSizedHandle({ position, sizePx, args, color, onPointerDown
     const zoom = (camera as THREE.OrthographicCamera).zoom || 1
     const s = sizePx / zoom
     if (ref.current) ref.current.scale.set(s, s, s)
-    if (hitRef.current) hitRef.current.scale.set(s * 2.6, s * 2.6, s * 2.6)
+    if (hitRef.current) hitRef.current.scale.set(s * hitScale, s * hitScale, s * hitScale)
   })
   return (
     <group>

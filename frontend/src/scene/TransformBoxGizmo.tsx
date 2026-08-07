@@ -49,7 +49,14 @@ interface BoxDrag {
   anchorCm: { x: number; y: number }
   startCursorCm: { x: number; y: number }
   handle: BoxHandleDef | null
+  /** Poignee saisie sur la bbox PADDEE (la ou vit le visuel)... */
   handleStartCm: { x: number; y: number } | null
+  /** ...et son equivalent sur la bbox REELLE des acteurs (sans la
+   * marge ecran) : c'est LUI qui ancre les facteurs d'echelle — la
+   * marge de 14 px faisait bouger legerement l'acteur du cote fixe
+   * (retour 2026-08-07). */
+  handleStartRawCm: { x: number; y: number } | null
+  boundsRaw: Bounds | null
   startTheta: number
   lastTheta: number
   lastSent: number
@@ -174,12 +181,15 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
     // L'ancre se déplace en local pur : pas de bloc à résoudre.
     const cueId = kind === 'anchor' ? '' : resolveGestureCue(members.map((m) => m.pointId))
     const bounds0: Bounds = { minX, minY, maxX, maxY }
+    const boundsRaw = boundsOf(members, 0)
     dragRef.current = {
       kind, members, cueId, bounds0,
       anchorCm: { ...anchorCm },
       startCursorCm: cursor,
       handle,
       handleStartCm: handle ? handlePointCm(handle, bounds0) : null,
+      handleStartRawCm: handle && boundsRaw ? handlePointCm(handle, boundsRaw) : null,
+      boundsRaw,
       startTheta: Math.atan2(cursor.y - anchorCm.y, cursor.x - anchorCm.x),
       lastTheta: 0,
       lastSent: 0,
@@ -229,11 +239,20 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
       return
     }
 
-    if (drag.kind === 'scale' && drag.handle && drag.handleStartCm) {
-      // Maj lu à CHAQUE move (togglable en plein geste, bases figées) :
-      // point fixe = ancre (symétrique AE) ou point opposé.
-      const fixedPt = shiftRef.current ? drag.anchorCm : oppositePointCm(drag.handle, drag.bounds0)
-      const { fx, fy } = scaleFactors(drag.handle, fixedPt, drag.handleStartCm, cursor)
+    if (drag.kind === 'scale' && drag.handle && drag.handleStartCm && drag.handleStartRawCm && drag.boundsRaw) {
+      // Maj lu a CHAQUE move (togglable en plein geste, bases figees) :
+      // point fixe = ancre (symetrique AE) ou point oppose — sur la
+      // bbox REELLE des acteurs, pas la paddee : le point fixe doit
+      // etre EXACTEMENT l'acteur extreme oppose, qui ne bouge plus
+      // (retour 2026-08-07, 'l'ancrage d'en face bougeait un peu').
+      const fixedPt = shiftRef.current ? drag.anchorCm : oppositePointCm(drag.handle, drag.boundsRaw)
+      // Curseur ramene dans le referentiel reel : on retire le
+      // decalage poignee-paddee -> poignee-reelle, fx = 1 pile au depart.
+      const cursorAdj = {
+        x: cursor.x - (drag.handleStartCm.x - drag.handleStartRawCm.x),
+        y: cursor.y - (drag.handleStartCm.y - drag.handleStartRawCm.y),
+      }
+      const { fx, fy } = scaleFactors(drag.handle, fixedPt, drag.handleStartRawCm, cursorAdj)
       sidecar.setActivations(drag.cueId, drag.members.map((m) => ({
         pointId: m.pointId,
         targetXCm: fixedPt.x + (m.baseX - fixedPt.x) * fx,
@@ -332,6 +351,8 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
 
   const widthM = (maxX - minX) * CM_TO_M
   const heightM = (maxY - minY) * CM_TO_M
+  // Couloir reserve aux poignees sur le pourtour (px ecran -> m locaux).
+  const moveInsetM = 24 / zoomNow
   const outline = [
     new THREE.Vector3(...stageToLocal(minX, minY, 0)),
     new THREE.Vector3(...stageToLocal(maxX, minY, 0)),
@@ -358,7 +379,10 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
         onPointerOver={() => { document.body.style.cursor = 'move' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
       >
-        <planeGeometry args={[widthM, heightM]} />
+        {/* Retrecie d'un couloir de ~24 px : la plane s'etendait
+            jusque SOUS les poignees, le survol basculait sans arret
+            entre deplacement et etirement (retour 2026-08-07). */}
+        <planeGeometry args={[Math.max(widthM * 0.3, widthM - 2 * moveInsetM), Math.max(heightM * 0.3, heightM - 2 * moveInsetM)]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} depthTest={false} />
       </mesh>
 
@@ -369,11 +393,12 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
           <ScreenSizedHandle
             key={h.key}
             position={stageToLocal(p.x, p.y, 3)}
-            sizePx={HANDLE_PX}
+            sizePx={HANDLE_PX + 1}
             args={h.axis === 'x' ? [0.35, 1, 1] : h.axis === 'z' ? [1, 1, 0.35] : [1, 1, 1]}
             color="#ffffff"
             cursor={h.cursor}
             renderOrder={1042}
+            hitScale={3.6}
             onPointerDown={(e) => begin(e, 'scale', h)}
           />
         )
