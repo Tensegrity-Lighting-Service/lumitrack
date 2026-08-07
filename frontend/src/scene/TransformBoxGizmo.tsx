@@ -110,8 +110,10 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
   const selectionKey = [...selectedPointIds].sort().join('|')
   useEffect(() => { setAnchorOffset(null) }, [selectionKey])
 
-  // Badge degrés pendant une rotation (null = pas de rotation en cours).
+  // Badge degres pendant une rotation (null = pas de rotation en cours) ;
+  // le camembert suit le meme angle en radians.
   const [liveThetaDeg, setLiveThetaDeg] = useState<number | null>(null)
+  const liveThetaRad = ((liveThetaDeg ?? 0) * Math.PI) / 180
 
   const dragRef = useRef<BoxDrag | null>(null)
   const rootRef = useRef<THREE.Group>(null)
@@ -220,7 +222,12 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
     }
 
     const now = performance.now()
-    if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
+    // Debit adaptatif (retour 2026-08-07, 'ca rame avec tout un tas
+    // d'acteurs') : chaque envoi declenche une rediffusion projet
+    // complete + un re-rendu global — 30/s x 78 acteurs etouffe tout.
+    // ~30/s pour une poignee d'acteurs, ~8/s pour 78.
+    const sendInterval = Math.max(DRAG_SEND_INTERVAL_MS, drag.members.length * 1.5)
+    if (now - drag.lastSent < sendInterval) return
     drag.lastSent = now
 
     if (drag.kind === 'move') {
@@ -361,9 +368,6 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
     new THREE.Vector3(...stageToLocal(minX, minY, 0)),
   ].map((v) => new THREE.Vector3(v.x, 0.02, v.z))
   const anchorLocal = stageToLocal(anchorCm.x, anchorCm.y, 0)
-  const cornersCm = [
-    { x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY },
-  ]
 
   return (
     <group ref={rootRef}>
@@ -404,11 +408,14 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
         )
       })}
 
-      {/* Anneau double-mode autour de l'ancre. */}
-      <RotationRing
+      {/* Camembert de rotation (reference Capture, retour 2026-08-07) :
+          pointe = l'ancre (le pivot), eventail a taille ECRAN constante
+          — independant du zoom ET de l'etendue du groupe. Bande pleine
+          a l'extremite = rotation du groupe ; bord au-dela = lacet
+          individuel. Il suit l'angle pendant le geste. */}
+      <RotationFan
         anchorLocal={anchorLocal}
-        anchorCm={anchorCm}
-        cornersCm={cornersCm}
+        thetaRad={liveThetaRad}
         showGroupBand={!singleMember}
         onDownBand={(e) => begin(e, 'rotate-group')}
         onDownEdge={(e) => begin(e, 'rotate-yaw')}
@@ -432,80 +439,84 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
   )
 }
 
-/** Anneau de rotation : bande pleine (groupe) + bord fin extérieur (lacet
- * individuel). Rayon = distance max ancre→coins + marge, en unités
- * LOCALES, recalculé quand le zoom ou la géométrie changent de >2 % (les
- * ringGeometry sont recréées à ce moment-là seulement). */
-function RotationRing({ anchorLocal, anchorCm, cornersCm, showGroupBand, onDownBand, onDownEdge }: {
+/** Camembert de rotation (reference Capture) : un eventail de ~30 deg
+ * dont la POINTE est a l'ancre et qui pointe vers la droite (est), a
+ * taille ECRAN CONSTANTE (groupe mis a l'echelle 1/zoom par frame —
+ * geometries unite en "pixels", creees UNE fois, jamais recreees). La
+ * bande pleine a l'extremite tourne le GROUPE ; le bord fin au-dela
+ * tourne le LACET individuel. L'eventail suit l'angle pendant le geste. */
+const FAN_HALF_RAD = (15 * Math.PI) / 180
+
+function RotationFan({ anchorLocal, thetaRad, showGroupBand, onDownBand, onDownEdge }: {
   anchorLocal: [number, number, number]
-  anchorCm: { x: number; y: number }
-  cornersCm: { x: number; y: number }[]
+  thetaRad: number
   showGroupBand: boolean
   onDownBand: (e: { stopPropagation: () => void; nativeEvent?: PointerEvent }) => void
   onDownEdge: (e: { stopPropagation: () => void; nativeEvent?: PointerEvent }) => void
 }) {
-  const [dims, setDims] = useState({ rM: 1, pxM: 0.01 })
+  const scaleRef = useRef<THREE.Group>(null)
   const [hover, setHover] = useState<'band' | 'edge' | null>(null)
   useFrame(({ camera }) => {
     const zoom = (camera as THREE.OrthographicCamera).zoom || 1
-    const pxM = 1 / zoom
-    const distM = Math.max(
-      0,
-      ...cornersCm.map((c) => Math.hypot(c.x - anchorCm.x, c.y - anchorCm.y) * CM_TO_M),
-    )
-    const rM = Math.max(70 * pxM, distM + 18 * pxM)
-    if (Math.abs(rM - dims.rM) / rM > 0.02 || Math.abs(pxM - dims.pxM) / pxM > 0.02) {
-      setDims({ rM, pxM })
-    }
+    const s = 1 / zoom
+    if (scaleRef.current) scaleRef.current.scale.set(s, s, s)
   })
-  const { rM, pxM } = dims
-  const bandGeom = useMemo(() => new THREE.RingGeometry(rM, rM + 14 * pxM, 64), [rM, pxM])
-  const edgeGeom = useMemo(() => new THREE.RingGeometry(rM + 16 * pxM, rM + 24 * pxM, 64), [rM, pxM])
-  const edgeHitGeom = useMemo(() => new THREE.RingGeometry(rM + 14 * pxM, rM + 30 * pxM, 48), [rM, pxM])
-  useEffect(() => () => { bandGeom.dispose() }, [bandGeom])
-  useEffect(() => () => { edgeGeom.dispose() }, [edgeGeom])
-  useEffect(() => () => { edgeHitGeom.dispose() }, [edgeHitGeom])
-  const pos: [number, number, number] = [anchorLocal[0], 0.02, anchorLocal[2]]
+  // Geometries unite (en px ecran) — creees une seule fois.
+  const bandGeom = useMemo(() => new THREE.RingGeometry(96, 122, 24, 1, -FAN_HALF_RAD, 2 * FAN_HALF_RAD), [])
+  const bandHitGeom = useMemo(() => new THREE.RingGeometry(80, 126, 16, 1, -FAN_HALF_RAD * 1.3, 2.6 * FAN_HALF_RAD), [])
+  const edgeGeom = useMemo(() => new THREE.RingGeometry(126, 140, 24, 1, -FAN_HALF_RAD, 2 * FAN_HALF_RAD), [])
+  const edgeHitGeom = useMemo(() => new THREE.RingGeometry(126, 162, 16, 1, -FAN_HALF_RAD * 1.3, 2.6 * FAN_HALF_RAD), [])
+  useEffect(() => () => {
+    bandGeom.dispose(); bandHitGeom.dispose(); edgeGeom.dispose(); edgeHitGeom.dispose()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const edges = useMemo(() => {
+    const mk = (a: number): [number, number, number][] => [
+      [0, 0, 0], [Math.cos(a) * 122, 0, Math.sin(a) * 122],
+    ]
+    return { top: mk(-FAN_HALF_RAD), bottom: mk(FAN_HALF_RAD) }
+  }, [])
   return (
-    <group>
-      {showGroupBand && (
-        <mesh
-          geometry={bandGeom}
-          position={pos}
-          rotation={[-Math.PI / 2, 0, 0]}
-          renderOrder={1041}
-          onPointerDown={onDownBand}
-          onPointerOver={() => { setHover('band'); document.body.style.cursor = 'grab' }}
-          onPointerOut={() => { setHover(null); document.body.style.cursor = 'auto' }}
-        >
-          <meshBasicMaterial color="#4F6DF5" transparent opacity={hover === 'band' ? 0.45 : 0.22}
+    <group position={[anchorLocal[0], 0.03, anchorLocal[2]]} rotation={[0, -thetaRad, 0]}>
+      <group ref={scaleRef}>
+        {/* Bords du cone : de la pointe (ancre) a la bande. */}
+        <Line points={edges.top} color="#f5c84f" lineWidth={1} transparent opacity={0.5}
+          depthTest={false} renderOrder={1041} />
+        <Line points={edges.bottom} color="#f5c84f" lineWidth={1} transparent opacity={0.5}
+          depthTest={false} renderOrder={1041} />
+        {showGroupBand && (
+          <>
+            <mesh geometry={bandGeom} rotation={[-Math.PI / 2, 0, 0]} renderOrder={1042}>
+              <meshBasicMaterial color="#4F6DF5" transparent opacity={hover === 'band' ? 0.85 : 0.55}
+                depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+            </mesh>
+            <mesh
+              geometry={bandHitGeom}
+              rotation={[-Math.PI / 2, 0, 0]}
+              renderOrder={1041}
+              onPointerDown={onDownBand}
+              onPointerOver={() => { setHover('band'); document.body.style.cursor = 'grab' }}
+              onPointerOut={() => { setHover(null); document.body.style.cursor = 'auto' }}
+            >
+              <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+            </mesh>
+          </>
+        )}
+        <mesh geometry={edgeGeom} rotation={[-Math.PI / 2, 0, 0]} renderOrder={1042}>
+          <meshBasicMaterial color="#f5c84f" transparent opacity={hover === 'edge' ? 0.8 : 0.4}
             depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
         </mesh>
-      )}
-      <mesh
-        geometry={edgeGeom}
-        position={pos}
-        rotation={[-Math.PI / 2, 0, 0]}
-        renderOrder={1041}
-        onPointerDown={onDownEdge}
-        onPointerOver={() => { setHover('edge'); document.body.style.cursor = 'alias' }}
-        onPointerOut={() => { setHover(null); document.body.style.cursor = 'auto' }}
-      >
-        <meshBasicMaterial color="#f5c84f" transparent opacity={hover === 'edge' ? 0.4 : 0.15}
-          depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
-      </mesh>
-      {/* Hitbox élargie du bord (fin = dur à viser). */}
-      <mesh
-        geometry={edgeHitGeom}
-        position={pos}
-        rotation={[-Math.PI / 2, 0, 0]}
-        renderOrder={1040}
-        onPointerDown={onDownEdge}
-        onPointerOver={() => { setHover('edge'); document.body.style.cursor = 'alias' }}
-        onPointerOut={() => { setHover(null); document.body.style.cursor = 'auto' }}
-      >
-        <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
-      </mesh>
+        <mesh
+          geometry={edgeHitGeom}
+          rotation={[-Math.PI / 2, 0, 0]}
+          renderOrder={1041}
+          onPointerDown={onDownEdge}
+          onPointerOver={() => { setHover('edge'); document.body.style.cursor = 'alias' }}
+          onPointerOut={() => { setHover(null); document.body.style.cursor = 'auto' }}
+        >
+          <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+        </mesh>
+      </group>
     </group>
   )
 }
