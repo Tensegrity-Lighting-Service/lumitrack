@@ -362,7 +362,7 @@ const ActorLabel = memo(function ActorLabel({ text, xCm, yCm, zCm, opacity, scal
     canvas.width = 64
     canvas.height = 64
     const ctx = canvas.getContext('2d')!
-    ctx.font = '700 38px system-ui, sans-serif'
+    ctx.font = '700 38px Roboto, system-ui, sans-serif'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.lineWidth = 7
@@ -1220,7 +1220,7 @@ function ZoneLabel({ text, xCm, yCm }: { text: string; xCm: number; yCm: number 
     canvas.width = 256
     canvas.height = 40
     const ctx = canvas.getContext('2d')!
-    ctx.font = '600 24px system-ui, sans-serif'
+    ctx.font = '600 24px Roboto, system-ui, sans-serif'
     ctx.fillStyle = '#7ee0d0'
     ctx.textBaseline = 'middle'
     ctx.fillText(text, 6, 20)

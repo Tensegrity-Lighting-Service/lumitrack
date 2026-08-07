@@ -333,6 +333,13 @@ export interface AckMessage {
   type: 'ack'
 }
 
+/** Crash détecté : le fichier de secours de la session précédente existe
+ * encore (une sortie propre l'aurait effacé) — App propose la
+ * récupération (2026-08-07). */
+export interface RescueAvailableMessage {
+  type: 'rescue_available'
+}
+
 export interface IfacesMessage {
   type: 'ifaces'
   addresses: string[]
@@ -363,5 +370,5 @@ export interface PsnPreviewMessage {
 
 export type ServerMessage =
   | ProjectMessage | TickMessage | BlockContextMessage | TrajectoriesMessage
-  | ErrorMessage | SavedMessage | AckMessage
+  | ErrorMessage | SavedMessage | AckMessage | RescueAvailableMessage
   | IfacesMessage | PsnPreviewMessage | BundleArchiveMessage

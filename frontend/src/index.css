@@ -1,6 +1,7 @@
 :root {
   color-scheme: dark;
-  font: 13px/1.4 system-ui, 'Segoe UI', Roboto, sans-serif;
+  /* Roboto embarquée (docs/licences-polices.md) ; system-ui en repli. */
+  font: 13px/1.4 'Roboto', system-ui, 'Segoe UI', sans-serif;
 }
 
 * { box-sizing: border-box; }

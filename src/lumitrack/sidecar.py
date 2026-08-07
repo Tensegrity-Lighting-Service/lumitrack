@@ -71,18 +71,24 @@ MUTATING_COMMANDS = {
 # de sens une fois chargé un nouveau, donc on le vide plutôt que de le
 # rendre annulable (annuler un "Nouveau projet" ramènerait dans l'ancien
 # projet sans qu'on l'ait "ouvert" — confusion garantie avec Fichier/Ouvrir).
-RESET_UNDO_COMMANDS = {"new_project", "import_stancz", "load_bundle"}
+RESET_UNDO_COMMANDS = {"new_project", "import_stancz", "load_bundle", "load_rescue"}
 
 
-def autosave_path() -> str:
-    """Sauvegarde de session : %APPDATA%/Lumitrack/autosave.json (Windows),
-    ~/.config/Lumitrack sinon. JSON simple (pas un bundle : les médias
-    restent référencés en chemins absolus, pas copiés — et pas de dossier
-    versions/ qui gonflerait à chaque autosave)."""
+def rescue_path() -> str:
+    """Fichier de SECOURS anti-crash : %APPDATA%/Lumitrack/rescue.json
+    (Windows), ~/.config/Lumitrack sinon. JSON simple (pas un bundle : les
+    médias restent référencés en chemins absolus, pas copiés).
+
+    Nouveau contrat (demande 2026-08-07) : ce fichier n'est PLUS une
+    reprise de session automatique — il est écrit en continu pendant
+    l'usage, EFFACÉ à toute sortie propre (message `clean_exit`, que
+    l'utilisateur ait sauvegardé ou non), et sa présence au démarrage
+    signifie donc un CRASH : le frontend propose alors de récupérer la
+    session (`rescue_available` → `load_rescue`/`discard_rescue`)."""
     base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
     directory = os.path.join(base, "Lumitrack")
     os.makedirs(directory, exist_ok=True)
-    return os.path.join(directory, "autosave.json")
+    return os.path.join(directory, "rescue.json")
 
 
 def _demo_project() -> Project:
@@ -138,18 +144,21 @@ class Session:
     process, and the set of connected frontend sockets to push to."""
 
     def __init__(self):
-        # Reprise de session : la dernière autosauvegarde si elle existe,
-        # sinon le projet de démonstration.
-        self.project = None
-        path = autosave_path()
-        if os.path.isfile(path):
-            try:
-                self.project = Project.load(path)
-                logger.info("Session restaurée depuis %s", path)
-            except Exception:
-                logger.exception("Autosave illisible (%s) — projet de démo", path)
-        if self.project is None:
-            self.project = _demo_project()
+        # Plus de reprise de session automatique (2026-08-07) : on démarre
+        # sur le projet de démo, et la présence d'un fichier de secours
+        # (= la sortie précédente n'était PAS propre) est signalée au
+        # frontend qui PROPOSE la récupération.
+        path = rescue_path()
+        legacy = os.path.join(os.path.dirname(path), "autosave.json")
+        if not os.path.isfile(path) and os.path.isfile(legacy):
+            # Migration : l'ancienne autosave devient un fichier de secours.
+            os.replace(legacy, path)
+        self.rescue_available = os.path.isfile(path)
+        if self.rescue_available:
+            logger.info("Fichier de secours présent (%s) — récupération proposée", path)
+        # Sortie propre demandée : gèle l'écriture du fichier de secours.
+        self.exiting = False
+        self.project = _demo_project()
         # Même assainissement anti-superposition qu'au chargement d'un
         # projet (set_project) — l'autosave restauré peut précéder
         # l'invariant (tranche H, 2026-08-07).
@@ -312,16 +321,17 @@ async def _tick_loop(session: Session):
 
 
 async def _autosave_loop(session: Session):
-    """Sauvegarde continue : écrit l'autosave ~2 s après la dernière
-    mutation. La fermeture de l'app TUE le sidecar (kill, aucun handler ne
-    tourne sous Windows) — c'est donc cette boucle qui garantit le
-    « sauvegardé au quit » : au moment du kill, tout est déjà sur disque.
+    """Fichier de secours continu : écrit rescue.json ~2 s après la
+    dernière mutation. En cas de CRASH (kill brutal, aucun handler ne
+    tourne sous Windows), tout est déjà sur disque et le prochain
+    démarrage proposera la récupération. À la sortie PROPRE, `clean_exit`
+    supprime le fichier et gèle cette boucle (session.exiting).
     Écriture ATOMIQUE (tmp + replace) : un kill en plein write ne peut pas
     corrompre le fichier."""
-    path = autosave_path()
+    path = rescue_path()
     while True:
         await asyncio.sleep(AUTOSAVE_INTERVAL_S)
-        if not session.dirty:
+        if session.exiting or not session.dirty:
             continue
         session.dirty = False
         try:
@@ -330,7 +340,7 @@ async def _autosave_loop(session: Session):
             os.replace(tmp, path)
         except Exception:
             session.dirty = True  # on retentera au prochain tour
-            logger.exception("Échec de l'autosauvegarde")
+            logger.exception("Échec de l'écriture du fichier de secours")
 
 
 def _apply_auto_duration(project: Project, cue: Cue) -> None:
@@ -1109,6 +1119,37 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         session.set_project(load_bundle(msg["path"], msg.get("archivedName")))
         return None
 
+    # ---- Cycle de vie du fichier de secours (2026-08-07) ----
+    if msg_type == "clean_exit":
+        # Sortie PROPRE (que l'utilisateur ait sauvegardé ou non) : le
+        # fichier de secours n'a plus de raison d'être, et la boucle
+        # d'écriture est gelée pour qu'une dernière mutation en vol ne le
+        # recrée pas juste avant le kill du process.
+        session.exiting = True
+        try:
+            os.remove(rescue_path())
+        except FileNotFoundError:
+            pass
+        return {"type": "ack"}
+
+    if msg_type == "load_rescue":
+        path = rescue_path()
+        session.rescue_available = False
+        if os.path.isfile(path):
+            project = Project.load(path)
+            _sanitize_all_lanes(project)
+            session.set_project(project)
+            return None
+        return {"type": "error", "message": "Aucun fichier de secours"}
+
+    if msg_type == "discard_rescue":
+        session.rescue_available = False
+        try:
+            os.remove(rescue_path())
+        except FileNotFoundError:
+            pass
+        return {"type": "ack"}
+
     return {"type": "error", "message": f"Unknown message type {msg_type!r}"}
 
 
@@ -1116,6 +1157,10 @@ async def _client_handler(session: Session, websocket):
     session.clients.add(websocket)
     try:
         await websocket.send(json.dumps(session.project_message()))
+        # Crash détecté à la session précédente : proposer la récupération
+        # (une seule fois — load_rescue/discard_rescue baissent le drapeau).
+        if session.rescue_available:
+            await websocket.send(json.dumps({"type": "rescue_available"}))
         async for raw in websocket:
             try:
                 msg = json.loads(raw)

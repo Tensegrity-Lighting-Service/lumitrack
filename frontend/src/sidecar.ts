@@ -35,6 +35,8 @@ class SidecarClient {
    * de confirmation distinct (juste une rediffusion du projet) : son
    * chemin reste optimiste sans correction ultérieure. */
   bundlePath: string | null = null
+  /** Crash détecté (fichier de secours présent au démarrage du sidecar). */
+  rescueAvailable = false
 
   private ws: WebSocket | null = null
   private listeners = new Set<() => void>()
@@ -87,6 +89,11 @@ class SidecarClient {
         this.psnPreview = msg
       } else if (msg.type === 'bundle_archive') {
         this.bundleArchive = msg
+      } else if (msg.type === 'rescue_available') {
+        // Crash détecté à la session précédente (2026-08-07) : le fichier
+        // de secours existe encore — App affiche le dialogue de
+        // récupération.
+        this.rescueAvailable = true
       } else if (msg.type === 'saved') {
         // save_bundle peut CORRIGER le chemin demandé (dossier dédié
         // inséré si l'utilisateur n'avait pas déjà navigué dans un dossier
@@ -340,6 +347,21 @@ class SidecarClient {
     this.send({ type: 'load_bundle', path, archivedName })
   }
   listBundleArchive(path: string) { this.send({ type: 'list_bundle_archive', path }) }
+
+  // ---- fichier de secours / sortie propre (2026-08-07) ----
+  /** Sortie propre : le sidecar efface le fichier de secours et gèle son
+   * écriture — à appeler juste avant de détruire la fenêtre. */
+  cleanExit() { this.send({ type: 'clean_exit' }) }
+  loadRescue() {
+    this.rescueAvailable = false
+    this.bundlePath = null
+    this.send({ type: 'load_rescue' })
+  }
+  discardRescue() {
+    this.rescueAvailable = false
+    this.emit()
+    this.send({ type: 'discard_rescue' })
+  }
 }
 
 export const sidecar = new SidecarClient()
@@ -406,6 +428,10 @@ export function useUndoAvailable(): boolean {
 
 export function useBundlePath(): string | null {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.bundlePath)
+}
+
+export function useRescueAvailable(): boolean {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.rescueAvailable)
 }
 
 export function useBundleArchive(): BundleArchiveMessage | null {

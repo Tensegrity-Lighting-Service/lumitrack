@@ -244,7 +244,13 @@ pub fn run() {
       Ok(())
     })
     .on_window_event(|window, event| {
-      if let tauri::WindowEvent::CloseRequested { .. } = event {
+      // `Destroyed`, PAS `CloseRequested` (2026-08-07) : le frontend
+      // intercepte désormais la fermeture (onCloseRequested + preventDefault)
+      // pour afficher « Sauvegarder avant de quitter ? » — tuer le sidecar
+      // dès la DEMANDE de fermeture aurait laissé l'app ouverte sur un
+      // moteur mort si l'utilisateur annulait. À la destruction réelle
+      // (window.destroy() côté JS après le choix), on nettoie.
+      if let tauri::WindowEvent::Destroyed = event {
         // Uniquement la fenêtre PRINCIPALE (fix 2026-08-06) : le splash se
         // ferme programmatiquement quelques secondes après le démarrage
         // (App.tsx::revealMainWindow) — sans ce filtre, SA fermeture

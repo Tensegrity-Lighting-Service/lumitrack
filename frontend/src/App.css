@@ -116,7 +116,7 @@
   border-bottom: 1px solid #2b2f38;
 }
 .transport-bar .scrub { flex: 1; }
-.transport-bar .timecode { font-family: ui-monospace, Consolas, monospace; min-width: 9ch; }
+.transport-bar .timecode { font-family: 'DejaVu Mono', ui-monospace, Consolas, monospace; min-width: 9ch; }
 .transport-bar .project-name { color: #8a92a6; margin-left: auto; }
 .psn-on { background: #4f6df5; border-color: #4f6df5; }
 
@@ -767,7 +767,7 @@
 .tl-play { font-size: 13px; min-width: 30px; }
 .tl-goto-start { font-size: 12px; min-width: 26px; }
 .tl-timecode {
-  font-family: ui-monospace, monospace; font-size: 12px;
+  font-family: 'DejaVu Mono', ui-monospace, monospace; font-size: 12px;
   color: #cfd6ff; min-width: 96px;
 }
 .tl-toolbar-sep { width: 1px; height: 16px; background: #30303c; margin: 0 4px; }
@@ -843,7 +843,7 @@
   position: fixed; z-index: 70; pointer-events: none;
   background: #1b1e26; border: 1px solid #2b2f38; border-radius: 4px;
   padding: 3px 7px; font-size: 11px; color: #d5d9e4;
-  font-family: ui-monospace, monospace;
+  font-family: 'DejaVu Mono', ui-monospace, monospace;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
@@ -957,7 +957,7 @@
 }
 .psn-table td { padding: 3px 8px 3px 0; border-bottom: 1px solid #1d1d24; }
 .psn-table .swatch { margin-right: 6px; }
-.psn-mono { font-family: ui-monospace, monospace; }
+.psn-mono { font-family: 'DejaVu Mono', ui-monospace, monospace; }
 .psn-up { color: #4ff58c; }
 .psn-preset-delete {
   font-size: 11px; padding: 1px 6px;
@@ -993,7 +993,7 @@
 .block-detail-resize-grip:hover { background: color-mix(in srgb, #4F6DF5 40%, transparent); }
 .block-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .block-detail-head h2 { margin: 0; font-size: 13px; }
-.block-detail-duration { font-size: 11px; color: #9a9aa8; font-family: ui-monospace, monospace; }
+.block-detail-duration { font-size: 11px; color: #9a9aa8; font-family: 'DejaVu Mono', ui-monospace, monospace; }
 .block-detail-spacer { flex: 1; }
 /* Deux colonnes SIBLINGS (étiquettes / pistes) plutôt qu'une grille par
    ligne — `.block-detail-tracks` (BlockDetailPanel.tsx) doit contenir
@@ -1010,7 +1010,7 @@
 .block-detail-ruler-spacer { border-bottom: 1px solid #26262e; }
 .block-detail-ruler {
   position: relative; box-sizing: border-box;
-  font-size: 10px; color: #6e6e7c; font-family: ui-monospace, monospace;
+  font-size: 10px; color: #6e6e7c; font-family: 'DejaVu Mono', ui-monospace, monospace;
   border-bottom: 1px solid #26262e; overflow: hidden;
 }
 .block-detail-audio-spacer { border-bottom: 1px solid #1d1d24; }
@@ -1050,7 +1050,7 @@
 .block-detail-bar-label {
   font-size: 9.5px; color: rgba(0, 0, 0, 0.75); padding: 0 5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  pointer-events: none; font-family: ui-monospace, monospace;
+  pointer-events: none; font-family: 'DejaVu Mono', ui-monospace, monospace;
 }
 .block-detail-handle {
   position: absolute; right: 0; top: 0; bottom: 0; width: 7px;
@@ -1117,6 +1117,10 @@
   padding: 14px 16px; min-width: 320px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
 }
+.prompt-dialog-buttons {
+  display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px;
+}
+.prompt-dialog-buttons .prompt-primary { background: #4f6df5; border-color: #4f6df5; color: #fff; }
 .prompt-dialog h3 { margin: 0 0 10px; font-size: 13px; color: #d5d5e0; }
 .prompt-dialog input {
   width: 100%; font-size: 13px; padding: 6px 8px;
@@ -1168,7 +1172,7 @@
 
 /* Badge Timecode In (Art-Net) a cote du temps de transport (2026-08-06) */
 .tl-tc-badge {
-  font-family: monospace; font-size: 11px; padding: 1px 6px;
+  font-family: 'DejaVu Mono', ui-monospace, monospace; font-size: 11px; padding: 1px 6px;
   border-radius: 3px; align-self: center; white-space: nowrap;
 }
 .tl-tc-badge.tc-live { background: #123a1e; color: #4fe081; border: 1px solid #1f6b38; }
@@ -1237,7 +1241,7 @@
 .transform-angle-badge {
   background: rgba(16, 17, 22, 0.88); border: 1px solid #2b2f38;
   border-radius: 4px; padding: 2px 7px;
-  font-family: ui-monospace, monospace; font-size: 11px; color: #f5c84f;
+  font-family: 'DejaVu Mono', ui-monospace, monospace; font-size: 11px; color: #f5c84f;
   white-space: nowrap;
 }
 

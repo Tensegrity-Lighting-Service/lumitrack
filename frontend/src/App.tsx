@@ -4,7 +4,7 @@ import { Scene, type SceneHandle } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import {
   sidecar, useBlockContext, useBundlePath, useConnected, useProject, usePsnRunning,
-  useRedoAvailable, useRosterStatusKey, useUndoAvailable,
+  useRedoAvailable, useRescueAvailable, useRosterStatusKey, useUndoAvailable,
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -620,6 +620,46 @@ function App() {
     const path = await pickSaveAsPath(projectName)
     if (path) sidecar.saveBundle(path)
   }, [bundlePath])
+
+  // ---- Sortie propre + récupération de crash (2026-08-07) ----
+  // Plus d'autosauvegarde-reprise silencieuse : à la fermeture, popup
+  // « Sauvegarder avant de quitter ? » ; toute sortie par ce chemin
+  // (sauvegardée ou non) est PROPRE : le sidecar efface son fichier de
+  // secours (cleanExit) puis la fenêtre est détruite (destroy() — le kill
+  // du sidecar est branché sur Destroyed côté Rust). Un fichier de secours
+  // présent au prochain démarrage = crash → dialogue de récupération.
+  const [quitPrompt, setQuitPrompt] = useState(false)
+  const rescueAvailable = useRescueAvailable()
+  useEffect(() => {
+    let unlisten: (() => void) | null = null
+    try {
+      // try synchrone : hors Tauri (dev navigateur), getCurrentWindow lance.
+      getCurrentWindow().onCloseRequested((e) => {
+        e.preventDefault()
+        setQuitPrompt(true)
+      }).then((fn) => { unlisten = fn }).catch(() => { /* hors Tauri */ })
+    } catch { /* hors Tauri */ }
+    return () => { unlisten?.() }
+  }, [])
+  const finishExit = useCallback(async () => {
+    sidecar.cleanExit()
+    // Laisse le message partir sur le websocket avant de tuer la fenêtre.
+    await new Promise((r) => setTimeout(r, 250))
+    try { await getCurrentWindow().destroy() } catch { /* hors Tauri */ }
+  }, [])
+  const quitWithSave = useCallback(async () => {
+    if (bundlePath) {
+      sidecar.saveBundle(bundlePath)
+    } else {
+      const path = await pickSaveAsPath(project?.name ?? '')
+      if (!path) return // dialogue annulé : on ne quitte pas
+      sidecar.saveBundle(path)
+    }
+    // Laisse le backend écrire le .lumitrack avant la destruction.
+    await new Promise((r) => setTimeout(r, 600))
+    setQuitPrompt(false)
+    await finishExit()
+  }, [bundlePath, project?.name, finishExit])
 
   const zoomIn = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1.2 }))
   const zoomOut = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1 / 1.2 }))
@@ -1422,6 +1462,31 @@ function App() {
       <ContextMenu />
       <PromptDialog />
       <UpdateDialog />
+      {quitPrompt && (
+        <div className="prompt-overlay">
+          <div className="prompt-dialog">
+            <h3>{t('quit.title')}</h3>
+            <p>{t('quit.message')}</p>
+            <div className="prompt-dialog-buttons">
+              <button className="prompt-primary" onClick={() => { void quitWithSave() }}>{t('quit.save')}</button>
+              <button onClick={() => { setQuitPrompt(false); void finishExit() }}>{t('quit.noSave')}</button>
+              <button onClick={() => setQuitPrompt(false)}>{t('quit.cancel')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {rescueAvailable && !quitPrompt && (
+        <div className="prompt-overlay">
+          <div className="prompt-dialog">
+            <h3>{t('rescue.title')}</h3>
+            <p>{t('rescue.message')}</p>
+            <div className="prompt-dialog-buttons">
+              <button className="prompt-primary" onClick={() => sidecar.loadRescue()}>{t('rescue.restore')}</button>
+              <button onClick={() => sidecar.discardRescue()}>{t('rescue.discard')}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <footer className="timeline-dock">
         {showBlockDetail && selectedCue && (
           <BlockDetailPanel

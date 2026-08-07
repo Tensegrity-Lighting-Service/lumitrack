@@ -734,3 +734,69 @@ def test_set_audio_updates_path_duration_and_transport():
     assert session.project.audio_path is None
     assert session.project.audio_duration_s is None
     assert session.transport.duration_ms == pytest.approx(cue_end)
+
+
+# ---- Fichier de secours anti-crash (2026-08-07) --------------------------
+# Contrat : ecrit en continu pendant l'usage, EFFACE a toute sortie propre
+# (clean_exit, sauvegarde ou non) ; present au demarrage = crash -> le
+# frontend est notifie (rescue_available) et choisit load/discard.
+
+def test_clean_exit_removes_rescue_and_freezes_writes(tmp_path):
+    import os
+    from lumitrack.sidecar import rescue_path
+    session = Session()
+    path = rescue_path()
+    session.project.save(path)
+    assert os.path.isfile(path)
+    reply = _run(_handle_message(session, {"type": "clean_exit"}))
+    assert reply == {"type": "ack"}
+    assert not os.path.isfile(path)
+    assert session.exiting is True
+
+
+def test_rescue_detected_then_loaded():
+    import os
+    from lumitrack.sidecar import rescue_path
+    seed = Session()
+    seed.project.name = "CrashShow"
+    seed.project.save(rescue_path())
+
+    session = Session()  # nouveau demarrage : fichier present = crash
+    assert session.rescue_available is True
+    assert session.project.name != "CrashShow"  # PAS charge silencieusement
+
+    reply = _run(_handle_message(session, {"type": "load_rescue"}))
+    assert reply is None  # mutation -> broadcast projet
+    assert session.project.name == "CrashShow"
+    assert session.rescue_available is False
+    assert os.path.isfile(rescue_path())  # garde le filet jusqu'a la sortie propre
+
+
+def test_rescue_discarded_deletes_file():
+    import os
+    from lumitrack.sidecar import rescue_path
+    seed = Session()
+    seed.project.save(rescue_path())
+
+    session = Session()
+    assert session.rescue_available is True
+    reply = _run(_handle_message(session, {"type": "discard_rescue"}))
+    assert reply == {"type": "ack"}
+    assert session.rescue_available is False
+    assert not os.path.isfile(rescue_path())
+
+
+def test_legacy_autosave_migrates_to_rescue():
+    import os
+    from lumitrack.sidecar import rescue_path
+    seed = Session()
+    seed.project.name = "AncienneSession"
+    legacy = os.path.join(os.path.dirname(rescue_path()), "autosave.json")
+    seed.project.save(legacy)
+    os.remove(rescue_path()) if os.path.isfile(rescue_path()) else None
+
+    session = Session()
+    assert not os.path.isfile(legacy)
+    assert session.rescue_available is True
+    _run(_handle_message(session, {"type": "load_rescue"}))
+    assert session.project.name == "AncienneSession"
