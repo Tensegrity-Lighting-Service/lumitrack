@@ -27,7 +27,7 @@ import { promptText } from '../ui/promptDialog'
 import { pickColor } from '../ui/colorPicker'
 import { NumericInput } from '../ui/NumericInput'
 import { chooseTickStep, computeTicks } from './ticks'
-import { setTimelineView } from './timelineView'
+import { setTimelineView, registerTimelineViewCommands } from './timelineView'
 import {
   canSplitAtPlayhead, copyCueToClipboard, copyTimingToOtherActors, duplicateCue,
   hasCueClipboard, pasteCueFromClipboard, splitCueAtPlayhead,
@@ -305,6 +305,26 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
+  }, [zoomAt])
+
+  // Commandes venues du BlockDetailPanel (tranche E, 2026-08-07) : la
+  // timeline principale est masquée par l'overlay mais reste seule
+  // propriétaire du scroll DOM et de l'animation de zoom — le panneau lui
+  // délègue ses gestes. L'ancre de zoom arrive en TEMPS (anchorMs), à
+  // reconvertir dans NOTRE fenêtre.
+  useEffect(() => {
+    return registerTimelineViewCommands((cmd) => {
+      const el = scrollRef.current
+      if (!el) return
+      if (cmd.scrollDeltaPx) el.scrollLeft += cmd.scrollDeltaPx
+      if (cmd.zoomFactor) {
+        const rect = el.getBoundingClientRect()
+        const offsetX = cmd.anchorMs !== undefined
+          ? Math.max(0, Math.min(el.clientWidth, cmd.anchorMs * pxPerMsRef.current - el.scrollLeft))
+          : el.clientWidth / 2
+        zoomAt(cmd.zoomFactor, rect.left + offsetX)
+      }
+    })
   }, [zoomAt])
 
   // Clic molette + glisser = panoramique horizontal façon surface tactile :

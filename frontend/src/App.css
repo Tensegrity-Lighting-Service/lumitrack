@@ -948,7 +948,10 @@
    UNIQUEMENT les pistes, jamais la colonne des étiquettes, pour que sa
    largeur mesurée (viewportWidth) corresponde exactement à la fenêtre de
    temps visible. */
-.block-detail-body { display: flex; max-height: 200px; overflow-y: auto; }
+/* 200px -> 62vh (tranche E, 2026-08-07) : un bloc à 78 acteurs n'affichait
+   que ~22 lignes, le reste invisible ("tronqué ou caché"). */
+.block-detail-body { display: flex; max-height: 62vh; overflow-y: auto; }
+.block-detail-ruler-seek { cursor: pointer; }
 .block-detail-labels { flex-shrink: 0; border-right: 1px solid #26262e; }
 .block-detail-tracks { position: relative; flex: 1; min-width: 0; overflow: hidden; }
 .block-detail-ruler-spacer { border-bottom: 1px solid #26262e; }

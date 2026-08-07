@@ -38,3 +38,31 @@ function subscribe(fn: () => void) {
 export function useTimelineView(): TimelineViewState {
   return useSyncExternalStore(subscribe, () => state)
 }
+
+// ---- Canal de COMMANDES inverse (tranche E, 2026-08-07) -------------------
+// Le BlockDetailPanel doit pouvoir zoomer/défiler « comme la timeline
+// principale » alors que celle-ci est masquée par l'overlay. Le miroir
+// ci-dessus reste en lecture seule (CueTimeline le réécraserait) : le
+// panneau envoie des COMMANDES, CueTimeline (seul propriétaire du scroll
+// DOM et de l'animation de zoom) les exécute. L'ancre de zoom est un
+// INSTANT (ms), pas un pixel — les deux fenêtres n'ont ni la même largeur
+// ni le même bord gauche.
+
+export interface TimelineViewCommand {
+  /** Facteur de zoom (ex. 1.15 / 0.87), ancré sur anchorMs. */
+  zoomFactor?: number
+  anchorMs?: number
+  /** Défilement horizontal, en pixels. */
+  scrollDeltaPx?: number
+}
+
+let commandHandler: ((cmd: TimelineViewCommand) => void) | null = null
+
+export function registerTimelineViewCommands(fn: (cmd: TimelineViewCommand) => void) {
+  commandHandler = fn
+  return () => { if (commandHandler === fn) commandHandler = null }
+}
+
+export function sendTimelineViewCommand(cmd: TimelineViewCommand) {
+  commandHandler?.(cmd)
+}

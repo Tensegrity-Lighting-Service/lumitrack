@@ -24,7 +24,7 @@ import {
 import { sidecar } from '../sidecar'
 import type { Activation, Cue, Point } from '../types'
 import { useT } from '../i18n'
-import { useTimelineView } from '../timeline/timelineView'
+import { useTimelineView, sendTimelineViewCommand } from '../timeline/timelineView'
 import { useAudioPeaks } from '../timeline/audioPeaks'
 import { MiniWaveform } from '../timeline/MiniWaveform'
 import { computeTicks } from '../timeline/ticks'
@@ -60,6 +60,32 @@ export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }
   // apparaît enfin (premier acteur activé pendant que le panneau reste
   // ouvert), laissant viewportWidth bloqué à 0.
   const [tracksEl, setTracksEl] = useState<HTMLDivElement | null>(null)
+
+  // Zoom/pan à la molette DANS le panneau (tranche E, 2026-08-07) : la
+  // timeline principale est masquée par l'overlay — on lui DÉLÈGUE les
+  // gestes (elle seule possède le scroll DOM et l'animation de zoom).
+  // L'ancre part en TEMPS : les deux fenêtres n'ont pas le même bord
+  // gauche. Mêmes conventions que la vraie timeline : molette = zoom au
+  // curseur, Maj+molette = défilement.
+  const viewRef = useRef({ pxPerMs, scrollLeft })
+  viewRef.current = { pxPerMs, scrollLeft }
+  useEffect(() => {
+    if (!tracksEl) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      if (e.shiftKey) {
+        const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+        if (d !== 0) sendTimelineViewCommand({ scrollDeltaPx: d })
+      } else {
+        const rect = tracksEl.getBoundingClientRect()
+        const v = viewRef.current
+        const anchorMs = Math.max(0, (v.scrollLeft + e.clientX - rect.left) / v.pxPerMs)
+        sendTimelineViewCommand({ zoomFactor: e.deltaY < 0 ? 1.25 : 0.8, anchorMs })
+      }
+    }
+    tracksEl.addEventListener('wheel', onWheel, { passive: false })
+    return () => tracksEl.removeEventListener('wheel', onWheel)
+  }, [tracksEl])
   const [viewportWidth, setViewportWidth] = useState(0)
   const pxPerMsRef = useRef(pxPerMs)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 3 } }))
@@ -156,7 +182,27 @@ export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }
               ))}
             </div>
             <div className="block-detail-tracks" ref={setTracksEl}>
-              <div className="block-detail-ruler" style={{ height: RULER_MINI_H }}>
+              {/* Mini-règle CLIQUABLE (tranche E, 2026-08-07) : seek au
+                  clic + scrub au glisser, même comportement que la règle
+                  principale — le playhead vit déjà (tMs). */}
+              <div
+                className="block-detail-ruler block-detail-ruler-seek"
+                style={{ height: RULER_MINI_H }}
+                onPointerDown={(e) => {
+                  e.preventDefault()
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  const seekAt = (clientX: number) =>
+                    sidecar.seek(Math.max(0, (scrollLeft + clientX - rect.left) / pxPerMs))
+                  seekAt(e.clientX)
+                  const onMove = (ev: PointerEvent) => seekAt(ev.clientX)
+                  const onUp = () => {
+                    window.removeEventListener('pointermove', onMove)
+                    window.removeEventListener('pointerup', onUp)
+                  }
+                  window.addEventListener('pointermove', onMove)
+                  window.addEventListener('pointerup', onUp)
+                }}
+              >
                 {ticks.map((tick) => (
                   <div
                     key={tick.ms}
