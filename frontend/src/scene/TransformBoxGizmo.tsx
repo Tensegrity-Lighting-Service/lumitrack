@@ -45,7 +45,13 @@ type BoxDragKind = 'move' | 'scale' | 'rotate-group' | 'rotate-yaw' | 'anchor'
 interface BoxDrag {
   kind: BoxDragKind
   members: Member[]
+  /** Vide tant que le geste n'a pas bougé de 4 px : la résolution du bloc
+   * (resolveGestureCue, qui peut CRÉER un bloc en geste libre) est
+   * DIFFÉRÉE au premier mouvement réel — un clic sec sur la boîte créait
+   * un bloc vide à chaque clic (signalé 2026-08-07, timeline poluée). */
   cueId: string
+  startClient: { x: number; y: number }
+  moved: boolean
   bounds0: Bounds
   anchorCm: { x: number; y: number }
   startCursorCm: { x: number; y: number }
@@ -184,12 +190,13 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
       && !members.some((m) => m.baseTravelYaw !== null || m.baseArrivalYaw !== null)) return
     const cursor = cursorCmFrom(native)
     if (!cursor) return
-    // L'ancre se déplace en local pur : pas de bloc à résoudre.
-    const cueId = kind === 'anchor' ? '' : resolveGestureCue(members.map((m) => m.pointId))
+    // Résolution du bloc DIFFÉRÉE au premier mouvement (voir BoxDrag.cueId).
     const bounds0: Bounds = { minX, minY, maxX, maxY }
     const boundsRaw = boundsOf(members, 0)
     dragRef.current = {
-      kind, members, cueId, bounds0,
+      kind, members, cueId: '', bounds0,
+      startClient: { x: native.clientX, y: native.clientY },
+      moved: false,
       anchorCm: { ...anchorCm },
       startCursorCm: cursor,
       handle,
@@ -211,6 +218,14 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
     if (!drag) return
     const cursor = cursorCmFrom(e)
     if (!cursor) return
+
+    // Seuil 4 px avant toute écriture (2026-08-07) : un clic sec (ou un
+    // micro-tremblement) sur la boîte ne résout NI ne crée de bloc.
+    if (drag.kind !== 'anchor' && !drag.moved) {
+      if (Math.hypot(e.clientX - drag.startClient.x, e.clientY - drag.startClient.y) < 4) return
+      drag.moved = true
+      if (!drag.cueId) drag.cueId = resolveGestureCue(drag.members.map((m) => m.pointId))
+    }
 
     if (drag.kind === 'anchor') {
       // Local pur, pas de throttle réseau. Aimantation douce (10 px) au

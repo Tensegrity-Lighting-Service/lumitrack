@@ -1518,7 +1518,15 @@ function SceneContent({
          * Aucune ecriture n'est envoyee avant le seuil. */
         startClient: { x: number; y: number }
         moved: boolean
-        clickSelect: string | null }
+        clickSelect: string | null
+        /** Écritures DIFFÉRÉES au premier mouvement réel (2026-08-07,
+         * "LA TIMELINE EST BEUGUE") : le pointerdown ne doit RIEN créer —
+         * un clic sec sur un acteur sans bloc actif créait un bloc vide
+         * (routage 'trou') ou un waypoint fantôme (routage 'plein fade')
+         * avant même le seuil de 4 px. La création/insertion n'est envoyée
+         * qu'au basculement de `moved`. */
+        pendingCreate: { arrivalMs: number } | null
+        pendingWaypoint: { cueId: string; index: number; wps: PathPoint[] } | null }
     | { kind: 'waypoint'; pointId: string; index: number; planeY: number; lastSent: number; cueId: string }
     | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number; cueId: string }
 
@@ -1833,6 +1841,20 @@ function SceneContent({
         if (!drag.moved) {
           if (Math.hypot(e.clientX - drag.startClient.x, e.clientY - drag.startClient.y) < 4) return
           drag.moved = true
+          // Écritures différées du pointerdown (2026-08-07) : c'est un
+          // VRAI geste, on peut maintenant créer/insérer.
+          if (drag.pendingWaypoint) {
+            const pw = drag.pendingWaypoint
+            sidecar.setActivation(pw.cueId, drag.pointId, { pathPoints: pw.wps })
+            setSelectedWaypoint({ pointId: drag.pointId, index: pw.index })
+            dragRef.current = { kind: 'waypoint', pointId: drag.pointId, index: pw.index, planeY: drag.planeY, lastSent: 0, cueId: pw.cueId }
+            return
+          }
+          if (drag.pendingCreate) {
+            sidecar.addCue('Entrée', Math.max(0, drag.pendingCreate.arrivalMs - 200), 200, '#4FF5E0', 0, drag.cueId)
+            onSelectCue(drag.cueId)
+            drag.pendingCreate = null
+          }
         }
       }
       // Chaque geste porte SON cue (bloc actif, bloc gouvernant du geste
@@ -2459,19 +2481,24 @@ function SceneContent({
       const gov = governingActivationFor(pointId, t)
       if (gov && t < gov.fadeEnd && gov.fadeEnd > gov.effStart && members.length === 1) {
         // Plein fade : insertion d'un waypoint à la fraction TEMPORELLE du
-        // playhead (approximation du paramètre du tracé — le nœud est de
-        // toute façon aussitôt déplacé sous la souris), puis le geste
-        // continue comme un drag de waypoint classique.
+        // playhead — DIFFÉRÉE au premier mouvement réel (un clic sec ne
+        // doit pas laisser de waypoint fantôme dans le tracé). Au seuil,
+        // onMove envoie le splice et convertit le geste en drag waypoint.
         const act = gov.cue.activations[pointId]
         const wps = (act.pathPoints ?? []).map((wp: PathPoint) => ({ ...wp }))
         const segCount = wps.length + 1
         const f = (t - gov.effStart) / (gov.fadeEnd - gov.effStart)
         const segIdx = Math.min(segCount - 1, Math.max(0, Math.floor(f * segCount)))
         wps.splice(segIdx, 0, { xCm: pose[0], yCm: pose[1], inDxCm: null, inDyCm: null, outDxCm: null, outDyCm: null })
-        sidecar.setActivation(gov.cue.id, pointId, { pathPoints: wps })
         onSelectCue(gov.cue.id)
-        setSelectedWaypoint({ pointId, index: segIdx })
-        dragRef.current = { kind: 'waypoint', pointId, index: segIdx, planeY, lastSent: 0, cueId: gov.cue.id }
+        dragRef.current = {
+          kind: 'target', pointId, planeY, lastSent: 0, cueId: gov.cue.id,
+          freeCreate: null, group: null, baseCursor: null,
+          startClient: { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY },
+          moved: false, clickSelect: null,
+          pendingCreate: null,
+          pendingWaypoint: { cueId: gov.cue.id, index: segIdx, wps },
+        }
         if (controlsRef.current) controlsRef.current.enabled = false
         return
       }
@@ -2480,13 +2507,12 @@ function SceneContent({
         gestureCueId = gov.cue.id
         onSelectCue(gov.cue.id)
       } else {
-        // Trou : nouveau bloc, arrivée figée au playhead — la durée réelle
-        // est recalculée à chaque échantillon du geste (freeCreate).
+        // Trou : nouveau bloc, arrivée figée au playhead — la CRÉATION est
+        // différée au premier mouvement réel (un clic sec de sélection
+        // créait un bloc vide "Entrée (0)" à chaque clic, signalé
+        // 2026-08-07). L'id est figé ici, addCue part dans onMove.
         gestureCueId = crypto.randomUUID()
-        const arrivalMs = tMsRef.current
-        sidecar.addCue('Entrée', Math.max(0, arrivalMs - 200), 200, '#4FF5E0', 0, gestureCueId)
-        onSelectCue(gestureCueId)
-        freeCreate = { originX: pose[0], originY: pose[1], arrivalMs }
+        freeCreate = { originX: pose[0], originY: pose[1], arrivalMs: tMsRef.current }
       }
     }
 
@@ -2498,6 +2524,8 @@ function SceneContent({
       startClient: { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY },
       moved: false,
       clickSelect: inSelection && selectedIdsRef.current.length > 1 ? pointId : null,
+      pendingCreate: freeCreate ? { arrivalMs: freeCreate.arrivalMs } : null,
+      pendingWaypoint: null,
     }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
@@ -2529,6 +2557,8 @@ function SceneContent({
       startClient: { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY },
       moved: false,
       clickSelect: null,
+      pendingCreate: null,
+      pendingWaypoint: null,
     }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
