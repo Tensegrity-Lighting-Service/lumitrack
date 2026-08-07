@@ -1244,5 +1244,13 @@
   pointer-events: none; font-size: 11px; padding: 3px 9px;
   border-radius: 4px; background: rgba(12, 13, 18, 0.82);
 }
+/* La règle générique `.scene-canvas-wrap > div { inset: 0 }` (conteneur
+   r3f) est plus spécifique que .gesture-hud : sans ce contre-ordre, le
+   badge s'étire sur TOUT le canvas et son fond sombre voile la scène
+   ("en sélectionnant des points ça devient tout noir", 2026-08-07). */
+.scene-canvas-wrap > div.gesture-hud {
+  inset: auto auto 10px 10px;
+  width: max-content; height: max-content;
+}
 .gesture-hud-edit { color: #8fa6ff; border: 1px solid #2c3a6e; }
 .gesture-hud-create { color: #4ff5e0; border: 1px solid #1f6b5e; }
