@@ -21,7 +21,6 @@
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
-    "@xzdarcy/react-timeline-editor": "^1.0.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "three": "^0.185.1",
