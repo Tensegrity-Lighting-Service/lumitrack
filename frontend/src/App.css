@@ -1203,3 +1203,12 @@
   font-family: ui-monospace, monospace; font-size: 11px; color: #f5c84f;
   white-space: nowrap;
 }
+
+/* HUD de cible du geste (tranche D, 2026-08-07) */
+.gesture-hud {
+  position: absolute; left: 10px; bottom: 10px; z-index: 20;
+  pointer-events: none; font-size: 11px; padding: 3px 9px;
+  border-radius: 4px; background: rgba(12, 13, 18, 0.82);
+}
+.gesture-hud-edit { color: #8fa6ff; border: 1px solid #2c3a6e; }
+.gesture-hud-create { color: #4ff5e0; border: 1px solid #1f6b5e; }

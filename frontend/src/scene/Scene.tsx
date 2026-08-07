@@ -36,7 +36,7 @@ import { sidecar, useTick } from '../sidecar'
 import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, Cue, PathPoint, Point, Project, Pose } from '../types'
 import { openContextMenu } from '../ui/contextMenuStore'
 import { buildActorContextMenuSections, buildFocusPointContextMenuSections } from '../ui/actorContextMenu'
-import { t } from '../i18n'
+import { t, t as t2 } from '../i18n'
 
 // Outils du hit-test 2D des acteurs (module-level, reutilises).
 const PICK_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
@@ -1267,6 +1267,47 @@ function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZo
   )
 }
 
+/** Indicateur de cible du geste (tranche D, 2026-08-07, "clarifier la
+ * lisibilite entre selection libre au-dessus d'un cue ou dans le vide") :
+ * petit HUD non interactif en bas a gauche du viewport qui dit en
+ * permanence ce qu'un geste ferait — editer le bloc selectionne, editer
+ * le bloc GOUVERNANT au playhead, ou creer un nouveau bloc. Lecture
+ * seule : la meme resolution LTP que resolveGestureCue, sans jamais rien
+ * creer. */
+function GestureHud({ project, selectedPointIds, selectedCueId }: {
+  project: Project
+  selectedPointIds: string[]
+  selectedCueId: string | null
+}) {
+  const tick = useTick()
+  if (selectedPointIds.length === 0) return null
+  const tNow = tick?.tMs ?? 0
+  let label: string
+  let editing = true
+  const named = (cue: Cue | undefined | null) => cue ? (cue.name || cue.id.slice(0, 6)) : ''
+  if (selectedCueId) {
+    label = named(project.cues.find((c) => c.id === selectedCueId))
+  } else {
+    let best: { cue: Cue; effStart: number } | null = null
+    for (const pid of selectedPointIds) {
+      for (const cue of project.cues) {
+        const act = cue.activations[pid]
+        if (!act || (act.targetXCm === null && act.targetYCm === null)) continue
+        const effStart = cue.startMs + act.startOffsetMs
+        if (effStart <= tNow && (!best || effStart >= best.effStart)) best = { cue, effStart }
+      }
+      if (best) break
+    }
+    if (best) label = named(best.cue)
+    else { editing = false; label = '' }
+  }
+  return (
+    <div className={`gesture-hud ${editing ? 'gesture-hud-edit' : 'gesture-hud-create'}`}>
+      {editing ? t('scene.gestureEdit', { name: label }) : t('scene.gestureCreate')}
+    </div>
+  )
+}
+
 /** Sonde de diagnostic (dev uniquement, audit fluidite 2026-08-07) :
  * affiche les FPS REELS du canvas et le nom du renderer WebGL — un
  * "SwiftShader"/"Basic Render" = rendu LOGICIEL (pas de GPU), un "Intel
@@ -2156,6 +2197,52 @@ function SceneContent({
           return
         }
       }
+      // Tranche D (2026-08-07) : "Ajouter un point (keyframe) au playhead"
+      // sur les acteurs selectionnes — pour chaque acteur dont le playhead
+      // tombe dans le FADE de son bloc gouvernant (LTP), insere un
+      // waypoint a sa position RESOLUE actuelle, a la fraction temporelle
+      // du playhead (meme mecanique que le geste libre). Groupe par bloc,
+      // UN setActivations par bloc concerne.
+      const selIds = selectedIdsRef.current
+      if (selIds.length > 0) {
+        const t = tMsRef.current
+        const inserts: { cueId: string; pointId: string; pathPoints: PathPoint[] }[] = []
+        for (const pid of selIds) {
+          const gov = governingActivationFor(pid, t)
+          const pose = positionsRef.current[pid]
+          if (!gov || !pose || t >= gov.fadeEnd || gov.fadeEnd <= gov.effStart) continue
+          const act = gov.cue.activations[pid]
+          const wps = (act.pathPoints ?? []).map((wp: PathPoint) => ({ ...wp }))
+          const segCount = wps.length + 1
+          const f = (t - gov.effStart) / (gov.fadeEnd - gov.effStart)
+          const segIdx = Math.min(segCount - 1, Math.max(0, Math.floor(f * segCount)))
+          wps.splice(segIdx, 0, { xCm: pose[0], yCm: pose[1], inDxCm: null, inDyCm: null, outDxCm: null, outDyCm: null })
+          inserts.push({ cueId: gov.cue.id, pointId: pid, pathPoints: wps })
+        }
+        const addKeyframe = () => {
+          const byCue = new Map<string, { pointId: string; pathPoints: PathPoint[] }[]>()
+          for (const ins of inserts) {
+            const arr = byCue.get(ins.cueId) ?? []
+            arr.push({ pointId: ins.pointId, pathPoints: ins.pathPoints })
+            byCue.set(ins.cueId, arr)
+          }
+          for (const [cueId, entries] of byCue) {
+            sidecar.setActivations(cueId, entries.map((en) => ({ pointId: en.pointId, pathPoints: en.pathPoints })))
+          }
+        }
+        openContextMenu(e.clientX, e.clientY, [
+          [{
+            label: t2('contextMenu.addKeyframeAtPlayhead', { n: inserts.length, m: selIds.length }),
+            onClick: addKeyframe,
+            disabled: inserts.length === 0,
+          }],
+          [
+            { label: gridOpacity > 0 ? t2('contextMenu.gridOff') : t2('contextMenu.gridOn'), onClick: onToggleGrid },
+            { label: t2('contextMenu.fitToWindow'), onClick: onFitToWindow },
+          ],
+        ])
+        return
+      }
       openContextMenu(e.clientX, e.clientY, [
         [
           { label: gridOpacity > 0 ? t('contextMenu.gridOff') : t('contextMenu.gridOn'), onClick: onToggleGrid },
@@ -2700,6 +2787,11 @@ export const Scene = forwardRef<SceneHandle, {
         <RendererProbe />
         <SceneContent {...props} positions={positions} tMs={tMs} onLassoRect={setLassoRect} dropHandleRef={dropHandleRef} />
       </Canvas>
+      <GestureHud
+        project={props.project}
+        selectedPointIds={props.selectedPointIds}
+        selectedCueId={props.selectedCueId}
+      />
       {lassoRect && (
         <div
           className="scene-lasso"
