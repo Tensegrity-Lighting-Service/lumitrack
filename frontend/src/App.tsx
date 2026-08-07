@@ -1715,6 +1715,52 @@ function CueInspector({ cue, projectPoints, mountPresets, selectedPointId, onSel
         ))}
       </div>
       <CueOrientationDefaults cue={cue} projectPoints={projectPoints} mountPresets={mountPresets} />
+      {/* Bandeau des divergences (tranche A, 2026-08-07) : quels acteurs
+          ont des réglages personnalisés (drapeaux fade/orientation
+          overridden — la source de vérité du mécanisme de synchro, pas une
+          comparaison de valeurs), avec retour groupé aux réglages du bloc
+          en UN message batch. Les patchs "nus" {xxxOverridden:false}
+          déclenchent la resynchronisation côté sidecar. */}
+      {(() => {
+        const divergent = Object.entries(cue.activations)
+          .filter(([, a]) => a.fadeOverridden || a.orientationOverridden)
+        if (divergent.length === 0) return null
+        return (
+          <div className="divergence-banner">
+            <div className="divergence-head">
+              <span>{divergent.length === 1
+                ? t('cue.divergenceTitleOne')
+                : t('cue.divergenceTitleMany', { count: divergent.length })}</span>
+              <button
+                className="inspector-revert-fade"
+                title={t('cue.revertAllToBlockHint')}
+                onClick={() => sidecar.setActivations(cue.id, divergent.map(([pid, a]) => ({
+                  pointId: pid,
+                  ...(a.fadeOverridden ? { fadeOverridden: false } : {}),
+                  ...(a.orientationOverridden ? { orientationOverridden: false } : {}),
+                })))}
+              >
+                {t('cue.revertAllToBlock')}
+              </button>
+            </div>
+            <div className="divergence-chips">
+              {divergent.map(([pid]) => {
+                const p = projectPoints.find((pt) => pt.id === pid)
+                return (
+                  <button
+                    key={pid}
+                    className={`divergence-chip${pid === selectedPointId ? ' divergence-chip-selected' : ''}`}
+                    onClick={() => onSelectPoint(pid === selectedPointId ? null : pid)}
+                  >
+                    <span className="swatch" style={{ background: p?.color ?? '#888' }} />
+                    {p?.name ?? pid}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
       <div className="activation-list">
         {Object.entries(cue.activations).map(([pointId, act]) => {
           const point = projectPoints.find((p) => p.id === pointId)
@@ -2140,6 +2186,9 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
         </button>
         <span className="swatch" style={{ background: point?.color ?? '#666' }} />
         <span className="activation-card-name">{point?.name ?? pointId}</span>
+        {(activation.fadeOverridden || activation.orientationOverridden) && (
+          <span className="activation-diverged-badge" title={t('cue.divergedBadgeHint')}>≠</span>
+        )}
         {collapsed && speed !== null && (() => {
           const [key, color] = speedCategory(speed)
           return (

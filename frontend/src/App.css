@@ -1146,3 +1146,27 @@
   box-shadow: 0 6px 18px rgba(0,0,0,0.4);
 }
 .update-toast button { background: none; border: none; color: #7a8093; }
+
+/* Bandeau des divergences acteurs/bloc (tranche A, 2026-08-07) */
+.divergence-banner {
+  margin: 8px 0; padding: 8px 10px;
+  background: color-mix(in srgb, #4F6DF5 8%, transparent);
+  border: 1px solid color-mix(in srgb, #4F6DF5 35%, transparent);
+  border-radius: 5px; font-size: 11px;
+}
+.divergence-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.divergence-head > span { color: #b9bdc9; }
+.divergence-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.divergence-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 1px 8px; border-radius: 9px; font-size: 10.5px;
+  background: none; border: 1px solid #2b2f38; color: #cfd3dc;
+}
+.divergence-chip:hover { border-color: #4F6DF5; }
+.divergence-chip-selected { border-color: #4F6DF5; background: color-mix(in srgb, #4F6DF5 20%, transparent); }
+.divergence-chip .swatch { width: 8px; height: 8px; border-radius: 50%; }
+.activation-diverged-badge {
+  font-size: 10px; font-weight: 700; color: #8fa6ff;
+  border: 1px solid #4F6DF5; border-radius: 8px;
+  padding: 0 5px; margin-left: 5px; flex-shrink: 0;
+}
