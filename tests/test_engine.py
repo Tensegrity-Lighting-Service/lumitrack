@@ -5,6 +5,8 @@ au moment de l'émission PSN uniquement, jamais une nouvelle timeline
 d'animation."""
 import math
 
+import pytest
+
 from lumitrack.core.project import Project, Point, Cue, Activation
 from lumitrack.core.timeline import Timeline, OutputTransform
 from lumitrack.core.engine import PsnBroadcaster, Transport, apply_mount_preset
@@ -177,3 +179,38 @@ def test_global_ori_offsets_add_to_emitted_axes():
     assert abs(t.ori_x - math.radians(90.0 + 10.0)) < 1e-9
     assert abs(t.ori_y - math.radians(45.0 + 20.0)) < 1e-9
     assert abs(t.ori_z - math.radians(0.0 + 30.0)) < 1e-9
+
+
+# ---- Timing par waypoint (tFrac, 2026-08-07) -----------------------------
+# Un waypoint peut imposer SA fraction temporelle de passage ; sans tFrac,
+# repartition par longueur d'arc (comportement historique intact).
+
+def test_path_position_without_tfrac_is_arc_length():
+    from lumitrack.core.timeline import path_position
+    act = Activation(target_x_cm=1000, target_y_cm=0, fade_ms=1000,
+                     path_points=[{"xCm": 500.0, "yCm": 0.0, "inDxCm": None,
+                                   "inDyCm": None, "outDxCm": None, "outDyCm": None}])
+    # Trajet rectiligne 0->1000 avec waypoint au milieu : a p=0.5 on est
+    # pile au waypoint (arc uniforme), a p=0.25 au quart.
+    x, y = path_position((0.0, 0.0), act, (1000.0, 0.0), 0.5)
+    assert x == pytest.approx(500.0, abs=2.0)
+    x, _ = path_position((0.0, 0.0), act, (1000.0, 0.0), 0.25)
+    assert x == pytest.approx(250.0, abs=2.0)
+
+
+def test_path_position_tfrac_retimes_waypoint_passage():
+    from lumitrack.core.timeline import path_position
+    act = Activation(target_x_cm=1000, target_y_cm=0, fade_ms=1000,
+                     path_points=[{"xCm": 500.0, "yCm": 0.0, "tFrac": 0.25,
+                                   "inDxCm": None, "inDyCm": None,
+                                   "outDxCm": None, "outDyCm": None}])
+    # tFrac=0.25 : l'acteur atteint le milieu SPATIAL au quart du temps...
+    x, _ = path_position((0.0, 0.0), act, (1000.0, 0.0), 0.25)
+    assert x == pytest.approx(500.0, abs=2.0)
+    # ...puis parcourt la seconde moitie sur les 3/4 restants (a p=0.625,
+    # mi-chemin de ce second troncon : 750 cm).
+    x, _ = path_position((0.0, 0.0), act, (1000.0, 0.0), 0.625)
+    assert x == pytest.approx(750.0, abs=2.0)
+    # Extremites intactes.
+    x, _ = path_position((0.0, 0.0), act, (1000.0, 0.0), 1.0)
+    assert x == pytest.approx(1000.0, abs=0.5)

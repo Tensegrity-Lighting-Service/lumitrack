@@ -29,6 +29,7 @@ import { useAudioPeaks } from '../timeline/audioPeaks'
 import { MiniWaveform } from '../timeline/MiniWaveform'
 import { computeTicks } from '../timeline/ticks'
 import { attachTouchPinch, classifyWheel } from '../timeline/wheelGestures'
+import { WaypointDiamonds } from '../timeline/waypoints'
 
 // Aligné sur MIN_AUTO_DURATION_MS (core/timeline.py) : plancher de fade,
 // jamais un bloc de durée nulle donc invisible/impossible à re-saisir.
@@ -293,6 +294,7 @@ export function BlockDetailPanel({ cue, projectPoints, audioPath, bottomPx, onCl
                   key={pointId}
                   pointId={pointId}
                   point={point}
+                  cue={cue}
                   cueStartMs={cue.startMs}
                   pxPerMs={pxPerMs}
                   scrollLeft={scrollLeft}
@@ -308,9 +310,10 @@ export function BlockDetailPanel({ cue, projectPoints, audioPath, bottomPx, onCl
   )
 }
 
-function BlockDetailBar({ pointId, point, cueStartMs, pxPerMs, scrollLeft, act, preview }: {
+function BlockDetailBar({ pointId, point, cue, cueStartMs, pxPerMs, scrollLeft, act, preview }: {
   pointId: string
   point: Point | undefined
+  cue: Cue
   cueStartMs: number
   pxPerMs: number
   scrollLeft: number
@@ -352,6 +355,17 @@ function BlockDetailBar({ pointId, point, cueStartMs, pxPerMs, scrollLeft, act, 
           }}
         />
       </div>
+      {/* Losanges de keyframes de CETTE activation (2026-08-07) : clic =
+          éditer dans la scène, glisser = retimer, clic droit = menu. */}
+      <WaypointDiamonds
+        cue={cue}
+        act={act}
+        pointId={pointId}
+        pxPerMs={pxPerMs}
+        baseMs={0}
+        xOffsetPx={scrollLeft}
+        centerY={ROW_H * 0.5}
+      />
     </div>
   )
 }

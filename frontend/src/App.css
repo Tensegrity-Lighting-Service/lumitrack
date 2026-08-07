@@ -731,6 +731,20 @@
 }
 .graph-resize-grip:hover { background: #2a2a35; }
 
+/* Losanges de keyframes (waypoints) dans les blocs (2026-08-07). */
+.tl-waypoint {
+  position: absolute; width: 9px; height: 9px;
+  margin-left: -4.5px; margin-top: -4.5px;
+  transform: rotate(45deg);
+  background: #e8e8ec; border: 1px solid #14141a;
+  border-radius: 1px;
+  cursor: ew-resize; z-index: 4;
+}
+.tl-waypoint:hover { background: #ffffff; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25); }
+/* Timing impose (tFrac pose) : accent turquoise, comme le playhead value. */
+.tl-waypoint-timed { background: #4ff5e0; }
+.tl-waypoint-timed:hover { background: #7ff8ea; }
+
 /* Bouton retour ligne droite (tracé spatial) dans l'inspecteur */
 .inspector-clear-path {
   font-size: 11px; padding: 2px 8px; margin: 2px 0 4px;

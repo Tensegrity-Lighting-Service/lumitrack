@@ -51,6 +51,7 @@ import { SelectionTransformLegacy } from './SelectionTransformLegacy'
 import { useDragOverrides, setDragOverrides, clearDragOverrides } from './dragOverride'
 import { TransformBox } from './TransformBoxGizmo'
 import { gradientColors, chevronPlacements, zoomBucket, darkenHex } from './trajectoryViz'
+import { SELECT_WAYPOINT_EVENT } from '../timeline/waypoints'
 
 // Bascule pièce-détachée (tranche C0, 2026-08-07) : l'ancien gizmo
 // PivotControls reste rebranchable en UNE ligne pendant la validation de
@@ -1554,6 +1555,18 @@ function SceneContent({
   const hitObjectRef = useRef(false)
   // Sélection d'un waypoint du tracé (Suppr le retire, voir keydown).
   const [selectedWaypoint, setSelectedWaypoint] = useState<{ pointId: string; index: number } | null>(null)
+  // Sélection d'un waypoint depuis les losanges de la timeline
+  // (waypoints.tsx, 2026-08-07) : sélectionne l'acteur ET son waypoint —
+  // les poignées d'édition apparaissent sur le terrain.
+  useEffect(() => {
+    const onSelect = (e: Event) => {
+      const { pointId, index } = (e as CustomEvent<{ pointId: string; index: number }>).detail
+      onSelectPoint(pointId)
+      setSelectedWaypoint({ pointId, index })
+    }
+    window.addEventListener(SELECT_WAYPOINT_EVENT, onSelect)
+    return () => window.removeEventListener(SELECT_WAYPOINT_EVENT, onSelect)
+  }, [onSelectPoint])
   // Lus par le onMove global au moment de l'évènement (l'effet ne dépend
   // pas du project : il se ré-abonnerait à chaque écho sinon).
   const liveRef = useRef<{ project: Project; entries: Record<string, BlockContextEntry> | null }>({ project, entries: null })

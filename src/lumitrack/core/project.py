@@ -46,10 +46,14 @@ PROJECT_FORMAT = "Lumitrack"
 # (les champs manquants prennent leurs valeurs par défaut).
 # v3 (2026-08-06) : offsets d'orientation globaux + rY par preset,
 # marqueur appVersion.
-PROJECT_VERSION = 3
+# v4 (2026-08-07) : timing par waypoint (pathPoints[].tFrac, optionnel) —
+# une sauvegarde v4 ouverte par une app antérieure perdrait ces timings,
+# d'où le bump ; les sauvegardes v3 s'ouvrent inchangées (tFrac absent =
+# répartition par longueur d'arc, comportement historique).
+PROJECT_VERSION = 4
 # Version de l'APP qui a écrit le fichier — purement informatif (message
 # d'erreur utile, diagnostic). À garder alignée sur tauri.conf.json.
-APP_VERSION = "0.3.0-beta.7"
+APP_VERSION = "0.3.0-beta.8"
 
 # Marqueur de l'ancien format de bundle (dossier = paquet, manifest.json +
 # media/ + versions/) — conservé uniquement pour la lecture rétrocompatible,

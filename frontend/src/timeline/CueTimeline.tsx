@@ -21,6 +21,7 @@ import { sidecar, useTick } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
 import { attachTouchPinch, classifyWheel } from './wheelGestures'
+import { WaypointDiamonds } from './waypoints'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
 import { showContextMenu } from '../ui/contextMenuStore'
@@ -1003,6 +1004,20 @@ export function CueTimeline({ project, connected, selectedCueId, selectedPointId
                       <span className="cue-block-count">{count}</span>
                     </div>
                     <div className="cue-block-body" />
+                    {/* Losanges de keyframes (2026-08-07) : waypoints du
+                        tracé de l'acteur sélectionné dans ce bloc — clic =
+                        éditer dans la scène, glisser = retimer, clic droit
+                        = supprimer/timing auto. */}
+                    {cue.id === selectedCueId && graphPointId && cue.activations[graphPointId] && (
+                      <WaypointDiamonds
+                        cue={cue}
+                        act={cue.activations[graphPointId]}
+                        pointId={graphPointId}
+                        pxPerMs={effPxPerMs}
+                        baseMs={startMs}
+                        centerY={(LANE_H - 6) * 0.68}
+                      />
+                    )}
                     <div className="cue-resize cue-resize-l" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-l')} />
                     <div className="cue-resize cue-resize-r" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-r')} />
                   </div>

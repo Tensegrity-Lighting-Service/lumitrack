@@ -89,6 +89,11 @@ export interface PathPoint {
   inDyCm: number | null
   outDxCm: number | null
   outDyCm: number | null
+  /** Fraction temporelle 0..1 du fade à laquelle l'acteur DOIT passer par
+   * ce waypoint (moteur v4, 2026-08-07) — null/absent = répartition
+   * automatique par longueur d'arc (comportement historique). Posé par le
+   * glisser des losanges de la timeline. */
+  tFrac?: number | null
 }
 
 export interface PathHandle {
