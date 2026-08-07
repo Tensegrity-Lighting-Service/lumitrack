@@ -21,7 +21,9 @@ import { sidecar } from '../sidecar'
 import { useT } from '../i18n'
 import { setAudioPeaks, type Peaks } from './audioPeaks'
 
-const DRIFT_THRESHOLD_S = 0.2
+// Seuil du seek DUR uniquement (vrais sauts) — la dérive ordinaire est
+// corrigée en continu par varispeed, voir l'effet d'asservissement.
+const DRIFT_THRESHOLD_S = 0.4
 const PEAK_BUCKETS_PER_S = 100 // résolution des pics précalculés
 const MAX_PEAK_BUCKETS = 60_000
 const TILE_W = 1024 // largeur d'une tuile de waveform (px contenu)
@@ -185,14 +187,28 @@ export function AudioTrack({ audioPath, knownDurationS, tMs, playing, pxPerMs, s
     if (!playing && ws.isPlaying()) ws.pause()
   }, [playing])
 
+  // Asservissement DOUX au transport (fix "gros délai" timecode,
+  // 2026-08-07) : l'ancien resync par seek dès 200 ms d'écart laissait
+  // l'audio traîner jusqu'à 200 ms derrière le TC en permanence, avec un
+  // à-coup à chaque recalage. Ici : varispeed ±6 % (rattrape ~60 ms/s,
+  // inaudible, pitch préservé par le navigateur) et seek dur réservé aux
+  // VRAIS sauts (> 400 ms : seek utilisateur, boucle, reprise TC).
   useEffect(() => {
     const ws = wsRef.current
     if (!ws) return
     const targetS = tMs / 1000
-    if (Math.abs(ws.getCurrentTime() - targetS) > DRIFT_THRESHOLD_S) {
+    const err = targetS - ws.getCurrentTime()
+    const media = ws.getMediaElement()
+    if (Math.abs(err) > DRIFT_THRESHOLD_S) {
       ws.setTime(targetS)
+      if (media) media.playbackRate = 1
+      return
     }
-  }, [tMs])
+    if (!media) return
+    media.playbackRate = playing
+      ? 1 + Math.max(-0.06, Math.min(0.06, err))
+      : 1
+  }, [tMs, playing])
 
   // ---- tuiles de waveform dans le contenu ----
   const containerRef = useRef<HTMLDivElement>(null)

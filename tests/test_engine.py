@@ -139,7 +139,9 @@ def test_timecode_loss_freezes_then_allows_manual_and_resumes():
     t.set_duration(60000)
     t.external_sync = True
     t.apply_external(5000.0, 25.0)
-    assert t.now_ms() == 5000.0
+    # approx : now_ms extrapole a l'horloge murale depuis le paquet
+    # (fix "gros delai" 2026-08-07) — quelques micro-ms ici.
+    assert t.now_ms() == pytest.approx(5000.0, abs=20.0)
     assert t.playing is True
 
     t._last_external_wall = _time.monotonic() - 2.0   # signal tombe
@@ -151,7 +153,7 @@ def test_timecode_loss_freezes_then_allows_manual_and_resumes():
     assert t.now_ms() > 5000.0
 
     t.apply_external(8000.0, 25.0)                    # le TC revient
-    assert t.now_ms() == 8000.0
+    assert t.now_ms() == pytest.approx(8000.0, abs=20.0)
     assert t.playing is True
 
 
@@ -214,3 +216,23 @@ def test_path_position_tfrac_retimes_waypoint_passage():
     # Extremites intactes.
     x, _ = path_position((0.0, 0.0), act, (1000.0, 0.0), 1.0)
     assert x == pytest.approx(1000.0, abs=0.5)
+
+
+def test_external_timecode_extrapolates_between_packets(monkeypatch):
+    """Fix "gros delai" (2026-08-07) : entre deux paquets TC (un par frame),
+    le transport avance a l'horloge murale au lieu de figer en escalier ;
+    borne a +100 ms pour ne pas deriver si le flux tombe."""
+    import lumitrack.core.engine as eng
+    base = [100.0]
+    monkeypatch.setattr(eng.time, "monotonic", lambda: base[0])
+    t = eng.Transport()
+    t.external_sync = True
+    t.apply_external(1000.0, 30.0)
+    assert t.now_ms() == pytest.approx(1000.0)
+    base[0] += 0.040  # 40 ms apres le paquet : extrapole
+    assert t.now_ms() == pytest.approx(1040.0)
+    base[0] += 0.030
+    assert t.now_ms() == pytest.approx(1070.0)
+    base[0] += 2.0  # flux tombe (> timeout 1 s) : gel net au dernier paquet
+    assert t.now_ms() == pytest.approx(1000.0)
+    assert t.playing is False

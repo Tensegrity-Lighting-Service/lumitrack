@@ -51,7 +51,16 @@ class Transport:
         with self._lock:
             if self.external_sync:
                 if self.external_is_live():
-                    return self._t_ms
+                    # Extrapolation entre deux paquets TC (fix "gros délai"
+                    # 2026-08-07) : un paquet Art-Net arrive par FRAME
+                    # (33-40 ms) — renvoyer le temps du dernier paquet
+                    # figeait le transport en escalier, avec un retard
+                    # moyen d'une demi-frame + le tick 30 Hz par-dessus.
+                    # On avance à l'horloge murale depuis le dernier
+                    # paquet, borné à 100 ms : si le flux tombe, on ne
+                    # dérive pas — external_is_live gèlera juste après.
+                    elapsed = (time.monotonic() - self._last_external_wall) * 1000.0
+                    return self._t_ms + min(elapsed, 100.0)
                 if self._external_driving:
                     # Le TC vient de tomber (fix 2026-08-06, "quand on
                     # arrête le TC le soft s'arrête pas") : figer NET là où

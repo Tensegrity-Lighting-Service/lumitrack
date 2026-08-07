@@ -903,7 +903,10 @@
 /* Playhead fluide : les ticks arrivent à ~30 Hz, la transition linéaire
    comble les 33 ms entre deux — même technique que les DAW web. */
 .tl-playhead {
-  transition: left 90ms linear;
+  /* 60 ms (au lieu de 90) : chaque ms de lissage est un ms de retard
+     visuel perçu en suivi timecode ("gros délai", 2026-08-07) — 60 ms
+     suffit à gommer les marches du tick 30 Hz. */
+  transition: left 60ms linear;
   width: 1.5px;
   background: #f2f2f7;
   box-shadow: 0 0 6px rgba(242, 242, 247, 0.55);
@@ -1036,7 +1039,13 @@
 /* Le body remplit le panneau flottant (fix 2026-08-07) — plus de
    max-height : c'est la hauteur du panneau (redimensionnable/plein
    ecran) qui decide, le body scrolle a l'interieur. */
-.block-detail-body { display: flex; flex: 1; min-height: 0; overflow-y: auto; }
+/* align-items flex-start : SANS lui, le stretch par défaut fige la
+   hauteur des colonnes sur la zone VISIBLE du conteneur scrollable, et
+   l'overflow:hidden de la colonne pistes CLIPPE les barres au-delà (~45
+   rangées) pendant que les libellés continuent — "toujours beugé dans la
+   timeline édition bloc", 2026-08-07. Chaque colonne prend la hauteur de
+   SON contenu, le scroll couvre tout. */
+.block-detail-body { display: flex; align-items: flex-start; flex: 1; min-height: 0; overflow-y: auto; }
 .block-detail-ruler-seek { cursor: pointer; }
 .block-detail-labels { flex-shrink: 0; border-right: 1px solid #26262e; }
 .block-detail-tracks { position: relative; flex: 1; min-width: 0; overflow: hidden; touch-action: none; }

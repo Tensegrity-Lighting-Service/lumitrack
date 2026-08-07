@@ -73,9 +73,11 @@ def test_set_timecode_chase_arms_transport_and_persists():
     assert session.project.to_dict()["timecodeChaseEnabled"] is True
 
     # Un paquet TC recu fait avancer le transport, offset projet soustrait.
+    # approx : now_ms extrapole a l'horloge murale depuis le paquet (fix
+    # "gros delai" 2026-08-07) — quelques micro-ms ici.
     session.project.timecode_offset_ms = 1000.0
     session._on_external_timecode(5000.0, 25.0)
-    assert session.transport.now_ms() == 4000.0
+    assert session.transport.now_ms() == pytest.approx(4000.0, abs=20.0)
     assert session.transport.playing is True
 
     reply = _run(_handle_message(session, {"type": "set_timecode_chase", "enabled": False}))
