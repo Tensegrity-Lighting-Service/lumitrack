@@ -693,6 +693,40 @@
 .graph-node-selected { fill: #fff; }
 .graph-handle { cursor: grab; }
 .graph-handle-line { stroke: #56566a; stroke-width: 1; }
+/* Refonte B1 (2026-08-07) : grille graduée, readout, multi-sélection,
+   marqueur playhead, grip de redimensionnement. */
+.graph-handle-dim { opacity: 0.35; }
+.graph-grid-v { stroke: #1d1d24; }
+.graph-grid-v-major { stroke: #26262f; }
+.graph-grid-h { stroke: #1d1d24; }
+.graph-grid-label { fill: #55555f; font-size: 9px; }
+.graph-playhead-dot { pointer-events: none; }
+.graph-playhead-value {
+  fill: #d9d9e2; font-size: 10px; font-weight: 600;
+  paint-order: stroke; stroke: #131318; stroke-width: 3px;
+  pointer-events: none;
+}
+.graph-drag-readout {
+  fill: #e8e8ec; font-size: 10.5px; font-weight: 600;
+  paint-order: stroke; stroke: #131318; stroke-width: 3.5px;
+  pointer-events: none;
+}
+.graph-readout {
+  display: inline-flex; align-items: center; gap: 3px;
+  color: #7a7a88; font-size: 10.5px;
+}
+.graph-readout input {
+  width: 52px; font-size: 11px; padding: 1px 4px;
+  background: #1f1f27; color: #d9d9e2;
+  border: 1px solid #30303c; border-radius: 4px;
+}
+.graph-multi-count { color: #4ff5e0; font-size: 10.5px; }
+.graph-resize-grip {
+  cursor: ns-resize;
+  background: #1b1b22;
+  border-top: 1px solid #26262e;
+}
+.graph-resize-grip:hover { background: #2a2a35; }
 
 /* Bouton retour ligne droite (tracé spatial) dans l'inspecteur */
 .inspector-clear-path {

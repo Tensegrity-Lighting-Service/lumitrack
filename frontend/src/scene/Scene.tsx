@@ -50,6 +50,7 @@ import { CM_TO_M, DRAG_SEND_INTERVAL_MS, HANDLE_PX, stageToLocal, ScreenSizedHan
 import { SelectionTransformLegacy } from './SelectionTransformLegacy'
 import { useDragOverrides, setDragOverrides, clearDragOverrides } from './dragOverride'
 import { TransformBox } from './TransformBoxGizmo'
+import { gradientColors, chevronPlacements, zoomBucket, darkenHex } from './trajectoryViz'
 
 // Bascule pièce-détachée (tranche C0, 2026-08-07) : l'ancien gizmo
 // PivotControls reste rebranchable en UNE ligne pendant la validation de
@@ -393,7 +394,23 @@ const ActorLabel = memo(function ActorLabel({ text, xCm, yCm, zCm, opacity, scal
  * selected → its trajectory/ghost pops, the rest stays visible but dim. */
 type Emphasis = 'highlight' | 'normal' | 'dim'
 
-const EMPHASIS_OPACITY: Record<Emphasis, number> = { highlight: 1, normal: 0.85, dim: 0.25 }
+const EMPHASIS_OPACITY: Record<Emphasis, number> = { highlight: 1, normal: 0.7, dim: 0.18 }
+const EMPHASIS_LINE_WIDTH: Record<Emphasis, number> = { highlight: 4, normal: 2, dim: 1.25 }
+// Chevrons de direction (B2) : espacement écran ~56 px, taille ~9 px.
+const CHEVRON_SPACING_PX = 56
+const CHEVRON_PX = 9
+const CHEVRON_MAX = 24
+// Triangle plat unitaire pointant +X dans le plan XZ (créé UNE fois).
+const CHEVRON_GEOMETRY = (() => {
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute([
+    0.65, 0, 0,
+    -0.45, 0, 0.42,
+    -0.45, 0, -0.42,
+  ], 3))
+  g.computeVertexNormals()
+  return g
+})()
 
 /** Static trajectory of one activation in the selected block: the polyline
  * sampled by the backend from the real tracking-chain start to the target
@@ -409,23 +426,88 @@ function Trajectory({ path, color, emphasis, onDoubleClick }: {
     () => path.map(([x_cm, y_cm, z_cm]) => new THREE.Vector3(...stageToLocal(x_cm, y_cm, z_cm))),
     [path],
   )
+  // Dégradé temporel (B2.1) : sombre au départ → couleur pleine à la
+  // cible — le sens de lecture devient évident sans animation.
+  const vertexColors = useMemo(() => gradientColors(path.length, color), [path, color])
+  // Chevrons de direction (B2.2) : espacement écran-constant via bucket
+  // de zoom quantifié — recalcul uniquement au changement de palier.
+  const [bucket, setBucket] = useState(1)
+  const bucketRef = useRef(1)
+  useFrame(({ camera }) => {
+    const b = zoomBucket((camera as THREE.OrthographicCamera).zoom || 1)
+    if (b !== bucketRef.current) { bucketRef.current = b; setBucket(b) }
+  })
+  const chevrons = useMemo(
+    () => (emphasis === 'dim'
+      ? []
+      : chevronPlacements(path, (CHEVRON_SPACING_PX / bucket) / CM_TO_M, CHEVRON_MAX)),
+    [path, bucket, emphasis],
+  )
+  const chevronS = (CHEVRON_PX / bucket)
+  const opacity = EMPHASIS_OPACITY[emphasis]
   return (
-    <Line
-      points={points}
-      color={color}
-      lineWidth={emphasis === 'highlight' ? 3.5 : 2}
-      transparent
-      opacity={EMPHASIS_OPACITY[emphasis]}
-      depthTest={false}
-      renderOrder={1010}
-      onDoubleClick={onDoubleClick}
-    />
+    <group>
+      <Line
+        points={points}
+        color="#ffffff"
+        vertexColors={vertexColors}
+        lineWidth={EMPHASIS_LINE_WIDTH[emphasis]}
+        transparent
+        opacity={opacity}
+        depthTest={false}
+        renderOrder={1010}
+        onDoubleClick={onDoubleClick}
+      />
+      {chevrons.map((c, i) => {
+        const [x, y, z] = stageToLocal(c.xCm, c.yCm, c.zCm)
+        return (
+          <mesh
+            key={i}
+            geometry={CHEVRON_GEOMETRY}
+            position={[x, y + 0.03, z]}
+            rotation={[0, -c.angleRad, 0]}
+            scale={[chevronS, chevronS, chevronS]}
+            renderOrder={1011}
+            raycast={() => null}
+          >
+            <meshBasicMaterial color={color} transparent opacity={opacity} depthTest={false} side={THREE.DoubleSide} />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
+/** Fantôme de départ (B2.5) : petit anneau écran-constant (~7 px) à la
+ * position de départ de l'activation, couleur assombrie — marque d'où
+ * l'acteur PART (le dégradé dit ensuite dans quel sens lire). Pur
+ * affichage, jamais cliquable. */
+function StartGhost({ pose, color, opacity }: {
+  pose: [number, number, number]
+  color: string
+  opacity: number
+}) {
+  const [x, y, z] = stageToLocal(pose[0], pose[1], pose[2])
+  const ref = useRef<THREE.Group>(null)
+  useFrame(({ camera }) => {
+    if (!ref.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const s = 7 / zoom
+    ref.current.scale.set(s, s, s)
+  })
+  return (
+    <group ref={ref} position={[x, y + 0.02, z]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={1009} raycast={() => null}>
+        <ringGeometry args={[0.62, 1, 24]} />
+        <meshBasicMaterial color={darkenHex(color, 0.45)} transparent opacity={opacity} depthTest={false} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
   )
 }
 
 /** Marqueur d'édition du tracé à taille écran constante (waypoint = carré
  * pivoté, poignée = disque). Même logique de zoom que TargetGhost. */
-function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown, onContextMenu }: {
+function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, halo, onPointerDown, onContextMenu }: {
   xCm: number
   yCm: number
   zCm: number
@@ -433,6 +515,9 @@ function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown, 
   color: string
   shape: 'diamond' | 'dot'
   selected: boolean
+  /** B2.4 : halo sombre contrasté derrière le marqueur — keyframes des
+   * acteurs SÉLECTIONNÉS nettement visibles au-dessus des trajectoires. */
+  halo?: boolean
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
   onContextMenu?: (e: ThreeEvent<MouseEvent>) => void
 }) {
@@ -454,6 +539,14 @@ function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown, 
         onPointerOver={() => { document.body.style.cursor = 'grab' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
       >
+        {halo && (
+          <mesh renderOrder={1029} raycast={() => null}>
+            {shape === 'diamond'
+              ? <planeGeometry args={[1.45, 1.45]} />
+              : <circleGeometry args={[0.75, 20]} />}
+            <meshBasicMaterial color="#0c0c10" depthTest={false} transparent opacity={0.9} side={THREE.DoubleSide} />
+          </mesh>
+        )}
         {shape === 'diamond'
           ? <mesh renderOrder={1030}>
               <planeGeometry args={[1, 1]} />
@@ -568,12 +661,17 @@ function PathEditOverlay({ entry, act, color, selectedIndex, onWaypointDown, onH
         </group>
       ))}
       {wps.map((wp, i) => (
-        <PathMarker
-          key={`wp-${i}`}
-          xCm={wp.xCm} yCm={wp.yCm} zCm={zCm}
-          px={WAYPOINT_PX} color={color} shape="diamond" selected={i === selectedIndex}
-          onPointerDown={(e) => onWaypointDown(e, i)}
-        />
+        <group key={`wp-${i}`}>
+          {/* B2.4 : keyframes de l'acteur sélectionné nettement visibles —
+              +2 px, halo sombre, numéro d'ordre à côté du losange. */}
+          <PathMarker
+            xCm={wp.xCm} yCm={wp.yCm} zCm={zCm}
+            px={WAYPOINT_PX + 2} color={color} shape="diamond" halo
+            selected={i === selectedIndex}
+            onPointerDown={(e) => onWaypointDown(e, i)}
+          />
+          <ActorLabel text={String(i + 1)} xCm={wp.xCm} yCm={wp.yCm} zCm={zCm} opacity={0.9} scale={0.55} />
+        </group>
       ))}
     </group>
   )
@@ -2658,6 +2756,13 @@ function SceneContent({
           const emphasis = emphasisFor(point.id)
           return (
             <group key={`edit-${point.id}`}>
+              {entry.startPose && emphasis !== 'dim' && (
+                <StartGhost
+                  pose={[entry.startPose[0], entry.startPose[1], entry.startPose[2]]}
+                  color={point.color}
+                  opacity={EMPHASIS_OPACITY[emphasis]}
+                />
+              )}
               {entry.path.length > 0 && (
                 <Trajectory
                   path={entry.path}

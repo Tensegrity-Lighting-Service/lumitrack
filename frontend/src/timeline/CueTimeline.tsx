@@ -39,7 +39,12 @@ import {
 export const RULER_H = 26
 export const AUDIO_H = 52
 export const LANE_H = 36
+// Hauteur PAR DÉFAUT de l'éditeur de courbes — redimensionnable via le
+// grip au-dessus (B1.8), persistée dans localStorage.
 const GRAPH_H = 190
+const GRAPH_H_MIN = 120
+const GRAPH_H_MAX = 420
+const GRAPH_GRIP_H = 6
 const MIN_CUE_MS = 100
 const SNAP_PX = 8
 const SEEK_THROTTLE_MS = 33
@@ -127,6 +132,29 @@ export function CueTimeline({ project, connected, selectedCueId, selectedPointId
   // une piste vide en bas pour y déposer un bloc.
   const laneCount = Math.max(3, ...cues.map((c) => (c.lane ?? 0) + 2))
   const [showGraph, setShowGraph] = useState(false)
+  // Hauteur du graph redimensionnable (B1.8) : grip 6 px au-dessus.
+  const [graphHeight, setGraphHeight] = useState(() => {
+    const raw = Number(localStorage.getItem('lumitrack.graphHeight'))
+    return Number.isFinite(raw) ? Math.min(GRAPH_H_MAX, Math.max(GRAPH_H_MIN, raw)) : GRAPH_H
+  })
+  const beginGraphResize = (e: React.PointerEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = graphHeight
+    const onMove = (ev: PointerEvent) => {
+      // Le graph est en bas : glisser vers le HAUT l'agrandit.
+      const h = Math.min(GRAPH_H_MAX, Math.max(GRAPH_H_MIN, startH + (startY - ev.clientY)))
+      setGraphHeight(h)
+    }
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      const h = Math.min(GRAPH_H_MAX, Math.max(GRAPH_H_MIN, startH + (startY - ev.clientY)))
+      localStorage.setItem('lumitrack.graphHeight', String(h))
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
 
   // Le graph editor édite l'activation du point sélectionné dans le bloc
   // sélectionné ; sans sélection de point, repli sur le premier point activé
@@ -792,7 +820,7 @@ export function CueTimeline({ project, connected, selectedCueId, selectedPointId
             </div>
           ))}
           {graphVisible && (
-            <div className="tl-header tl-header-graph" style={{ height: GRAPH_H }}>
+            <div className="tl-header tl-header-graph" style={{ height: graphHeight + GRAPH_GRIP_H }}>
               <span className="tl-header-chip" style={{ background: '#4ff5e0' }} />
               {t('timeline.curves')}
             </div>
@@ -972,16 +1000,26 @@ export function CueTimeline({ project, connected, selectedCueId, selectedPointId
             </div>
 
             {graphVisible && selectedCue && (
-              <GraphEditor
-                cue={selectedCue}
-                act={graphAct}
-                pointId={graphPointId}
-                pointName={graphPointName}
-                pxPerMs={effPxPerMs}
-                height={GRAPH_H}
-                contentWidth={contentWidth}
-                scrollLeft={scrollLeft}
-              />
+              <>
+                <div
+                  className="graph-resize-grip"
+                  style={{ height: GRAPH_GRIP_H }}
+                  title={t('graph.resizeHint')}
+                  onPointerDown={beginGraphResize}
+                />
+                <GraphEditor
+                  cue={selectedCue}
+                  act={graphAct}
+                  pointId={graphPointId}
+                  pointName={graphPointName}
+                  pxPerMs={effPxPerMs}
+                  height={graphHeight}
+                  contentWidth={contentWidth}
+                  scrollLeft={scrollLeft}
+                  viewportWidth={viewportWidth}
+                  tMs={tMs}
+                />
+              </>
             )}
 
             <div className="tl-playhead" style={{ left: playheadPx, transition: zooming ? 'none' : undefined }} />
