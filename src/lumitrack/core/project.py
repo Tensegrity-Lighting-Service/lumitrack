@@ -32,17 +32,28 @@ from typing import Optional
 
 PROJECT_FORMAT = "Lumitrack"
 # Version du SCHÉMA de sauvegarde (2026-08-06, "met un marqueur dans la
-# sauvegarde avec la version") : à INCRÉMENTER à chaque changement de
-# format qui rendrait le fichier illisible par une app plus ancienne.
+# sauvegarde avec la version") : à INCRÉMENTER UNIQUEMENT quand le FORMAT
+# des données change (nouveau champ, sémantique modifiée) — jamais pour un
+# changement d'UI pur (précision Florian 2026-08-07 : "uniquement si il y a
+# un changement qui impacte la sauvegarde et non pas l'UI"). Un build 0.3.x
+# bêta qui ne touche que l'interface garde donc la même version de schéma,
+# et ses sauvegardes restent ouvrables par le canal stable — le refus
+# d'ouverture ne se déclenche qu'entre schémas réellement différents.
+# Pourquoi refuser : une app à schéma N qui re-sauvegarderait un fichier de
+# schéma N+1 PERDRAIT silencieusement les champs qu'elle ne connaît pas.
 # from_dict REFUSE d'ouvrir un fichier de version supérieure ("mettez à
 # jour Lumitrack") — ouvrir un fichier plus ancien reste toujours possible
 # (les champs manquants prennent leurs valeurs par défaut).
 # v3 (2026-08-06) : offsets d'orientation globaux + rY par preset,
 # marqueur appVersion.
-PROJECT_VERSION = 3
+# v4 (2026-08-07) : timing par waypoint (pathPoints[].tFrac, optionnel) —
+# une sauvegarde v4 ouverte par une app antérieure perdrait ces timings,
+# d'où le bump ; les sauvegardes v3 s'ouvrent inchangées (tFrac absent =
+# répartition par longueur d'arc, comportement historique).
+PROJECT_VERSION = 4
 # Version de l'APP qui a écrit le fichier — purement informatif (message
 # d'erreur utile, diagnostic). À garder alignée sur tauri.conf.json.
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.3.0"
 
 # Marqueur de l'ancien format de bundle (dossier = paquet, manifest.json +
 # media/ + versions/) — conservé uniquement pour la lecture rétrocompatible,

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { Scene, type SceneHandle } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import {
   sidecar, useBlockContext, useBundlePath, useConnected, useProject, usePsnRunning,
-  useRedoAvailable, useTick, useUndoAvailable,
+  useRedoAvailable, useRescueAvailable, useRosterStatusKey, useUndoAvailable,
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -296,7 +296,7 @@ function MenuBar({ menus }: { menus: { label: string; items: MenuItemDef[] }[] }
  * onClick (Ctrl/Maj/clic simple) : le PointerSensor de dnd-kit n'intercepte
  * le geste qu'au-delà d'un seuil de mouvement, un simple clic remonte donc
  * normalement (voir activationConstraint dans App). */
-function RosterPointRow({ point, project, selected, moving, offstage, onSelect, dropLine }: {
+const RosterPointRow = memo(function RosterPointRow({ point, project, selected, moving, offstage, onSelect, dropLine }: {
   point: Point
   project: Project
   selected: boolean
@@ -346,7 +346,9 @@ function RosterPointRow({ point, project, selected, moving, offstage, onSelect, 
       {offstage && <span className="offstage" title={t('roster.offstage')}>•</span>}
     </li>
   )
-}
+}, (a, b) =>
+  a.point === b.point && a.selected === b.selected && a.moving === b.moving
+  && a.offstage === b.offstage && a.dropLine === b.dropLine)
 
 /** Prochaine lettre libre (A, B, C…) pour nommer un nouveau point de focus
  * — compteur SÉPARÉ du numéro des acteurs (mission "modes d'orientation",
@@ -507,7 +509,6 @@ function App() {
   const t = useT()
   const locale = useLocale()
   const project = useProject()
-  const tick = useTick()
   const connected = useConnected()
   const psnRunning = usePsnRunning()
   const blockContext = useBlockContext()
@@ -619,6 +620,46 @@ function App() {
     const path = await pickSaveAsPath(projectName)
     if (path) sidecar.saveBundle(path)
   }, [bundlePath])
+
+  // ---- Sortie propre + récupération de crash (2026-08-07) ----
+  // Plus d'autosauvegarde-reprise silencieuse : à la fermeture, popup
+  // « Sauvegarder avant de quitter ? » ; toute sortie par ce chemin
+  // (sauvegardée ou non) est PROPRE : le sidecar efface son fichier de
+  // secours (cleanExit) puis la fenêtre est détruite (destroy() — le kill
+  // du sidecar est branché sur Destroyed côté Rust). Un fichier de secours
+  // présent au prochain démarrage = crash → dialogue de récupération.
+  const [quitPrompt, setQuitPrompt] = useState(false)
+  const rescueAvailable = useRescueAvailable()
+  useEffect(() => {
+    let unlisten: (() => void) | null = null
+    try {
+      // try synchrone : hors Tauri (dev navigateur), getCurrentWindow lance.
+      getCurrentWindow().onCloseRequested((e) => {
+        e.preventDefault()
+        setQuitPrompt(true)
+      }).then((fn) => { unlisten = fn }).catch(() => { /* hors Tauri */ })
+    } catch { /* hors Tauri */ }
+    return () => { unlisten?.() }
+  }, [])
+  const finishExit = useCallback(async () => {
+    sidecar.cleanExit()
+    // Laisse le message partir sur le websocket avant de tuer la fenêtre.
+    await new Promise((r) => setTimeout(r, 250))
+    try { await getCurrentWindow().destroy() } catch { /* hors Tauri */ }
+  }, [])
+  const quitWithSave = useCallback(async () => {
+    if (bundlePath) {
+      sidecar.saveBundle(bundlePath)
+    } else {
+      const path = await pickSaveAsPath(project?.name ?? '')
+      if (!path) return // dialogue annulé : on ne quitte pas
+      sidecar.saveBundle(path)
+    }
+    // Laisse le backend écrire le .lumitrack avant la destruction.
+    await new Promise((r) => setTimeout(r, 600))
+    setQuitPrompt(false)
+    await finishExit()
+  }, [bundlePath, project?.name, finishExit])
 
   const zoomIn = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1.2 }))
   const zoomOut = () => setZoomAction((a) => ({ token: a.token + 1, factor: 1 / 1.2 }))
@@ -832,22 +873,20 @@ function App() {
   // rendu AVANT les enfants (inspecteurs), voir stageCoords.ts.
   if (project) setStageCenter(project.stageWidthCm, project.stageHeightCm)
 
-  const tMs = tick?.tMs ?? 0
-  const playing = tick?.playing ?? false
-  const durationMs = tick?.durationMs ?? 1000
-  const positions = tick?.positions ?? {}
-  const timecodeIn = tick?.timecode ?? null
+  // Refactor fluidite (2026-08-07) : App ne s'abonne PLUS au tick brut —
+  // Scene/CueTimeline/BlockDetailPanel le consomment eux-memes, et le
+  // roster passe par une cle STABLE (useRosterStatusKey) qui ne re-rend
+  // l'app que quand un statut change vraiment. Les callbacks ponctuels
+  // lisent sidecar.tick directement (valeur du moment du clic).
 
-  const movingPointIds = useMemo(() => {
-    const moving = new Set<string>()
-    if (!project) return moving
-    for (const cue of project.cues) {
-      for (const [pointId, act] of Object.entries(cue.activations)) {
-        if (tMs >= cue.startMs && tMs < cue.startMs + act.fadeMs) moving.add(pointId)
-      }
+  const rosterStatusKey = useRosterStatusKey(project)
+  const { movingPointIds, presentPointIds } = useMemo(() => {
+    const [movingPart, presentPart] = rosterStatusKey.split('#')
+    return {
+      movingPointIds: new Set((movingPart ?? '').split('|').filter(Boolean)),
+      presentPointIds: new Set((presentPart ?? '').split('|').filter(Boolean)),
     }
-    return moving
-  }, [project, tMs])
+  }, [rosterStatusKey])
 
   const selectedCue = project?.cues.find((c) => c.id === selectedCueId) ?? null
 
@@ -881,7 +920,8 @@ function App() {
     const pointId = selectedPointIds[0]
     let match: Cue | null = null
     for (const cue of project.cues) {
-      if (tMs < cue.startMs || tMs >= cue.startMs + cue.durationMs) continue
+      const tNow = sidecar.tick?.tMs ?? 0
+      if (tNow < cue.startMs || tNow >= cue.startMs + cue.durationMs) continue
       if (!cue.activations[pointId]) continue
       if (!match || cue.startMs > match.startMs) match = cue
     }
@@ -913,7 +953,7 @@ function App() {
       if (e.code === 'Space') {
         if (isTextField(target)) return
         e.preventDefault()
-        if (playing) sidecar.pause()
+        if (sidecar.tick?.playing) sidecar.pause()
         else sidecar.play()
         return
       }
@@ -954,7 +994,7 @@ function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [playing, selectedCueId, selectedPointIds, project, saveOrSaveAs])
+  }, [selectedCueId, selectedPointIds, project, saveOrSaveAs])
 
   if (!project) {
     return (
@@ -1218,7 +1258,7 @@ function App() {
                                 project={project}
                                 selected={selectedPointIds.includes(p.id)}
                                 moving={movingPointIds.has(p.id)}
-                                offstage={!positions[p.id]}
+                                offstage={!presentPointIds.has(p.id)}
                                 onSelect={selectRange(p)}
                                 dropLine={dropIndicator?.overId === `point:${p.id}` ? (dropIndicator.after ? 'after' : 'before') : null}
                               />
@@ -1241,7 +1281,7 @@ function App() {
                       project={project}
                       selected={selectedPointIds.includes(p.id)}
                       moving={movingPointIds.has(p.id)}
-                      offstage={!positions[p.id]}
+                      offstage={!presentPointIds.has(p.id)}
                       onSelect={selectRange(p)}
                       dropLine={dropIndicator?.overId === `point:${p.id}` ? (dropIndicator.after ? 'after' : 'before') : null}
                     />
@@ -1273,8 +1313,6 @@ function App() {
         <Scene
           ref={sceneRef}
           project={project}
-          positions={positions}
-          tMs={tMs}
           selectedPointId={selectedPointId}
           selectedPointIds={selectedPointIds}
           onSelectPoints={setSelectedPointIds}
@@ -1424,28 +1462,48 @@ function App() {
       <ContextMenu />
       <PromptDialog />
       <UpdateDialog />
+      {quitPrompt && (
+        <div className="prompt-overlay">
+          <div className="prompt-dialog">
+            <h3>{t('quit.title')}</h3>
+            <p>{t('quit.message')}</p>
+            <div className="prompt-dialog-buttons">
+              <button className="prompt-primary" onClick={() => { void quitWithSave() }}>{t('quit.save')}</button>
+              <button onClick={() => { setQuitPrompt(false); void finishExit() }}>{t('quit.noSave')}</button>
+              <button onClick={() => setQuitPrompt(false)}>{t('quit.cancel')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {rescueAvailable && !quitPrompt && (
+        <div className="prompt-overlay">
+          <div className="prompt-dialog">
+            <h3>{t('rescue.title')}</h3>
+            <p>{t('rescue.message')}</p>
+            <div className="prompt-dialog-buttons">
+              <button className="prompt-primary" onClick={() => sidecar.loadRescue()}>{t('rescue.restore')}</button>
+              <button onClick={() => sidecar.discardRescue()}>{t('rescue.discard')}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <footer className="timeline-dock">
         {showBlockDetail && selectedCue && (
           <BlockDetailPanel
             cue={selectedCue}
             projectPoints={project.points}
-            tMs={tMs}
             audioPath={project.audioPath}
+            bottomPx={timelineHeight + 8}
             onClose={() => setShowBlockDetail(false)}
           />
         )}
         <CueTimeline
           project={project}
-          tMs={tMs}
-          playing={playing}
-          durationMs={durationMs}
           connected={connected}
           selectedCueId={selectedCueId}
           selectedPointId={selectedPointId}
           onSelectCue={setSelectedCueId}
           blockContext={blockContext}
-          positions={positions}
-          timecode={timecodeIn}
           onOpenBlockDetail={() => setShowBlockDetail(true)}
         />
       </footer>
@@ -1715,6 +1773,52 @@ function CueInspector({ cue, projectPoints, mountPresets, selectedPointId, onSel
         ))}
       </div>
       <CueOrientationDefaults cue={cue} projectPoints={projectPoints} mountPresets={mountPresets} />
+      {/* Bandeau des divergences (tranche A, 2026-08-07) : quels acteurs
+          ont des réglages personnalisés (drapeaux fade/orientation
+          overridden — la source de vérité du mécanisme de synchro, pas une
+          comparaison de valeurs), avec retour groupé aux réglages du bloc
+          en UN message batch. Les patchs "nus" {xxxOverridden:false}
+          déclenchent la resynchronisation côté sidecar. */}
+      {(() => {
+        const divergent = Object.entries(cue.activations)
+          .filter(([, a]) => a.fadeOverridden || a.orientationOverridden)
+        if (divergent.length === 0) return null
+        return (
+          <div className="divergence-banner">
+            <div className="divergence-head">
+              <span>{divergent.length === 1
+                ? t('cue.divergenceTitleOne')
+                : t('cue.divergenceTitleMany', { count: divergent.length })}</span>
+              <button
+                className="inspector-revert-fade"
+                title={t('cue.revertAllToBlockHint')}
+                onClick={() => sidecar.setActivations(cue.id, divergent.map(([pid, a]) => ({
+                  pointId: pid,
+                  ...(a.fadeOverridden ? { fadeOverridden: false } : {}),
+                  ...(a.orientationOverridden ? { orientationOverridden: false } : {}),
+                })))}
+              >
+                {t('cue.revertAllToBlock')}
+              </button>
+            </div>
+            <div className="divergence-chips">
+              {divergent.map(([pid]) => {
+                const p = projectPoints.find((pt) => pt.id === pid)
+                return (
+                  <button
+                    key={pid}
+                    className={`divergence-chip${pid === selectedPointId ? ' divergence-chip-selected' : ''}`}
+                    onClick={() => onSelectPoint(pid === selectedPointId ? null : pid)}
+                  >
+                    <span className="swatch" style={{ background: p?.color ?? '#888' }} />
+                    {p?.name ?? pid}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
       <div className="activation-list">
         {Object.entries(cue.activations).map(([pointId, act]) => {
           const point = projectPoints.find((p) => p.id === pointId)
@@ -2140,6 +2244,9 @@ function ActivationCard({ cueId, pointId, point, activation, selected, onSelect,
         </button>
         <span className="swatch" style={{ background: point?.color ?? '#666' }} />
         <span className="activation-card-name">{point?.name ?? pointId}</span>
+        {(activation.fadeOverridden || activation.orientationOverridden) && (
+          <span className="activation-diverged-badge" title={t('cue.divergedBadgeHint')}>≠</span>
+        )}
         {collapsed && speed !== null && (() => {
           const [key, color] = speedCategory(speed)
           return (

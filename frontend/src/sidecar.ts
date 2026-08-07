@@ -35,6 +35,8 @@ class SidecarClient {
    * de confirmation distinct (juste une rediffusion du projet) : son
    * chemin reste optimiste sans correction ultérieure. */
   bundlePath: string | null = null
+  /** Crash détecté (fichier de secours présent au démarrage du sidecar). */
+  rescueAvailable = false
 
   private ws: WebSocket | null = null
   private listeners = new Set<() => void>()
@@ -66,7 +68,17 @@ class SidecarClient {
         this.undoAvailable = msg.undoAvailable
         this.redoAvailable = msg.redoAvailable
       } else if (msg.type === 'tick') {
+        // Transport a l'arret : un tick au meme instant n'apporte rien —
+        // le stocker (lecteurs ponctuels) SANS emettre evite ~26
+        // re-rendus/s de la scene au repos (audit fluidite 2026-08-07).
+        // Pendant un geste, l'affichage des acteurs manipules passe par
+        // dragOverride (local), et l'ecriture finale rediffuse un projet.
+        const prev = this.tick
         this.tick = msg
+        if (prev && prev.tMs === msg.tMs && prev.playing === msg.playing
+          && JSON.stringify(prev.timecode ?? null) === JSON.stringify(msg.timecode ?? null)) {
+          return
+        }
       } else if (msg.type === 'block_context') {
         this.blockContext = msg
       } else if (msg.type === 'trajectories') {
@@ -77,6 +89,11 @@ class SidecarClient {
         this.psnPreview = msg
       } else if (msg.type === 'bundle_archive') {
         this.bundleArchive = msg
+      } else if (msg.type === 'rescue_available') {
+        // Crash détecté à la session précédente (2026-08-07) : le fichier
+        // de secours existe encore — App affiche le dialogue de
+        // récupération.
+        this.rescueAvailable = true
       } else if (msg.type === 'saved') {
         // save_bundle peut CORRIGER le chemin demandé (dossier dédié
         // inséré si l'utilisateur n'avait pas déjà navigué dans un dossier
@@ -120,6 +137,19 @@ class SidecarClient {
   redo() { this.send({ type: 'redo' }) }
 
   // ---- PSN (§12.9: stays independent of edit vs. playback mode) ----
+  /** Variante APERÇU de setActivations (2026-08-07) : pendant un geste
+   * continu, le moteur applique + rebuild mais NE rediffuse PAS le projet
+   * (le tick 30 Hz porte le retour visuel) et saute l'auto-duration.
+   * Toujours suivre d'une écriture finale NON-preview au relâchement. */
+  setActivationPreview(cueId: string, pointId: string, patch: Record<string, unknown>) {
+    this.send({ type: 'set_activation', cueId, pointId, ...patch, preview: true })
+  }
+  updateCuePreview(cueId: string, patch: { startMs?: number; durationMs?: number }) {
+    this.send({ type: 'update_cue', cueId, ...patch, preview: true })
+  }
+  setActivationsPreview(cueId: string, entries: Array<Record<string, unknown> & { pointId: string }>) {
+    this.send({ type: 'set_activations', cueId, entries, preview: true })
+  }
   setTimecodeChase(enabled?: boolean, ifaceIp?: string) {
     this.send({ type: 'set_timecode_chase', enabled, ifaceIp })
   }
@@ -317,6 +347,21 @@ class SidecarClient {
     this.send({ type: 'load_bundle', path, archivedName })
   }
   listBundleArchive(path: string) { this.send({ type: 'list_bundle_archive', path }) }
+
+  // ---- fichier de secours / sortie propre (2026-08-07) ----
+  /** Sortie propre : le sidecar efface le fichier de secours et gèle son
+   * écriture — à appeler juste avant de détruire la fenêtre. */
+  cleanExit() { this.send({ type: 'clean_exit' }) }
+  loadRescue() {
+    this.rescueAvailable = false
+    this.bundlePath = null
+    this.send({ type: 'load_rescue' })
+  }
+  discardRescue() {
+    this.rescueAvailable = false
+    this.emit()
+    this.send({ type: 'discard_rescue' })
+  }
 }
 
 export const sidecar = new SidecarClient()
@@ -327,6 +372,30 @@ export function useProject(): Project | null {
 
 export function useTick(): TickMessage | null {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.tick)
+}
+
+/** Statuts du roster derives du tick, sous forme de CLE STABLE (refactor
+ * fluidite 2026-08-07) : useSyncExternalStore compare par Object.is — une
+ * string identique = AUCUN re-rendu. L'app racine ne s'abonne donc plus au
+ * tick brut (qui la re-rendait entiere ~26x/s) : elle ne re-rend que quand
+ * un acteur demarre/s'arrete ou apparait/disparait reellement.
+ * Format : "movingIds...#presentIds..." (ids separes par |). */
+export function useRosterStatusKey(project: Project | null): string {
+  return useSyncExternalStore(sidecar.subscribe, () => {
+    const t = sidecar.tick
+    if (!project || !t) return ''
+    let moving = ''
+    for (const cue of project.cues) {
+      for (const [pid, act] of Object.entries(cue.activations)) {
+        if (t.tMs >= cue.startMs && t.tMs < cue.startMs + act.fadeMs) moving += pid + '|'
+      }
+    }
+    let present = ''
+    for (const p of project.points) {
+      if (t.positions[p.id]) present += p.id + '|'
+    }
+    return moving + '#' + present
+  })
 }
 
 export function useBlockContext(): BlockContextMessage | null {
@@ -359,6 +428,10 @@ export function useUndoAvailable(): boolean {
 
 export function useBundlePath(): string | null {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.bundlePath)
+}
+
+export function useRescueAvailable(): boolean {
+  return useSyncExternalStore(sidecar.subscribe, () => sidecar.rescueAvailable)
 }
 
 export function useBundleArchive(): BundleArchiveMessage | null {

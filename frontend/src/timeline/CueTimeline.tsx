@@ -17,9 +17,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import type { BlockContextMessage, Cue, Pose, Project } from '../types'
-import { sidecar } from '../sidecar'
+import { sidecar, useTick } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
+import { attachTouchPinch, classifyWheel } from './wheelGestures'
+import { WaypointDiamonds, deleteSelectedWaypoints } from './waypoints'
+import { clearWaypointSelection, selectedWaypointCount } from './waypointSelection'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
 import { showContextMenu } from '../ui/contextMenuStore'
@@ -27,7 +30,7 @@ import { promptText } from '../ui/promptDialog'
 import { pickColor } from '../ui/colorPicker'
 import { NumericInput } from '../ui/NumericInput'
 import { chooseTickStep, computeTicks } from './ticks'
-import { setTimelineView } from './timelineView'
+import { setTimelineView, registerTimelineViewCommands } from './timelineView'
 import {
   canSplitAtPlayhead, copyCueToClipboard, copyTimingToOtherActors, duplicateCue,
   hasCueClipboard, pasteCueFromClipboard, splitCueAtPlayhead,
@@ -39,7 +42,12 @@ import {
 export const RULER_H = 26
 export const AUDIO_H = 52
 export const LANE_H = 36
+// Hauteur PAR DÉFAUT de l'éditeur de courbes — redimensionnable via le
+// grip au-dessus (B1.8), persistée dans localStorage.
 const GRAPH_H = 190
+const GRAPH_H_MIN = 120
+const GRAPH_H_MAX = 420
+const GRAPH_GRIP_H = 6
 const MIN_CUE_MS = 100
 const SNAP_PX = 8
 const SEEK_THROTTLE_MS = 33
@@ -54,7 +62,14 @@ const MIN_PX_PER_MS = 0.001
 const MAX_PX_PER_MS = 2 // 0.5 s par 1000 px
 const CONTENT_PAD_PX = 160
 
-const CUE_PALETTE = ['#4F6DF5', '#F5734F', '#B06FE0', '#4FF58C', '#4FF5E0', '#F5C84F']
+// Palette désaturée (tranche G, 2026-08-07) : tons ~45 % de saturation
+// accordés au thème sombre — l'ancienne palette fluo (#4FF58C…) rendait
+// la timeline illisible. Ne concerne que les NOUVEAUX blocs ; les projets
+// existants gardent leurs couleurs (le rendu adouci de App.css fait le
+// reste pour eux).
+const EMPTY_POSITIONS: Record<string, Pose> = {}
+
+const CUE_PALETTE = ['#5B6EAE', '#A8695B', '#8B6FA8', '#5F9377', '#5C8E99', '#A18F5C']
 
 
 // Graduations : extraites dans ./ticks.ts (mission "panneau détail du bloc
@@ -68,10 +83,10 @@ interface DragState {
   startClientY: number
   origStartMs: number
   origDurationMs: number
+  durationMs: number
   origLane: number
   /** Proposition courante (affichée pendant le geste, committée au lâcher). */
   startMs: number
-  durationMs: number
   lane: number
   moved: boolean
 }
@@ -85,18 +100,14 @@ function formatTimecodeMs(ms: number): string {
   return `${pad(h)}:${pad(m)}:${sec.toFixed(3).padStart(6, '0')}`
 }
 
-export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, blockContext, positions, timecode, onOpenBlockDetail }: {
+export function CueTimeline({ project, connected, selectedCueId, selectedPointId, onSelectCue, blockContext, onOpenBlockDetail }: {
   project: Project
-  tMs: number
-  playing: boolean
-  durationMs: number
   connected: boolean
   selectedCueId: string | null
   selectedPointId: string | null
   onSelectCue: (cueId: string | null) => void
   /** État du timecode In (Art-Net) quand le suivi est armé — badge à côté
    * du temps : TC reçu (vert) ou en attente (orange). null = suivi off. */
-  timecode: { receiving: boolean; fps: number | null; hmsf: [number, number, number, number] | null } | null
   /** Contexte du bloc sélectionné (départ/cible résolus) — pilote le badge
    * de vitesse affiché directement sur le bloc, pas seulement dans
    * l'inspecteur ("la vitesse peut pas s'afficher dans le bloc même ?"). */
@@ -104,11 +115,19 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   /** Positions RÉSOLUES par le backend (tick, même source que la scène) —
    * jamais recalculées ici : "diviser au playhead" fige exactement ce qui
    * est déjà affiché, pas une approximation frontend (§13.1.7). */
-  positions: Record<string, Pose>
   /** Ouvre le panneau détail du bloc (menu contextuel) — le bloc visé est
    * déjà sélectionné par `onSelectCue` avant l'appel. */
   onOpenBlockDetail: () => void
 }) {
+  // Tick consomme ICI (refactor fluidite 2026-08-07) : App ne re-rend
+  // plus au tick ; la timeline (playhead, badge TC, split) s'abonne seule.
+  const tick = useTick()
+  const tMs = tick?.tMs ?? 0
+  const playing = tick?.playing ?? false
+  const durationMs = tick?.durationMs ?? 1000
+  const positions = tick?.positions ?? EMPTY_POSITIONS
+  const timecode = tick?.timecode ?? null
+
   const t = useT()
   const cues = project.cues
   // Pistes persistantes (mission multi-pistes) : chaque bloc porte sa
@@ -116,6 +135,29 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   // une piste vide en bas pour y déposer un bloc.
   const laneCount = Math.max(3, ...cues.map((c) => (c.lane ?? 0) + 2))
   const [showGraph, setShowGraph] = useState(false)
+  // Hauteur du graph redimensionnable (B1.8) : grip 6 px au-dessus.
+  const [graphHeight, setGraphHeight] = useState(() => {
+    const raw = Number(localStorage.getItem('lumitrack.graphHeight'))
+    return Number.isFinite(raw) ? Math.min(GRAPH_H_MAX, Math.max(GRAPH_H_MIN, raw)) : GRAPH_H
+  })
+  const beginGraphResize = (e: React.PointerEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = graphHeight
+    const onMove = (ev: PointerEvent) => {
+      // Le graph est en bas : glisser vers le HAUT l'agrandit.
+      const h = Math.min(GRAPH_H_MAX, Math.max(GRAPH_H_MIN, startH + (startY - ev.clientY)))
+      setGraphHeight(h)
+    }
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      const h = Math.min(GRAPH_H_MAX, Math.max(GRAPH_H_MIN, startH + (startY - ev.clientY)))
+      localStorage.setItem('lumitrack.graphHeight', String(h))
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
 
   // Le graph editor édite l'activation du point sélectionné dans le bloc
   // sélectionné ; sans sélection de point, repli sur le premier point activé
@@ -130,6 +172,12 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   const graphPointName = graphPointId
     ? project.points.find((p) => p.id === graphPointId)?.name ?? graphPointId
     : null
+  // Couleur par acteur pour les losanges de waypoints des acteurs non
+  // courants (recalculé au changement de roster seulement).
+  const pointColors = useMemo(
+    () => new Map(project.points.map((p) => [p.id, p.color])),
+    [project.points],
+  )
   const graphVisible = showGraph && selectedCue !== null
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -152,6 +200,25 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // Suppr avec une sélection MULTIPLE de waypoints (lasso/Maj-clic) :
+  // supprime tout le lot — en capture, AVANT le raccourci global qui
+  // supprimerait le bloc. Sélection vidée au changement de bloc (les
+  // indices ne survivent pas à un autre contexte).
+  useEffect(() => { clearWaypointSelection() }, [selectedCueId])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const tgt = e.target as HTMLElement
+      if (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || tgt.tagName === 'TEXTAREA') return
+      if (selectedWaypointCount() === 0 || !selectedCue) return
+      e.stopPropagation()
+      e.preventDefault()
+      deleteSelectedWaypoints(selectedCue)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [selectedCue])
   // Le temps d'un geste de zoom, les blocs/playhead doivent suivre pxPerMs
   // AU PIXEL PRÈS, comme la règle/le waveform (aucune transition) — sinon
   // leurs transitions CSS respectives (`.cue-block` lissage d'écho backend,
@@ -286,20 +353,51 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    // Sensibilité continue + trackpad (2026-08-07) : classifyWheel route
+    // pincement/balayage/molette, wheelZoomFactor rend le zoom
+    // proportionnel au delta (un cran de souris = ×1.25 comme avant, un
+    // micro-événement de trackpad ne zoome que d'un poil).
     const onWheel = (e: WheelEvent) => {
-      if (e.shiftKey) {
-        const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
-        if (d !== 0) {
-          e.preventDefault()
-          el.scrollLeft += d
-        }
-      } else {
-        e.preventDefault()
-        zoomAt(e.deltaY < 0 ? 1.25 : 0.8, e.clientX)
-      }
+      const intent = classifyWheel(e)
+      if (!intent) return
+      e.preventDefault()
+      if (intent.kind === 'pan') el.scrollLeft += intent.deltaPx
+      else if (intent.kind === 'panV') el.scrollTop += intent.deltaPx
+      else zoomAt(intent.factor, e.clientX)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
+  }, [zoomAt])
+
+  // Écran tactile : deux doigts = panoramique + pincement combinés (façon
+  // carte), un doigt garde les interactions normales (drag, scrub).
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    return attachTouchPinch(el, ({ panDeltaPx, zoomFactor, centerX }) => {
+      if (panDeltaPx !== 0) el.scrollLeft += panDeltaPx
+      if (zoomFactor !== 1) zoomAt(zoomFactor, centerX)
+    })
+  }, [zoomAt])
+
+  // Commandes venues du BlockDetailPanel (tranche E, 2026-08-07) : la
+  // timeline principale est masquée par l'overlay mais reste seule
+  // propriétaire du scroll DOM et de l'animation de zoom — le panneau lui
+  // délègue ses gestes. L'ancre de zoom arrive en TEMPS (anchorMs), à
+  // reconvertir dans NOTRE fenêtre.
+  useEffect(() => {
+    return registerTimelineViewCommands((cmd) => {
+      const el = scrollRef.current
+      if (!el) return
+      if (cmd.scrollDeltaPx) el.scrollLeft += cmd.scrollDeltaPx
+      if (cmd.zoomFactor) {
+        const rect = el.getBoundingClientRect()
+        const offsetX = cmd.anchorMs !== undefined
+          ? Math.max(0, Math.min(el.clientWidth, cmd.anchorMs * pxPerMsRef.current - el.scrollLeft))
+          : el.clientWidth / 2
+        zoomAt(cmd.zoomFactor, rect.left + offsetX)
+      }
+    })
   }, [zoomAt])
 
   // Clic molette + glisser = panoramique horizontal façon surface tactile :
@@ -419,6 +517,12 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     return best
   }, [snapCandidates, cues, effPxPerMs])
 
+  // Blocs à jour pour le clamp anti-superposition pendant un drag (tranche
+  // H, 2026-08-07) — une ref, pas une dépendance du useCallback : les
+  // handlers restent stables pendant le geste.
+  const cuesRef = useRef(project.cues)
+  cuesRef.current = project.cues
+
   const beginBlockDrag = useCallback((e: React.PointerEvent<HTMLDivElement>, cue: Cue, mode: DragState['mode']) => {
     // Seul le clic gauche sélectionne/déplace un bloc — le clic milieu
     // (panoramique tactile) au-dessus d'un bloc ne doit ni le sélectionner
@@ -447,6 +551,12 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
       let startMs = d.origStartMs
       let dur = d.origDurationMs
       let lane = d.origLane
+      // Voisins de piste pour le clamp anti-superposition (tranche H) —
+      // le bloc bute contre eux, le backend reste le filet garanti.
+      const laneNeighbors = (l: number) =>
+        cuesRef.current.filter((c) => c.id !== d.cueId && (c.lane ?? 0) === l)
+      const overlaps = (s: number, du: number, l: number) =>
+        laneNeighbors(l).some((n) => s < n.startMs + n.durationMs && n.startMs < s + du)
       if (d.mode === 'move') {
         // Déplacement vertical = changement de piste (drop possible sur la
         // piste vide du bas — une nouvelle piste vide apparaît derrière).
@@ -460,14 +570,40 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
           if (snappedEnd !== startMs + dur) startMs = snappedEnd - dur
         }
         startMs = Math.max(0, startMs)
+        // Clamp : en cas de collision, se caler du côté le plus proche du
+        // voisin ; si l'espace est trop étroit (toujours en conflit),
+        // garder la dernière position valide du geste.
+        for (const n of laneNeighbors(lane)) {
+          const nEnd = n.startMs + n.durationMs
+          if (startMs < nEnd && n.startMs < startMs + dur) {
+            startMs = (startMs + dur / 2) < (n.startMs + n.durationMs / 2)
+              ? Math.max(0, n.startMs - dur)
+              : nEnd
+          }
+        }
+        if (overlaps(startMs, dur, lane)) {
+          startMs = d.startMs
+          lane = d.lane
+        }
       } else if (d.mode === 'resize-r') {
         dur = Math.max(MIN_CUE_MS, d.origDurationMs + deltaMs)
         const end = snap(d.origStartMs + dur, d.cueId, noSnap)
         dur = Math.max(MIN_CUE_MS, end - d.origStartMs)
+        // Bute contre le premier voisin à droite sur la piste.
+        for (const n of laneNeighbors(lane)) {
+          if (n.startMs >= d.origStartMs && d.origStartMs + dur > n.startMs) {
+            dur = Math.max(MIN_CUE_MS, n.startMs - d.origStartMs)
+          }
+        }
       } else {
         const end = d.origStartMs + d.origDurationMs
         startMs = Math.min(end - MIN_CUE_MS, Math.max(0, d.origStartMs + deltaMs))
         startMs = Math.min(end - MIN_CUE_MS, Math.max(0, snap(startMs, d.cueId, noSnap)))
+        // Bute contre le premier voisin à gauche sur la piste.
+        for (const n of laneNeighbors(lane)) {
+          const nEnd = n.startMs + n.durationMs
+          if (nEnd <= end && startMs < nEnd) startMs = Math.min(end - MIN_CUE_MS, nEnd)
+        }
         dur = end - startMs
       }
       const moved = d.moved || Math.abs(ev.clientX - d.startClientX) > 3
@@ -723,7 +859,7 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
             </div>
           ))}
           {graphVisible && (
-            <div className="tl-header tl-header-graph" style={{ height: GRAPH_H }}>
+            <div className="tl-header tl-header-graph" style={{ height: graphHeight + GRAPH_GRIP_H }}>
               <span className="tl-header-chip" style={{ background: '#4ff5e0' }} />
               {t('timeline.curves')}
             </div>
@@ -895,6 +1031,38 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
                       <span className="cue-block-count">{count}</span>
                     </div>
                     <div className="cue-block-body" />
+                    {/* Losanges de keyframes (2026-08-07) : TOUS les
+                        waypoints du bloc sélectionné (couleur de leur
+                        acteur, translucides), l'acteur courant par-dessus
+                        en plein — "pas de losange" signalé quand seul
+                        l'acteur courant était affiché et qu'il n'avait pas
+                        de tracé. Clic = éditer dans la scène, glisser =
+                        retimer, clic droit = supprimer/timing auto. */}
+                    {cue.id === selectedCueId && Object.entries(cue.activations)
+                      .filter(([pid, a]) => (a.pathPoints?.length ?? 0) > 0 && pid !== graphPointId)
+                      .map(([pid, a]) => (
+                        <WaypointDiamonds
+                          key={pid}
+                          cue={cue}
+                          act={a}
+                          pointId={pid}
+                          pxPerMs={effPxPerMs}
+                          baseMs={startMs}
+                          centerY={(LANE_H - 6) * 0.68}
+                          color={pointColors.get(pid)}
+                          dim
+                        />
+                      ))}
+                    {cue.id === selectedCueId && graphPointId && cue.activations[graphPointId] && (
+                      <WaypointDiamonds
+                        cue={cue}
+                        act={cue.activations[graphPointId]}
+                        pointId={graphPointId}
+                        pxPerMs={effPxPerMs}
+                        baseMs={startMs}
+                        centerY={(LANE_H - 6) * 0.68}
+                      />
+                    )}
                     <div className="cue-resize cue-resize-l" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-l')} />
                     <div className="cue-resize cue-resize-r" onPointerDown={(e) => beginBlockDrag(e, cue, 'resize-r')} />
                   </div>
@@ -903,16 +1071,26 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
             </div>
 
             {graphVisible && selectedCue && (
-              <GraphEditor
-                cue={selectedCue}
-                act={graphAct}
-                pointId={graphPointId}
-                pointName={graphPointName}
-                pxPerMs={effPxPerMs}
-                height={GRAPH_H}
-                contentWidth={contentWidth}
-                scrollLeft={scrollLeft}
-              />
+              <>
+                <div
+                  className="graph-resize-grip"
+                  style={{ height: GRAPH_GRIP_H }}
+                  title={t('graph.resizeHint')}
+                  onPointerDown={beginGraphResize}
+                />
+                <GraphEditor
+                  cue={selectedCue}
+                  act={graphAct}
+                  pointId={graphPointId}
+                  pointName={graphPointName}
+                  pxPerMs={effPxPerMs}
+                  height={graphHeight}
+                  contentWidth={contentWidth}
+                  scrollLeft={scrollLeft}
+                  viewportWidth={viewportWidth}
+                  tMs={tMs}
+                />
+              </>
             )}
 
             <div className="tl-playhead" style={{ left: playheadPx, transition: zooming ? 'none' : undefined }} />

@@ -71,18 +71,24 @@ MUTATING_COMMANDS = {
 # de sens une fois chargé un nouveau, donc on le vide plutôt que de le
 # rendre annulable (annuler un "Nouveau projet" ramènerait dans l'ancien
 # projet sans qu'on l'ait "ouvert" — confusion garantie avec Fichier/Ouvrir).
-RESET_UNDO_COMMANDS = {"new_project", "import_stancz", "load_bundle"}
+RESET_UNDO_COMMANDS = {"new_project", "import_stancz", "load_bundle", "load_rescue"}
 
 
-def autosave_path() -> str:
-    """Sauvegarde de session : %APPDATA%/Lumitrack/autosave.json (Windows),
-    ~/.config/Lumitrack sinon. JSON simple (pas un bundle : les médias
-    restent référencés en chemins absolus, pas copiés — et pas de dossier
-    versions/ qui gonflerait à chaque autosave)."""
+def rescue_path() -> str:
+    """Fichier de SECOURS anti-crash : %APPDATA%/Lumitrack/rescue.json
+    (Windows), ~/.config/Lumitrack sinon. JSON simple (pas un bundle : les
+    médias restent référencés en chemins absolus, pas copiés).
+
+    Nouveau contrat (demande 2026-08-07) : ce fichier n'est PLUS une
+    reprise de session automatique — il est écrit en continu pendant
+    l'usage, EFFACÉ à toute sortie propre (message `clean_exit`, que
+    l'utilisateur ait sauvegardé ou non), et sa présence au démarrage
+    signifie donc un CRASH : le frontend propose alors de récupérer la
+    session (`rescue_available` → `load_rescue`/`discard_rescue`)."""
     base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
     directory = os.path.join(base, "Lumitrack")
     os.makedirs(directory, exist_ok=True)
-    return os.path.join(directory, "autosave.json")
+    return os.path.join(directory, "rescue.json")
 
 
 def _demo_project() -> Project:
@@ -138,18 +144,25 @@ class Session:
     process, and the set of connected frontend sockets to push to."""
 
     def __init__(self):
-        # Reprise de session : la dernière autosauvegarde si elle existe,
-        # sinon le projet de démonstration.
-        self.project = None
-        path = autosave_path()
-        if os.path.isfile(path):
-            try:
-                self.project = Project.load(path)
-                logger.info("Session restaurée depuis %s", path)
-            except Exception:
-                logger.exception("Autosave illisible (%s) — projet de démo", path)
-        if self.project is None:
-            self.project = _demo_project()
+        # Plus de reprise de session automatique (2026-08-07) : on démarre
+        # sur le projet de démo, et la présence d'un fichier de secours
+        # (= la sortie précédente n'était PAS propre) est signalée au
+        # frontend qui PROPOSE la récupération.
+        path = rescue_path()
+        legacy = os.path.join(os.path.dirname(path), "autosave.json")
+        if not os.path.isfile(path) and os.path.isfile(legacy):
+            # Migration : l'ancienne autosave devient un fichier de secours.
+            os.replace(legacy, path)
+        self.rescue_available = os.path.isfile(path)
+        if self.rescue_available:
+            logger.info("Fichier de secours présent (%s) — récupération proposée", path)
+        # Sortie propre demandée : gèle l'écriture du fichier de secours.
+        self.exiting = False
+        self.project = _demo_project()
+        # Même assainissement anti-superposition qu'au chargement d'un
+        # projet (set_project) — l'autosave restauré peut précéder
+        # l'invariant (tranche H, 2026-08-07).
+        _sanitize_all_lanes(self.project)
         self.dirty = False
         self.timeline = Timeline(self.project)
         self.transport = Transport()
@@ -182,6 +195,11 @@ class Session:
 
     def set_project(self, project: Project):
         self.project = project
+        # Assainissement anti-superposition (tranche H, 2026-08-07) : les
+        # sauvegardes d'AVANT l'invariant peuvent contenir des blocs
+        # superposés — relogés chronologiquement AVANT de construire la
+        # timeline.
+        _sanitize_all_lanes(project)
         self.dirty = True
         self.timeline = Timeline(project)
         self.transport.set_duration(self.timeline.duration_ms)
@@ -303,16 +321,17 @@ async def _tick_loop(session: Session):
 
 
 async def _autosave_loop(session: Session):
-    """Sauvegarde continue : écrit l'autosave ~2 s après la dernière
-    mutation. La fermeture de l'app TUE le sidecar (kill, aucun handler ne
-    tourne sous Windows) — c'est donc cette boucle qui garantit le
-    « sauvegardé au quit » : au moment du kill, tout est déjà sur disque.
+    """Fichier de secours continu : écrit rescue.json ~2 s après la
+    dernière mutation. En cas de CRASH (kill brutal, aucun handler ne
+    tourne sous Windows), tout est déjà sur disque et le prochain
+    démarrage proposera la récupération. À la sortie PROPRE, `clean_exit`
+    supprime le fichier et gèle cette boucle (session.exiting).
     Écriture ATOMIQUE (tmp + replace) : un kill en plein write ne peut pas
     corrompre le fichier."""
-    path = autosave_path()
+    path = rescue_path()
     while True:
         await asyncio.sleep(AUTOSAVE_INTERVAL_S)
-        if not session.dirty:
+        if session.exiting or not session.dirty:
             continue
         session.dirty = False
         try:
@@ -321,7 +340,7 @@ async def _autosave_loop(session: Session):
             os.replace(tmp, path)
         except Exception:
             session.dirty = True  # on retentera au prochain tour
-            logger.exception("Échec de l'autosauvegarde")
+            logger.exception("Échec de l'écriture du fichier de secours")
 
 
 def _apply_auto_duration(project: Project, cue: Cue) -> None:
@@ -349,6 +368,56 @@ def _apply_auto_duration(project: Project, cue: Cue) -> None:
             act.fade_ms = computed_fade_ms
             finish_times.append(act.start_offset_ms + computed_fade_ms)
     cue.duration_ms = max(finish_times, default=MIN_AUTO_DURATION_MS)
+    # Une durée auto qui s'allonge peut faire déborder le bloc sur son
+    # voisin de piste — l'invariant "jamais deux blocs superposés" (tranche
+    # H, 2026-08-07) est ré-établi ici comme après toute mutation de
+    # fenêtre.
+    _resolve_lane_overlap(project, cue)
+
+
+def _cues_overlap(a: Cue, b: Cue) -> bool:
+    return (a.start_ms < b.start_ms + b.duration_ms
+            and b.start_ms < a.start_ms + a.duration_ms)
+
+
+def _resolve_lane_overlap(project: Project, cue: Cue) -> None:
+    """Invariant "jamais deux blocs superposés sur une même piste" (demande
+    Florian 2026-08-07) — filet GARANTI côté moteur, quel que soit le chemin
+    (geste libre, +bloc, drag, resize, durée auto, dupliquer, coller...).
+    Le frontend clampe déjà pendant le geste pour le confort ; ici, si le
+    bloc modifié chevauche un voisin de sa piste, il est relogé sur la
+    PREMIÈRE piste où son intervalle est libre (piste existante, sinon une
+    nouvelle en dessous). Politique déterministe : c'est le bloc MODIFIÉ
+    qui bouge, jamais les autres (pas d'effet domino)."""
+    def conflicts(lane: int) -> bool:
+        return any(c is not cue and (c.lane or 0) == lane and _cues_overlap(cue, c)
+                   for c in project.cues)
+
+    if not conflicts(cue.lane or 0):
+        return
+    lane = 0
+    while conflicts(lane):
+        lane += 1
+    cue.lane = lane
+
+
+def _sanitize_all_lanes(project: Project) -> None:
+    """Assainissement GLOBAL (chargement d'une sauvegarde d'avant
+    l'invariant) : place les blocs un par un dans l'ordre chronologique, en
+    ne résolvant chaque bloc que contre les blocs DÉJÀ placés — sinon le
+    premier bloc traité se ferait éjecter de sa piste par des blocs pas
+    encore relogés (constaté au premier jet du test)."""
+    placed: list = []
+    for cue in sorted(project.cues, key=lambda c: (c.start_ms, c.id)):
+        def conflicts(lane: int) -> bool:
+            return any((p.lane or 0) == lane and _cues_overlap(cue, p) for p in placed)
+        lane = cue.lane or 0
+        if conflicts(lane):
+            lane = 0
+            while conflicts(lane):
+                lane += 1
+        cue.lane = lane
+        placed.append(cue)
 
 
 def _sync_activation_orientation_defaults(cue: Cue, act: Activation) -> None:
@@ -842,6 +911,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             default_yaw_turn_ms=500.0,
         )
         session.project.cues.append(cue)
+        _resolve_lane_overlap(session.project, cue)
         session.project.sort_cues()
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
@@ -851,6 +921,24 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         cue = session.project.cue_by_id(msg.get("cueId", ""))
         if cue is None:
             return {"type": "error", "message": "Unknown cue id"}
+        # Mode APERCU (2026-08-07) : le geste libre 'trou' etire le bloc a
+        # chaque echantillon (startMs/durationMs) — en preview on applique
+        # la fenetre + le resync leger des fades, on rebuild, on ack ; le
+        # relogement anti-superposition et la rediffusion attendent
+        # l'ecriture finale du relachement.
+        if msg.get("preview"):
+            if "startMs" in msg:
+                cue.start_ms = float(msg["startMs"])
+            if "durationMs" in msg:
+                cue.duration_ms = float(msg["durationMs"])
+                if not cue.auto_duration:
+                    for act in cue.activations.values():
+                        if not act.fade_overridden:
+                            act.fade_ms = max(
+                                MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
+            session.project.sort_cues()
+            session.timeline.rebuild()
+            return {"type": "ack"}
         if "name" in msg:
             cue.name = msg["name"]
         if "startMs" in msg:
@@ -907,6 +995,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             cue.default_yaw_turn_ms = msg["defaultYawTurnMs"]
         if any(k in msg for k in orientation_default_keys):
             _apply_cue_orientation_defaults(cue)
+        if any(k in msg for k in ("startMs", "durationMs", "lane")):
+            _resolve_lane_overlap(session.project, cue)
         session.project.sort_cues()
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
@@ -923,6 +1013,18 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         cue = session.project.cue_by_id(msg.get("cueId", ""))
         if cue is None:
             return {"type": "error", "message": "Unknown cue id"}
+        # Mode APERCU (2026-08-07) — meme contrat que set_activations :
+        # applique + rebuild, PAS de rediffusion (ack), auto-duration
+        # sautee. Necessaire aussi ici : le drag d'UN acteur/waypoint/
+        # poignee passe par set_activation, et chaque echantillon mutant
+        # empilait une rediffusion complete ('le chemin se fait mais en
+        # retard' apres le relachement).
+        if msg.get("preview"):
+            err = _apply_activation_patch(session, cue, msg)
+            if err is not None:
+                return err
+            session.timeline.rebuild()
+            return {"type": "ack"}
         err = _apply_activation_patch(session, cue, msg)
         if err is not None:
             return err
@@ -950,6 +1052,18 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             err = _apply_activation_patch(session, cue, entry)
             if err is not None:
                 return err
+        # Mode APERÇU (2026-08-07, "ça rame toujours" avec 78 acteurs) :
+        # pendant un geste continu, le frontend marque ses échantillons
+        # preview:true — on saute la passe auto-duration (recalcul des
+        # fades de TOUT le bloc, O(P) répété 10-30x/s) et SURTOUT la
+        # rediffusion du projet complet (voir le return {"type":"ack"}
+        # ci-dessous : un reply non-None court-circuite le broadcast).
+        # Le rebuild reste : le tick à 30 Hz porte les positions résolues,
+        # c'est LUI le retour visuel du geste. L'écriture FINALE du geste
+        # (pointerup) arrive sans preview et paie tout une seule fois.
+        if msg.get("preview"):
+            session.timeline.rebuild()
+            return {"type": "ack"}
         if cue.auto_duration:
             _apply_auto_duration(session.project, cue)
         session.timeline.rebuild()
@@ -1005,6 +1119,37 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         session.set_project(load_bundle(msg["path"], msg.get("archivedName")))
         return None
 
+    # ---- Cycle de vie du fichier de secours (2026-08-07) ----
+    if msg_type == "clean_exit":
+        # Sortie PROPRE (que l'utilisateur ait sauvegardé ou non) : le
+        # fichier de secours n'a plus de raison d'être, et la boucle
+        # d'écriture est gelée pour qu'une dernière mutation en vol ne le
+        # recrée pas juste avant le kill du process.
+        session.exiting = True
+        try:
+            os.remove(rescue_path())
+        except FileNotFoundError:
+            pass
+        return {"type": "ack"}
+
+    if msg_type == "load_rescue":
+        path = rescue_path()
+        session.rescue_available = False
+        if os.path.isfile(path):
+            project = Project.load(path)
+            _sanitize_all_lanes(project)
+            session.set_project(project)
+            return None
+        return {"type": "error", "message": "Aucun fichier de secours"}
+
+    if msg_type == "discard_rescue":
+        session.rescue_available = False
+        try:
+            os.remove(rescue_path())
+        except FileNotFoundError:
+            pass
+        return {"type": "ack"}
+
     return {"type": "error", "message": f"Unknown message type {msg_type!r}"}
 
 
@@ -1012,6 +1157,10 @@ async def _client_handler(session: Session, websocket):
     session.clients.add(websocket)
     try:
         await websocket.send(json.dumps(session.project_message()))
+        # Crash détecté à la session précédente : proposer la récupération
+        # (une seule fois — load_rescue/discard_rescue baissent le drapeau).
+        if session.rescue_available:
+            await websocket.send(json.dumps({"type": "rescue_available"}))
         async for raw in websocket:
             try:
                 msg = json.loads(raw)

@@ -48,10 +48,24 @@ mod updater_channel {
     channel: &str,
   ) -> Result<tauri_plugin_updater::Updater, String> {
     use tauri_plugin_updater::UpdaterExt;
+    let stable_channel = channel != "beta";
     app
       .updater_builder()
       .endpoints(vec![endpoint(channel).parse().map_err(|e| format!("{e}"))?])
       .map_err(|e| e.to_string())?
+      // Retour bêta -> stable (demande 2026-08-07) : le comparateur par
+      // défaut ne propose qu'une version STRICTEMENT supérieure, donc une
+      // bêta 0.3.0-beta.2 ne "voyait" jamais le stable 0.2.2. Sur le canal
+      // stable avec une PRERELEASE installée, toute version stable
+      // différente est proposée (descendre de version = réinstallation,
+      // NSIS le fait proprement).
+      .version_comparator(move |current, update| {
+        if stable_channel && !current.pre.is_empty() {
+          update.version != current
+        } else {
+          update.version > current
+        }
+      })
       .build()
       .map_err(|e| e.to_string())
   }
@@ -230,7 +244,13 @@ pub fn run() {
       Ok(())
     })
     .on_window_event(|window, event| {
-      if let tauri::WindowEvent::CloseRequested { .. } = event {
+      // `Destroyed`, PAS `CloseRequested` (2026-08-07) : le frontend
+      // intercepte désormais la fermeture (onCloseRequested + preventDefault)
+      // pour afficher « Sauvegarder avant de quitter ? » — tuer le sidecar
+      // dès la DEMANDE de fermeture aurait laissé l'app ouverte sur un
+      // moteur mort si l'utilisateur annulait. À la destruction réelle
+      // (window.destroy() côté JS après le choix), on nettoie.
+      if let tauri::WindowEvent::Destroyed = event {
         // Uniquement la fenêtre PRINCIPALE (fix 2026-08-06) : le splash se
         // ferme programmatiquement quelques secondes après le démarrage
         // (App.tsx::revealMainWindow) — sans ce filtre, SA fermeture

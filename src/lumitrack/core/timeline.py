@@ -231,7 +231,16 @@ def _bezier2(p0, p1, p2, p3, s):
 def path_position(start_xy, act, target_xy, p: float):
     """Position (x, y) à la fraction de parcours p (0..1, DÉJÀ passée par
     l'easing). Paramétrage par longueur d'arc : p = fraction de la distance
-    réellement parcourue, pas du paramètre de Bézier."""
+    réellement parcourue, pas du paramètre de Bézier.
+
+    Timing PAR WAYPOINT (2026-08-07, losanges éditables dans la timeline) :
+    un waypoint peut porter `tFrac` (fraction 0..1 du fade à laquelle
+    l'acteur DOIT y passer). Le temps est alors remappé en arc par une
+    fonction affine par morceaux ancrée sur ces jalons ; les waypoints sans
+    tFrac restent répartis par l'arc entre les jalons voisins. Aucun tFrac
+    nulle part -> mapping identité, comportement historique inchangé.
+    (Parité : native/src/path.rs, miroir non branché en prod, à aligner au
+    prochain passage.)"""
     p = max(0.0, min(1.0, p))
     segments = _spatial_segments(start_xy, act, target_xy)
     # Table cumulative : PATH_LUT_STEPS pas par segment, interpolation
@@ -247,7 +256,37 @@ def path_position(start_xy, act, target_xy, p: float):
     total = lengths[-1]
     if total <= 0.0:
         return tuple(target_xy)
-    goal = p * total
+
+    # Jalons temps -> fraction d'arc : (0,0), (tFrac_i, arc du waypoint i)
+    # pour chaque waypoint temporisé, (1,1). L'arc d'un waypoint est la
+    # longueur cumulée à la jonction de ses segments (index (i+1)*LUT).
+    wps = act.path_points or []
+    knots = [(0.0, 0.0)]
+    for i, wp in enumerate(wps):
+        tf = wp.get("tFrac") if isinstance(wp, dict) else None
+        if tf is None:
+            continue
+        s_i = lengths[min((i + 1) * PATH_LUT_STEPS, len(lengths) - 1)] / total
+        knots.append((max(0.001, min(0.999, float(tf))), s_i))
+    knots.append((1.0, 1.0))
+    goal_s = p
+    if len(knots) > 2:
+        knots.sort()
+        goal_s = 1.0
+        prev_t, prev_s = knots[0]
+        s_floor = 0.0
+        for t1, s1 in knots[1:]:
+            # Monotonie d'arc garantie même si des tFrac se croisent avec
+            # l'ordre spatial des waypoints (jamais de retour en arrière).
+            s1 = max(s1, s_floor)
+            if p <= t1:
+                span = t1 - prev_t
+                f = (p - prev_t) / span if span > 0 else 1.0
+                goal_s = prev_s + (s1 - prev_s) * f
+                break
+            prev_t, prev_s, s_floor = t1, s1, s1
+
+    goal = goal_s * total
     for i in range(1, len(lengths)):
         if lengths[i] >= goal:
             span = lengths[i] - lengths[i - 1]

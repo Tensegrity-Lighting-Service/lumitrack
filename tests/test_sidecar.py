@@ -73,9 +73,11 @@ def test_set_timecode_chase_arms_transport_and_persists():
     assert session.project.to_dict()["timecodeChaseEnabled"] is True
 
     # Un paquet TC recu fait avancer le transport, offset projet soustrait.
+    # approx : now_ms extrapole a l'horloge murale depuis le paquet (fix
+    # "gros delai" 2026-08-07) — quelques micro-ms ici.
     session.project.timecode_offset_ms = 1000.0
     session._on_external_timecode(5000.0, 25.0)
-    assert session.transport.now_ms() == 4000.0
+    assert session.transport.now_ms() == pytest.approx(4000.0, abs=20.0)
     assert session.transport.playing is True
 
     reply = _run(_handle_message(session, {"type": "set_timecode_chase", "enabled": False}))
@@ -83,6 +85,80 @@ def test_set_timecode_chase_arms_transport_and_persists():
     assert session.transport.external_sync is False
     assert session.transport.playing is False   # fige la ou le TC s'est arrete
     del type(session.timecode_input).running
+
+
+def test_set_activations_preview_skips_broadcast_and_auto_duration():
+    """Mode APERCU (2026-08-07, 'ca rame toujours' a 78 acteurs) : un
+    echantillon preview:true applique les cibles + rebuild (le tick porte
+    le retour visuel) mais repond un ack (pas de rediffusion projet) et
+    saute la passe auto-duration ; l'ecriture finale non-preview paie tout
+    une seule fois."""
+    session = Session()
+    cue = session.project.cues[0]
+    cue.auto_duration = True
+    dur_before = cue.duration_ms
+    reply = _run(_handle_message(session, {
+        "type": "set_activations", "cueId": cue.id, "preview": True,
+        "entries": [{"pointId": "p1", "targetXCm": 4000.0, "targetYCm": 2000.0}],
+    }))
+    assert reply == {"type": "ack"}          # reply non-None = pas de broadcast
+    assert cue.activations["p1"].target_x_cm == 4000.0
+    assert cue.duration_ms == dur_before     # auto-duration sautee en preview
+
+    reply = _run(_handle_message(session, {
+        "type": "set_activations", "cueId": cue.id,
+        "entries": [{"pointId": "p1", "targetXCm": 4000.0, "targetYCm": 2000.0}],
+    }))
+    assert reply is None                     # ecriture finale = broadcast
+    assert cue.duration_ms != dur_before     # auto-duration reappliquee
+
+
+def test_blocks_never_overlap_on_a_lane():
+    """Invariant tranche H (2026-08-07) : jamais deux blocs superposes sur
+    une meme piste, quel que soit le chemin — add_cue, update_cue
+    (deplacement/etirement/changement de piste), duree auto. Politique :
+    le bloc MODIFIE est reloge sur la premiere piste libre, jamais les
+    autres (pas d'effet domino)."""
+    session = Session()
+    session.project.cues = []
+    _run(_handle_message(session, {"type": "add_cue", "name": "A",
+                                   "startMs": 0, "durationMs": 4000, "id": "a", "lane": 0}))
+    # Creation chevauchante -> relogee piste 1, A intact.
+    _run(_handle_message(session, {"type": "add_cue", "name": "B",
+                                   "startMs": 2000, "durationMs": 4000, "id": "b", "lane": 0}))
+    a = session.project.cue_by_id("a"); b = session.project.cue_by_id("b")
+    assert (a.lane, a.start_ms) == (0, 0)
+    assert b.lane == 1
+
+    # Deplacement de B hors conflit -> il peut revenir piste 0.
+    _run(_handle_message(session, {"type": "update_cue", "cueId": "b",
+                                   "startMs": 5000, "lane": 0}))
+    assert session.project.cue_by_id("b").lane == 0
+
+    # Etirement de A jusque dans B -> A (le modifie) est reloge, B intact.
+    _run(_handle_message(session, {"type": "update_cue", "cueId": "a",
+                                   "durationMs": 6000}))
+    a = session.project.cue_by_id("a"); b = session.project.cue_by_id("b")
+    assert (b.lane, b.start_ms) == (0, 5000)
+    assert a.lane == 1
+
+
+def test_overlapping_save_is_sanitized_on_load():
+    """Une sauvegarde d'AVANT l'invariant (blocs superposes) est assainie
+    au chargement, dans l'ordre chronologique."""
+    session = Session()
+    d = session.project.to_dict()
+    d["cues"] = [
+        {"id": "x", "name": "X", "color": "#111111", "startMs": 0,
+         "durationMs": 3000, "lane": 0, "autoDuration": False, "activations": {}},
+        {"id": "y", "name": "Y", "color": "#222222", "startMs": 1000,
+         "durationMs": 3000, "lane": 0, "autoDuration": False, "activations": {}},
+        {"id": "z", "name": "Z", "color": "#333333", "startMs": 2000,
+         "durationMs": 3000, "lane": 0, "autoDuration": False, "activations": {}},
+    ]
+    session.set_project(Project.from_dict(d))
+    lanes = {c.id: c.lane for c in session.project.cues}
+    assert lanes == {"x": 0, "y": 1, "z": 2}
 
 
 def test_save_bundle_reply_echoes_the_exact_path(tmp_path):
@@ -660,3 +736,69 @@ def test_set_audio_updates_path_duration_and_transport():
     assert session.project.audio_path is None
     assert session.project.audio_duration_s is None
     assert session.transport.duration_ms == pytest.approx(cue_end)
+
+
+# ---- Fichier de secours anti-crash (2026-08-07) --------------------------
+# Contrat : ecrit en continu pendant l'usage, EFFACE a toute sortie propre
+# (clean_exit, sauvegarde ou non) ; present au demarrage = crash -> le
+# frontend est notifie (rescue_available) et choisit load/discard.
+
+def test_clean_exit_removes_rescue_and_freezes_writes(tmp_path):
+    import os
+    from lumitrack.sidecar import rescue_path
+    session = Session()
+    path = rescue_path()
+    session.project.save(path)
+    assert os.path.isfile(path)
+    reply = _run(_handle_message(session, {"type": "clean_exit"}))
+    assert reply == {"type": "ack"}
+    assert not os.path.isfile(path)
+    assert session.exiting is True
+
+
+def test_rescue_detected_then_loaded():
+    import os
+    from lumitrack.sidecar import rescue_path
+    seed = Session()
+    seed.project.name = "CrashShow"
+    seed.project.save(rescue_path())
+
+    session = Session()  # nouveau demarrage : fichier present = crash
+    assert session.rescue_available is True
+    assert session.project.name != "CrashShow"  # PAS charge silencieusement
+
+    reply = _run(_handle_message(session, {"type": "load_rescue"}))
+    assert reply is None  # mutation -> broadcast projet
+    assert session.project.name == "CrashShow"
+    assert session.rescue_available is False
+    assert os.path.isfile(rescue_path())  # garde le filet jusqu'a la sortie propre
+
+
+def test_rescue_discarded_deletes_file():
+    import os
+    from lumitrack.sidecar import rescue_path
+    seed = Session()
+    seed.project.save(rescue_path())
+
+    session = Session()
+    assert session.rescue_available is True
+    reply = _run(_handle_message(session, {"type": "discard_rescue"}))
+    assert reply == {"type": "ack"}
+    assert session.rescue_available is False
+    assert not os.path.isfile(rescue_path())
+
+
+def test_legacy_autosave_migrates_to_rescue():
+    import os
+    from lumitrack.sidecar import rescue_path
+    seed = Session()
+    seed.project.name = "AncienneSession"
+    legacy = os.path.join(os.path.dirname(rescue_path()), "autosave.json")
+    seed.project.save(legacy)
+    os.remove(rescue_path()) if os.path.isfile(rescue_path()) else None
+
+    session = Session()
+    assert not os.path.isfile(legacy)
+    assert session.rescue_available is True
+    _run(_handle_message(session, {"type": "load_rescue"}))
+    assert session.project.name == "AncienneSession"

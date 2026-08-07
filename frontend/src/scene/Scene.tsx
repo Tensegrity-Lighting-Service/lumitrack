@@ -25,22 +25,33 @@
 // outline/handles) is nested inside one <StageGroup> so it only has to
 // reason in the rectangle's own local metres — the group's transform does
 // the placement once, rather than every child re-deriving it.
-import { Suspense, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { Suspense, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
-import { OrthographicCamera, MapControls, useGLTF, Line, PivotControls } from '@react-three/drei'
+import { OrthographicCamera, MapControls, useGLTF, Line, Html } from '@react-three/drei'
 import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { fileSrc } from '../fileSrc'
 import { ErrorBoundary } from '../ui/ErrorBoundary'
-import { sidecar } from '../sidecar'
+import { sidecar, useTick } from '../sidecar'
 import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, Cue, PathPoint, Point, Project, Pose } from '../types'
-import { boundsOf, rotationArc } from './transformBox'
 import { openContextMenu } from '../ui/contextMenuStore'
 import { buildActorContextMenuSections, buildFocusPointContextMenuSections } from '../ui/actorContextMenu'
-import { t } from '../i18n'
+import { t, t as t2 } from '../i18n'
 
-const CM_TO_M = 0.01
-const DRAG_SEND_INTERVAL_MS = 33 // ~30/s — matches the sidecar's own tick rate
+// Outils du hit-test 2D des acteurs (module-level, reutilises).
+const PICK_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+const PICK_RAYCASTER = new THREE.Raycaster()
+const PICK_HIT = new THREE.Vector3()
+const PICK_NDC = new THREE.Vector2()
+
+// Reference STABLE pour 'aucun tick encore' (evite un nouvel objet par rendu).
+const EMPTY_POSITIONS: Record<string, Pose> = {}
+import { CM_TO_M, DRAG_SEND_INTERVAL_MS, HANDLE_PX, stageToLocal, ScreenSizedHandle, type DragKind } from './sceneShared'
+import { useDragOverrides, setDragOverrides, clearDragOverrides } from './dragOverride'
+import { TransformBox } from './TransformBoxGizmo'
+import { gradientColors, chevronPlacements, zoomBucket, darkenHex } from './trajectoryViz'
+import { SELECT_WAYPOINT_EVENT } from '../timeline/waypoints'
+
 // Redesign 2026-08-04 (Florian: "les acteurs sont vraiment petits sur un
 // terrain de cette taille, et à l'inverse le point sélectionné est trop
 // gros trop vulgaire") — replaced the old sphere with a flat disc, same
@@ -62,14 +73,9 @@ const FIT_PADDING = 0.9 // leaves a small margin around the fit region on zoom-t
 // ScreenSizedMesh — rather than a fixed world size, which would shrink to
 // invisible once "zoom to fit" frames a whole arena (~100m) and was the
 // root of "on ne voit pas du tout les éléments de transformation".
-const HANDLE_PX = 11
 const ROTATE_HANDLE_PX = 9
 const ROTATE_HANDLE_OFFSET_PX = 40 // distance above the top edge, same constant-screen-size logic
 const SNAP_RADIUS_M = 0.6
-// Target ghosts keep a constant screen size like the zone handles do — a
-// world-sized marker would be unreadable at zoom-to-fit scale, defeating
-// the whole "every edit has visible feedback" point of block-edit mode.
-const GHOST_PX = 15
 // Badge numéro/abrégé sur chaque acteur, comme Stancz (le numéro affiché
 // dans son UI, cf. CONCEPTION.md §1.3 — "candidat naturel pour l'ID de
 // tracker"). Taille écran constante : doit rester lisible même au zoom-to-
@@ -83,12 +89,15 @@ const WAYPOINT_PX = 9
 // espace réel : un point de focus n'a pas d'occupation physique réelle à
 // représenter fidèlement, juste un repère à toujours voir).
 const FOCUS_MARKER_PX = 16
-const BOX_PAD_PX = 14
 const PATH_HANDLE_PX = 6
 // Live-state dimming in block-edit mode (§12.6): activated actors stay
 // readable, the rest is context; the ghosts/trajectories are the subject.
-const EDIT_ACTIVATED_OPACITY = 0.45
-const EDIT_BYSTANDER_OPACITY = 0.18
+// Transparence du mode edition SUPPRIMEE (demande 2026-08-07, 'supprime
+// la transparence des acteurs lorsqu'un bloc est selectionne') : les
+// acteurs restent pleinement lisibles, seuls ghosts/trajectoires
+// gardent leur systeme d'emphase.
+const EDIT_ACTIVATED_OPACITY = 1
+const EDIT_BYSTANDER_OPACITY = 1
 const SNAP_MAX_POINTS = 4000 // subsampled if the floor layer is denser than this
 // How close to the terrain's own minimum Y counts as "floor level". Height-
 // based, not name-based: any venue survey has *some* ground plane, but node
@@ -121,13 +130,6 @@ const ZOOM_CONVERGE_RATE = 13
 const ZOOM_GROUND_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const ZOOM_HIT = new THREE.Vector3()
 
-/** Stage (x_cm, y_cm depth, z_cm height) -> StageGroup-local metres
- * (X, Y up, Z). The group's own transform (position/rotation) then places
- * this into world space — children never need the placement themselves. */
-function stageToLocal(x_cm: number, y_cm: number, z_cm: number): [number, number, number] {
-  return [x_cm * CM_TO_M, z_cm * CM_TO_M, y_cm * CM_TO_M]
-}
-
 export interface PlanarBounds {
   minX: number
   maxX: number
@@ -150,6 +152,10 @@ export interface SnapPoint { x: number; z: number }
  * for any venue survey. Grandstands/roof/rigging sit well above the floor
  * so they're naturally excluded; whatever's drawn on the ground (pitch
  * lines, markings, thresholds) is exactly what's left. */
+// Résolution maximale du bake terrain (px, côté long) — 4096 couvre un
+// terrain de 100 m à ~4 cm/px, largement au-delà du besoin de lecture.
+const TERRAIN_BAKE_MAX_PX = 4096
+
 function Terrain({ path, rotationDeg, onBounds, onSnapPoints }: {
   path: string
   rotationDeg: number
@@ -158,22 +164,32 @@ function Terrain({ path, rotationDeg, onBounds, onSnapPoints }: {
 }) {
   const url = useMemo(() => fileSrc(path), [path])
   const { scene } = useGLTF(url)
-  const groupRef = useRef<THREE.Group>(null)
-  // Bornes et points de snap recalculés APRÈS application de la rotation
-  // (matrices monde à jour) — sinon le snap viserait l'ancien terrain.
+  const { gl } = useThree()
+  // BAKE 2D (audit fluidité 2026-08-07, idée de Florian : "rendre le 3D
+  // en 2D tout en gardant les mesures absolues") : un survey d'aréna =
+  // des centaines de meshes/matériaux redessinés à CHAQUE frame pour un
+  // décor STATIQUE — 30-45 fps au repos rien que pour lui. On le rend UNE
+  // FOIS dans une texture orthographique vue du dessus, affichée comme UN
+  // plan aux dimensions monde exactes (1 draw call). La vue étant
+  // orthographique du dessus, le résultat est visuellement identique ;
+  // bounds et points de snap restent calculés sur la vraie géométrie.
+  const [baked, setBaked] = useState<{
+    texture: THREE.Texture
+    centerX: number; centerZ: number
+    widthM: number; depthM: number
+    floorY: number
+  } | null>(null)
   useEffect(() => {
-    const g = groupRef.current
-    if (!g) return
-    g.rotation.y = -THREE.MathUtils.degToRad(rotationDeg)
-    g.updateWorldMatrix(true, true)
+    scene.rotation.y = -THREE.MathUtils.degToRad(rotationDeg)
+    scene.updateWorldMatrix(true, true)
 
-    const box = new THREE.Box3().setFromObject(g)
+    const box = new THREE.Box3().setFromObject(scene)
     onBounds({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z })
 
     const floorY = box.min.y + SNAP_FLOOR_EPSILON_M
     const points: SnapPoint[] = []
     const v = new THREE.Vector3()
-    g.traverse((node) => {
+    scene.traverse((node) => {
       if (points.length >= SNAP_MAX_POINTS) return
       if (!(node instanceof THREE.Mesh)) return
       const position = node.geometry.getAttribute('position')
@@ -184,8 +200,48 @@ function Terrain({ path, rotationDeg, onBounds, onSnapPoints }: {
       }
     })
     onSnapPoints(points)
-  }, [scene, rotationDeg, onBounds, onSnapPoints])
-  return <group ref={groupRef}><primitive object={scene} /></group>
+
+    // ---- Bake orthographique vu du dessus ----
+    const widthM = Math.max(0.001, box.max.x - box.min.x)
+    const depthM = Math.max(0.001, box.max.z - box.min.z)
+    const centerX = (box.min.x + box.max.x) / 2
+    const centerZ = (box.min.z + box.max.z) / 2
+    const long = Math.max(widthM, depthM)
+    const resX = Math.max(64, Math.round((widthM / long) * TERRAIN_BAKE_MAX_PX))
+    const resY = Math.max(64, Math.round((depthM / long) * TERRAIN_BAKE_MAX_PX))
+    const target = new THREE.WebGLRenderTarget(resX, resY, { samples: 4 })
+    const bakeScene = new THREE.Scene()
+    bakeScene.add(scene)
+    bakeScene.add(new THREE.AmbientLight(0xffffff, 1.6))
+    const sun = new THREE.DirectionalLight(0xffffff, 0.8)
+    sun.position.set(centerX, box.max.y + long, centerZ)
+    bakeScene.add(sun)
+    const cam = new THREE.OrthographicCamera(-widthM / 2, widthM / 2, depthM / 2, -depthM / 2, 0.1, box.max.y - box.min.y + 20)
+    cam.position.set(centerX, box.max.y + 10, centerZ)
+    cam.up.set(0, 0, -1)
+    cam.lookAt(centerX, 0, centerZ)
+    cam.updateProjectionMatrix()
+    const prevTarget = gl.getRenderTarget()
+    gl.setRenderTarget(target)
+    gl.render(bakeScene, cam)
+    gl.setRenderTarget(prevTarget)
+    bakeScene.remove(scene)
+    setBaked((prev) => {
+      prev?.texture.dispose()
+      return { texture: target.texture, centerX, centerZ, widthM, depthM, floorY: box.min.y }
+    })
+  }, [scene, rotationDeg, onBounds, onSnapPoints, gl])
+
+  if (!baked) return null
+  return (
+    <mesh
+      position={[baked.centerX, baked.floorY, baked.centerZ]}
+      rotation={[-Math.PI / 2, 0, 0]}
+    >
+      <planeGeometry args={[baked.widthM, baked.depthM]} />
+      <meshBasicMaterial map={baked.texture} toneMapped={false} />
+    </mesh>
+  )
 }
 
 function GenericFloor({ widthM, heightM }: { widthM: number; heightM: number }) {
@@ -197,18 +253,15 @@ function GenericFloor({ widthM, heightM }: { widthM: number; heightM: number }) 
   )
 }
 
-function Actor({ pose, color, selected, draggable, opacity, radiusM, onPointerDown, onContextMenu }: {
+const Actor = memo(function Actor({ pose, color, selected, opacity, radiusM }: {
   pose: Pose
   color: string
   selected: boolean
-  draggable: boolean
   /** 1 in live view; dimmed in block-edit mode, where the live state is
    * context and the targets/trajectories are the subject (§12.6). */
   opacity: number
   /** Réglage projet (menu Réglages), pas une constante — cf. ACTOR_RADIUS_M. */
   radiusM: number
-  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
-  onContextMenu?: (e: ThreeEvent<MouseEvent>) => void
 }) {
   const [x_cm, y_cm, z_cm, yaw_deg] = pose
   const [x, y, z] = stageToLocal(x_cm, y_cm, z_cm)
@@ -229,10 +282,6 @@ function Actor({ pose, color, selected, draggable, opacity, radiusM, onPointerDo
       // travers). Même formule que TargetGhost — les deux DOIVENT bouger
       // ensemble.
       rotation={[0, Math.PI / 2 - yawRad, 0]}
-      onPointerDown={onPointerDown}
-      onContextMenu={onContextMenu}
-      onPointerOver={() => { document.body.style.cursor = draggable ? 'grab' : 'pointer' }}
-      onPointerOut={() => { document.body.style.cursor = 'auto' }}
     >
       {/* Disque plat vu du dessus — plus une sphère 3D, qui perdait de sa
           taille apparente sous l'éclairage/l'ombrage en vue du dessus.
@@ -258,14 +307,12 @@ function Actor({ pose, color, selected, draggable, opacity, radiusM, onPointerDo
           <meshBasicMaterial color="#ffffff" transparent opacity={opacity} depthTest={false} side={THREE.DoubleSide} />
         </mesh>
       )}
-      {/* Larger invisible hit target: the visible marker is small, dragging
-          shouldn't require pixel-perfect aim on it. */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} visible={false}>
-        <circleGeometry args={[r * 1.8, 12]} />
-      </mesh>
     </group>
   )
-}
+}, (a, b) =>
+  a.pose[0] === b.pose[0] && a.pose[1] === b.pose[1] && a.pose[2] === b.pose[2] && a.pose[3] === b.pose[3]
+  && a.color === b.color && a.selected === b.selected
+  && a.opacity === b.opacity && a.radiusM === b.radiusM)
 
 /** Numéro Stancz si défini, sinon initiales/abrégé du nom (jamais vide —
  * un acteur sans numéro ni nom reste identifiable). */
@@ -295,7 +342,7 @@ function focusPointLabelText(point: Point): string {
  * n'importe quelle couleur d'acteur. Positionné à la hauteur réelle de
  * l'acteur mais hors de son groupe pivoté : le numéro ne doit jamais
  * tourner avec le lacet (yaw), contrairement au cône directionnel. */
-function ActorLabel({ text, xCm, yCm, zCm, opacity, scale = 1 }: {
+const ActorLabel = memo(function ActorLabel({ text, xCm, yCm, zCm, opacity, scale = 1 }: {
   text: string; xCm: number; yCm: number; zCm: number; opacity: number
   /** Réduit la taille écran fixe du badge — les acteurs entassés en
    * backstage (nombreux, espacement réel serré) faisaient se chevaucher les
@@ -309,7 +356,7 @@ function ActorLabel({ text, xCm, yCm, zCm, opacity, scale = 1 }: {
     canvas.width = 64
     canvas.height = 64
     const ctx = canvas.getContext('2d')!
-    ctx.font = '700 38px system-ui, sans-serif'
+    ctx.font = '700 38px Roboto, system-ui, sans-serif'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.lineWidth = 7
@@ -334,14 +381,30 @@ function ActorLabel({ text, xCm, yCm, zCm, opacity, scale = 1 }: {
       <meshBasicMaterial map={texture} transparent opacity={opacity} depthTest={false} depthWrite={false} />
     </mesh>
   )
-}
+})
 
 /** Visual weight of one block-edit element, driven by actor selection
  * (§12.6): no actor selected → every trajectory reads equally; an actor
  * selected → its trajectory/ghost pops, the rest stays visible but dim. */
 type Emphasis = 'highlight' | 'normal' | 'dim'
 
-const EMPHASIS_OPACITY: Record<Emphasis, number> = { highlight: 1, normal: 0.85, dim: 0.25 }
+const EMPHASIS_OPACITY: Record<Emphasis, number> = { highlight: 1, normal: 0.7, dim: 0.18 }
+const EMPHASIS_LINE_WIDTH: Record<Emphasis, number> = { highlight: 4, normal: 2, dim: 1.25 }
+// Chevrons de direction (B2) : espacement écran ~56 px, taille ~9 px.
+const CHEVRON_SPACING_PX = 56
+const CHEVRON_PX = 9
+const CHEVRON_MAX = 24
+// Triangle plat unitaire pointant +X dans le plan XZ (créé UNE fois).
+const CHEVRON_GEOMETRY = (() => {
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute([
+    0.65, 0, 0,
+    -0.45, 0, 0.42,
+    -0.45, 0, -0.42,
+  ], 3))
+  g.computeVertexNormals()
+  return g
+})()
 
 /** Static trajectory of one activation in the selected block: the polyline
  * sampled by the backend from the real tracking-chain start to the target
@@ -357,23 +420,88 @@ function Trajectory({ path, color, emphasis, onDoubleClick }: {
     () => path.map(([x_cm, y_cm, z_cm]) => new THREE.Vector3(...stageToLocal(x_cm, y_cm, z_cm))),
     [path],
   )
+  // Dégradé temporel (B2.1) : sombre au départ → couleur pleine à la
+  // cible — le sens de lecture devient évident sans animation.
+  const vertexColors = useMemo(() => gradientColors(path.length, color), [path, color])
+  // Chevrons de direction (B2.2) : espacement écran-constant via bucket
+  // de zoom quantifié — recalcul uniquement au changement de palier.
+  const [bucket, setBucket] = useState(1)
+  const bucketRef = useRef(1)
+  useFrame(({ camera }) => {
+    const b = zoomBucket((camera as THREE.OrthographicCamera).zoom || 1)
+    if (b !== bucketRef.current) { bucketRef.current = b; setBucket(b) }
+  })
+  const chevrons = useMemo(
+    () => (emphasis === 'dim'
+      ? []
+      : chevronPlacements(path, (CHEVRON_SPACING_PX / bucket) / CM_TO_M, CHEVRON_MAX)),
+    [path, bucket, emphasis],
+  )
+  const chevronS = (CHEVRON_PX / bucket)
+  const opacity = EMPHASIS_OPACITY[emphasis]
   return (
-    <Line
-      points={points}
-      color={color}
-      lineWidth={emphasis === 'highlight' ? 3.5 : 2}
-      transparent
-      opacity={EMPHASIS_OPACITY[emphasis]}
-      depthTest={false}
-      renderOrder={1010}
-      onDoubleClick={onDoubleClick}
-    />
+    <group>
+      <Line
+        points={points}
+        color="#ffffff"
+        vertexColors={vertexColors}
+        lineWidth={EMPHASIS_LINE_WIDTH[emphasis]}
+        transparent
+        opacity={opacity}
+        depthTest={false}
+        renderOrder={1010}
+        onDoubleClick={onDoubleClick}
+      />
+      {chevrons.map((c, i) => {
+        const [x, y, z] = stageToLocal(c.xCm, c.yCm, c.zCm)
+        return (
+          <mesh
+            key={i}
+            geometry={CHEVRON_GEOMETRY}
+            position={[x, y + 0.03, z]}
+            rotation={[0, -c.angleRad, 0]}
+            scale={[chevronS, chevronS, chevronS]}
+            renderOrder={1011}
+            raycast={() => null}
+          >
+            <meshBasicMaterial color={color} transparent opacity={opacity} depthTest={false} side={THREE.DoubleSide} />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
+/** Fantôme de départ (B2.5) : petit anneau écran-constant (~7 px) à la
+ * position de départ de l'activation, couleur assombrie — marque d'où
+ * l'acteur PART (le dégradé dit ensuite dans quel sens lire). Pur
+ * affichage, jamais cliquable. */
+function StartGhost({ pose, color, opacity }: {
+  pose: [number, number, number]
+  color: string
+  opacity: number
+}) {
+  const [x, y, z] = stageToLocal(pose[0], pose[1], pose[2])
+  const ref = useRef<THREE.Group>(null)
+  useFrame(({ camera }) => {
+    if (!ref.current) return
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const s = 7 / zoom
+    ref.current.scale.set(s, s, s)
+  })
+  return (
+    <group ref={ref} position={[x, y + 0.02, z]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={1009} raycast={() => null}>
+        <ringGeometry args={[0.62, 1, 24]} />
+        <meshBasicMaterial color={darkenHex(color, 0.45)} transparent opacity={opacity} depthTest={false} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
   )
 }
 
 /** Marqueur d'édition du tracé à taille écran constante (waypoint = carré
  * pivoté, poignée = disque). Même logique de zoom que TargetGhost. */
-function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown, onContextMenu }: {
+function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, halo, onPointerDown, onContextMenu }: {
   xCm: number
   yCm: number
   zCm: number
@@ -381,6 +509,9 @@ function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown, 
   color: string
   shape: 'diamond' | 'dot'
   selected: boolean
+  /** B2.4 : halo sombre contrasté derrière le marqueur — keyframes des
+   * acteurs SÉLECTIONNÉS nettement visibles au-dessus des trajectoires. */
+  halo?: boolean
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
   onContextMenu?: (e: ThreeEvent<MouseEvent>) => void
 }) {
@@ -402,6 +533,14 @@ function PathMarker({ xCm, yCm, zCm, px, color, shape, selected, onPointerDown, 
         onPointerOver={() => { document.body.style.cursor = 'grab' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
       >
+        {halo && (
+          <mesh renderOrder={1029} raycast={() => null}>
+            {shape === 'diamond'
+              ? <planeGeometry args={[1.45, 1.45]} />
+              : <circleGeometry args={[0.75, 20]} />}
+            <meshBasicMaterial color="#0c0c10" depthTest={false} transparent opacity={0.9} side={THREE.DoubleSide} />
+          </mesh>
+        )}
         {shape === 'diamond'
           ? <mesh renderOrder={1030}>
               <planeGeometry args={[1, 1]} />
@@ -516,12 +655,17 @@ function PathEditOverlay({ entry, act, color, selectedIndex, onWaypointDown, onH
         </group>
       ))}
       {wps.map((wp, i) => (
-        <PathMarker
-          key={`wp-${i}`}
-          xCm={wp.xCm} yCm={wp.yCm} zCm={zCm}
-          px={WAYPOINT_PX} color={color} shape="diamond" selected={i === selectedIndex}
-          onPointerDown={(e) => onWaypointDown(e, i)}
-        />
+        <group key={`wp-${i}`}>
+          {/* B2.4 : keyframes de l'acteur sélectionné nettement visibles —
+              +2 px, halo sombre, numéro d'ordre à côté du losange. */}
+          <PathMarker
+            xCm={wp.xCm} yCm={wp.yCm} zCm={zCm}
+            px={WAYPOINT_PX + 2} color={color} shape="diamond" halo
+            selected={i === selectedIndex}
+            onPointerDown={(e) => onWaypointDown(e, i)}
+          />
+          <ActorLabel text={String(i + 1)} xCm={wp.xCm} yCm={wp.yCm} zCm={zCm} opacity={0.9} scale={0.55} />
+        </group>
       ))}
     </group>
   )
@@ -532,29 +676,29 @@ function PathEditOverlay({ entry, act, color, selectedIndex, onWaypointDown, onH
  * as the zone handles). Draggable: grabbing the ghost — like dragging the
  * actor itself while a block is selected — moves the block's target, so the
  * thing being edited is always the thing on screen. */
-function TargetGhost({ pose, color, emphasis, onPointerDown }: {
+function TargetGhost({ pose, color, emphasis, radiusM, onPointerDown }: {
   pose: Pose
   color: string
   emphasis: Emphasis
+  /** Harmonisation 2026-08-07 ('leur taille est dementielle') : le ghost
+   * adopte la taille MONDE de l'acteur (meme regle que le disque —
+   * zoomer pour le detail), plus jamais une taille ecran constante qui
+   * dominait la scene dezoomee et dont la hitbox ecran volait les clics
+   * entre acteurs proches. */
+  radiusM: number
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
 }) {
   const [x_cm, y_cm, z_cm, yaw_deg] = pose
   const [x, y, z] = stageToLocal(x_cm, y_cm, z_cm)
   const yawRad = THREE.MathUtils.degToRad(yaw_deg)
-  const scaledRef = useRef<THREE.Group>(null)
-  useFrame(({ camera }) => {
-    if (!scaledRef.current) return
-    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
-    const s = GHOST_PX / zoom
-    scaledRef.current.scale.set(s, s, s)
-  })
+  const s = radiusM * 1.1
   const opacity = EMPHASIS_OPACITY[emphasis]
   return (
     // π/2 − yaw : même convention que Actor (voir son commentaire) —
     // lacet 0° = est, cône au repos vers +Z local.
     <group position={[x, y, z]} rotation={[0, Math.PI / 2 - yawRad, 0]}>
       <group
-        ref={scaledRef}
+        scale={[s, s, s]}
         onPointerDown={onPointerDown}
         onPointerOver={() => { document.body.style.cursor = 'grab' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
@@ -684,7 +828,6 @@ function GridOverlay({ widthM, heightM, cellM, shade, opacity }: {
   )
 }
 
-type DragKind = 'move' | 'resize' | 'rotate'
 
 /** One of the 8 resize handles: 4 corners (resize both axes) + 4 edge
  * midpoints (resize one axis, "le resize doit pouvoir se faire depuis les
@@ -724,60 +867,6 @@ function findSnap(x: number, z: number, points: SnapPoint[]): SnapPoint | null {
     }
   }
   return best
-}
-
-/** Keeps a constant *screen* size (px) regardless of camera zoom — a fixed
- * world size would shrink to invisible once "zoom to fit" frames a whole
- * arena (~100m), which was the root of "on ne voit pas du tout les éléments
- * de transformation". `args` is the geometry's aspect ratio at unit scale
- * (e.g. [1,1,1] square, [0.35,1,1] a bar elongated along Z) — actual size
- * comes entirely from the per-frame scale below. Unlit meshBasicMaterial:
- * these are a 2D editing overlay, not scene-lit geometry. */
-function ScreenSizedHandle({ position, sizePx, args, color, onPointerDown, cursor, renderOrder }: {
-  position: [number, number, number]
-  sizePx: number
-  args: [number, number, number]
-  color: string
-  onPointerDown: (e: ThreeEvent<PointerEvent>) => void
-  cursor: string
-  renderOrder: number
-}) {
-  // Zone de saisie ÉLARGIE : un carré invisible ~2.6x autour de la poignée
-  // visible — attraper une poignée ne demande plus une visée au pixel.
-  const hitRef = useRef<THREE.Mesh>(null)
-  const ref = useRef<THREE.Mesh>(null)
-  useFrame(({ camera }) => {
-    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
-    const s = sizePx / zoom
-    if (ref.current) ref.current.scale.set(s, s, s)
-    if (hitRef.current) hitRef.current.scale.set(s * 2.6, s * 2.6, s * 2.6)
-  })
-  return (
-    <group>
-      <mesh
-        ref={ref}
-        position={position}
-        renderOrder={renderOrder}
-        onPointerDown={onPointerDown}
-        onPointerOver={() => { document.body.style.cursor = cursor }}
-        onPointerOut={() => { document.body.style.cursor = 'auto' }}
-      >
-        <boxGeometry args={args} />
-        <meshBasicMaterial color={color} depthTest={false} />
-      </mesh>
-      <mesh
-        ref={hitRef}
-        position={position}
-        renderOrder={renderOrder - 1}
-        onPointerDown={onPointerDown}
-        onPointerOver={() => { document.body.style.cursor = cursor }}
-        onPointerOut={() => { document.body.style.cursor = 'auto' }}
-      >
-        <boxGeometry args={[1, 0.4, 1]} />
-        <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} />
-      </mesh>
-    </group>
-  )
 }
 
 /** Rotate handle: offset outward from the top edge (screen-up is -Z, since
@@ -1125,7 +1214,7 @@ function ZoneLabel({ text, xCm, yCm }: { text: string; xCm: number; yCm: number 
     canvas.width = 256
     canvas.height = 40
     const ctx = canvas.getContext('2d')!
-    ctx.font = '600 24px system-ui, sans-serif'
+    ctx.font = '600 24px Roboto, system-ui, sans-serif'
     ctx.fillStyle = '#7ee0d0'
     ctx.textBaseline = 'middle'
     ctx.fillText(text, 6, 20)
@@ -1270,352 +1359,83 @@ function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZo
   )
 }
 
-/** Boîte de transformation de la sélection multiple — remplace le gizmo
- * fabriqué à la main (instable près du pivot en rotation, course avec le
- * lasso jamais totalement fiable) par `PivotControls` de drei (2026-08-01,
- * demande explicite de Florian après plusieurs tentatives ratées :
- * "on décortique ça ensemble" — préférer une librairie éprouvée à du code
- * maison pour ce genre d'interaction). `autoTransform={false}` : on
- * n'attache aucun objet réel au gizmo (la "sélection" est virtuelle, ce
- * sont des positions d'activation, pas des meshes) — `onDrag` reçoit la
- * matrice delta et on l'applique nous-mêmes à chaque acteur, exactement le
- * même principe que le geste précédent (calcul de cible + écriture via
- * `sidecar.setActivation`), juste piloté par un gizmo éprouvé plutôt que
- * des poignées maison. `activeAxes={[true, false, true]}` limite aux
- * translations X/Z (le sol) + UNE seule bague de rotation (autour de Y,
- * la verticale) — cf. le code source de PivotControls : la bague de
- * rotation autour d'un axe n'apparaît que si les deux AUTRES axes sont
- * actifs, donc désactiver Y masque justement les bagues X et Z tout en
- * gardant celle-ci.
- *
- * Changement de comportement assumé : le redimensionnement (poignées
- * d'angle/d'arête) ancrait l'angle OPPOSÉ avant ; les sphères de mise à
- * l'échelle de PivotControls redimensionnent depuis le CENTRE du pivot
- * (le centre du groupe sélectionné) — plus prévisible pour "resserrer/
- * écarter une formation", à valider à l'usage.
- */
-function SelectionTransform({ project, positions, selectedCueId, selectedPointIds, controlsRef, snapToGrid, gridSizeCm, dragActiveRef, resolveGestureCue, blockEntries }: {
+/** Indicateur de cible du geste (tranche D, 2026-08-07, "clarifier la
+ * lisibilite entre selection libre au-dessus d'un cue ou dans le vide") :
+ * petit HUD non interactif en bas a gauche du viewport qui dit en
+ * permanence ce qu'un geste ferait — editer le bloc selectionne, editer
+ * le bloc GOUVERNANT au playhead, ou creer un nouveau bloc. Lecture
+ * seule : la meme resolution LTP que resolveGestureCue, sans jamais rien
+ * creer. */
+function GestureHud({ project, selectedPointIds, selectedCueId }: {
   project: Project
-  positions: Record<string, Pose>
-  selectedCueId: string
-  /** Fournit le cue où écrire le geste — le bloc actif, sinon le bloc
-   * GOUVERNANT les membres au playhead (fix 2026-08-06 : "quand je bouge
-   * une sélection alors qu'il y a un bloc au playhead il crée un nouveau
-   * bloc au lieu d'éditer l'actuel"), sinon un bloc créé au playhead
-   * (fix 2026-08-05 : gizmo silencieusement inerte sans bloc actif). */
-  resolveGestureCue: (pointIds: string[]) => string
-  /** Entrées du contexte du bloc actif (départ/cible résolus par le
-   * backend) — sert à décider si l'arc de rotation a un sens (voir
-   * handleDragEnd). null hors mode édition de bloc. */
-  blockEntries: Record<string, BlockContextEntry> | null
   selectedPointIds: string[]
-  controlsRef: React.RefObject<MapControlsImpl | null>
-  snapToGrid: boolean
-  gridSizeCm: number
-  /** Partagé avec le lasso de la scène parente (voir son commentaire) : ce
-   * composant a son propre dragRef, invisible sans ce pont. */
-  dragActiveRef: React.RefObject<boolean>
+  selectedCueId: string | null
 }) {
-  const { camera, gl } = useThree()
-
-  type Member = {
-    pointId: string; baseX: number; baseY: number
-    /** null si cette phase n'est pas en mode "fixed" — "path"/"focus" sont
-     * dérivés de la position par le backend, une rotation de groupe ne
-     * doit jamais leur écrire d'angle (demande de Florian, 2026-08-01 :
-     * "une transformation rotation d'un groupe ne doit pas changer" le
-     * pivot d'un acteur gouverné par path/focus ; étendu à l'indépendance
-     * trajet/arrivée le 2026-08-04). */
-    baseTravelYaw: number | null
-    baseArrivalYaw: number | null
-  }
-  const membersNow = (): Member[] => {
-    const cue = project.cues.find((c) => c.id === selectedCueId)
-    const out: Member[] = []
-    for (const id of selectedPointIds) {
-      const act = cue?.activations[id]
-      const pose = positions[id]
-      const baseX = act?.targetXCm ?? pose?.[0]
-      const baseY = act?.targetYCm ?? pose?.[1]
-      if (baseX === undefined || baseX === null || baseY === undefined || baseY === null) continue
-      const travelMode = act?.travelOrientationMode ?? 'fixed'
-      const arrivalMode = act?.arrivalOrientationMode ?? 'hold'
-      out.push({
-        pointId: id, baseX, baseY,
-        baseTravelYaw: travelMode === 'fixed' ? (act?.travelFixedYawDeg ?? 0) : null,
-        baseArrivalYaw: arrivalMode === 'fixed' ? (act?.arrivalFixedYawDeg ?? 0) : null,
-      })
-    }
-    return out
-  }
-
-  const live = membersNow()
-  // Marge de la boîte en PIXELS écran (constante au zoom) : la boîte
-  // dépasse la sélection de ~14 px, elle reste lisible à toute échelle.
-  const zoomNow = (camera as THREE.OrthographicCamera).zoom || 1
-  const padCm = (BOX_PAD_PX / zoomNow) / CM_TO_M
-  const bounds = boundsOf(live, padCm)
-
-  const dragRef = useRef<{
-    kind: DragKind
-    members: Member[]
-    centerX: number
-    centerY: number
-    lastTheta: number
-    lastSent: number
-    /** Cue où ce geste écrit (bloc actif, gouvernant, ou créé au début
-     * du geste — voir resolveGestureCue). */
-    cueId: string
-    /** Écartement (poignées sphères) : distance ÉCRAN curseur→centre au
-     * début du geste + centre projeté à l'écran (fix 2026-08-06, "ça
-     * n'écarte pas autant que je tire") — le facteur de PivotControls
-     * est relatif à la taille du gizmo, pas au curseur réel, l'écart
-     * traînait derrière la souris. On suit le curseur nous-mêmes. */
-    resize: { startDist: number; screenCx: number; screenCy: number } | null
-  } | null>(null)
-  // Position réelle du curseur, entretenue pendant tout le cycle de vie du
-  // composant (utilisée par le facteur d'écartement ci-dessus).
-  const cursorRef = useRef({ x: 0, y: 0 })
-  // Groupe racine : porte la matrice MONDE héritée du StageGroup (le
-  // terrain peut être placé/tourné dans le monde) — indispensable pour
-  // projeter correctement le centre à l'écran.
-  const rootRef = useRef<THREE.Group>(null)
-
-  // Filet de sécurité : si PivotControls ne redéclenche pas onDragEnd pour
-  // une raison ou une autre (relâchement hors fenêtre, sélection changée
-  // en plein geste, etc.), dragActiveRef resterait bloqué à true POUR
-  // TOUJOURS — et avec lui, TOUS les lassos suivants seraient
-  // silencieusement ignorés (2026-08-01, signalé par Florian).
-  //
-  // DOIT vivre AVANT le `return null` conditionnel ci-dessous (fix
-  // 2026-08-04, attrapé par le nouvel ErrorBoundary : "Rendered more hooks
-  // than during the previous render" — un hook après un retour anticipé
-  // change le NOMBRE de hooks rendus dès que la sélection passe de vide à
-  // non-vide, interdit par React). handleDragEnd n'existant qu'après ce
-  // point, on passe par une ref toujours à jour.
-  const handleDragEndRef = useRef<() => void>(() => {})
-  useEffect(() => {
-    const onGlobalPointerUp = () => {
-      if (dragRef.current) handleDragEndRef.current()
-    }
-    const onGlobalPointerMove = (e: PointerEvent) => {
-      cursorRef.current = { x: e.clientX, y: e.clientY }
-    }
-    window.addEventListener('pointerup', onGlobalPointerUp)
-    window.addEventListener('pointercancel', onGlobalPointerUp)
-    window.addEventListener('pointermove', onGlobalPointerMove, { capture: true, passive: true })
-    return () => {
-      window.removeEventListener('pointerup', onGlobalPointerUp)
-      window.removeEventListener('pointercancel', onGlobalPointerUp)
-      window.removeEventListener('pointermove', onGlobalPointerMove, { capture: true })
-    }
-  }, [])
-
-  if (!bounds || live.length < 1) return null
-  const singleMember = live.length === 1
-  const { minX, minY, maxX, maxY } = bounds
-  const centerX = (minX + maxX) / 2
-  const centerY = (minY + maxY) / 2
-  const matrix = new THREE.Matrix4().makeTranslation(...stageToLocal(centerX, centerY, 0))
-  // La bague de rotation (et les autres poignées) doit dépasser l'étendue
-  // du groupe, pas rester collée au pivot central — sinon elle semble
-  // "trop près" pour une sélection large (signalé 2026-08-01). `scale` de
-  // PivotControls est un rayon en PIXELS ÉCRAN (fixed=true) ; on le calcule
-  // depuis la demi-diagonale du groupe (cm -> px, même conversion que
-  // padCm juste au-dessus, inversée) avec 30% de marge, jamais en dessous
-  // d'un plancher pour qu'un acteur seul reste saisissable.
-  const halfDiagCm = Math.hypot(maxX - centerX, maxY - centerY)
-  const gizmoScalePx = Math.max(70, halfDiagCm * CM_TO_M * zoomNow * 1.3)
-
-  const kindFor = (component: string): DragKind =>
-    component === 'Rotator' ? 'rotate' : component === 'Sphere' ? 'resize' : 'move'
-
-  const handleDragStart: NonNullable<React.ComponentProps<typeof PivotControls>['onDragStart']> = (props) => {
-    const members = membersNow()
-    if (members.length === 0) return
-    // Bloc actif > bloc gouvernant au playhead > création (resolveGestureCue,
-    // fixes 2026-08-05/06) — avant, le geste était silencieusement ignoré
-    // puis créait un bloc même quand un bloc gouvernait déjà les acteurs.
-    const cueId = resolveGestureCue(members.map((m) => m.pointId))
-    const kind = kindFor(props.component)
-    let resize: { startDist: number; screenCx: number; screenCy: number } | null = null
-    if (kind === 'resize') {
-      // Centre du groupe projeté à l'écran + distance initiale du curseur :
-      // le facteur d'écartement suivra le curseur RÉEL (pas le facteur de
-      // PivotControls, relatif à la taille du gizmo — l'écart traînait).
-      // localToWorld d'abord (fix 2026-08-06, "tu l'as juste inversée") :
-      // stageToLocal donne des coordonnées LOCALES au StageGroup, et le
-      // terrain est placé/tourné dans le monde — projeter le point local
-      // tel quel plaçait le "centre écran" ailleurs, et le rapport de
-      // distances pouvait s'inverser selon la direction du geste.
-      const world = new THREE.Vector3(...stageToLocal(centerX, centerY, 0))
-      rootRef.current?.parent?.localToWorld(world)
-      const ndc = world.project(camera)
-      const rect = gl.domElement.getBoundingClientRect()
-      const screenCx = rect.left + ((ndc.x + 1) / 2) * rect.width
-      const screenCy = rect.top + ((1 - ndc.y) / 2) * rect.height
-      const startDist = Math.max(8, Math.hypot(cursorRef.current.x - screenCx, cursorRef.current.y - screenCy))
-      resize = { startDist, screenCx, screenCy }
-    }
-    dragRef.current = { kind, members, centerX, centerY, lastTheta: 0, lastSent: 0, cueId, resize }
-    dragActiveRef.current = true
-    if (controlsRef.current) controlsRef.current.enabled = false
-  }
-
-  const handleDrag: NonNullable<React.ComponentProps<typeof PivotControls>['onDrag']> = (_l, deltaL) => {
-    const drag = dragRef.current
-    if (!drag) return
-    const now = performance.now()
-    if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
-    drag.lastSent = now
-
-    // Écartement : facteur = rapport des distances ÉCRAN curseur→centre —
-    // l'écart suit exactement le geste ("ça n'écarte pas autant que je
-    // tire", 2026-08-06). Homothétie autour du centre du groupe.
-    if (drag.kind === 'resize' && drag.resize) {
-      const dist = Math.hypot(cursorRef.current.x - drag.resize.screenCx, cursorRef.current.y - drag.resize.screenCy)
-      const factor = Math.max(0.02, dist / drag.resize.startDist)
-      sidecar.setActivations(drag.cueId, drag.members.map((m) => ({
-        pointId: m.pointId,
-        targetXCm: drag.centerX + (m.baseX - drag.centerX) * factor,
-        targetYCm: drag.centerY + (m.baseY - drag.centerY) * factor,
-      })))
-      return
-    }
-
-    let effectiveDelta = deltaL
-    if (drag.kind === 'move' && snapToGrid && gridSizeCm > 0) {
-      // Aimante le déplacement DU GROUPE (pas les rotations/mises à
-      // l'échelle) à la grille — reconstruit une translation pure aimantée
-      // plutôt que de laisser chaque membre s'aimanter indépendamment.
-      const centerLocal = new THREE.Vector3(...stageToLocal(drag.centerX, drag.centerY, 0))
-      const centerNew = centerLocal.clone().applyMatrix4(deltaL)
-      const dxCm = Math.round(((centerNew.x - centerLocal.x) / CM_TO_M) / gridSizeCm) * gridSizeCm
-      const dzCm = Math.round(((centerNew.z - centerLocal.z) / CM_TO_M) / gridSizeCm) * gridSizeCm
-      effectiveDelta = new THREE.Matrix4().makeTranslation(dxCm * CM_TO_M, 0, dzCm * CM_TO_M)
-    }
-
-    // Angle balayé depuis le début du geste, dérivé du MÊME transform que
-    // la position ci-dessous (jamais décomposé "à l'aveugle" en Euler
-    // depuis la matrice) : un point de référence à 1 m du pivot, avant/
-    // après application du delta, donne l'angle exactement dans la
-    // convention stage (atan2(y,x)) déjà utilisée par rotationArc, parce
-    // que stageToLocal ne fait qu'une mise à l'échelle sans retourner
-    // aucun axe (X->X, Y->Z) — la cohérence entre la position affichée
-    // pendant le geste et le lacet final est garantie par construction,
-    // pas par une déduction séparée qui pourrait diverger en signe.
-    const centerLocal = new THREE.Vector3(...stageToLocal(drag.centerX, drag.centerY, 0))
-    const centerNew = centerLocal.clone().applyMatrix4(effectiveDelta)
-    const refLocal = new THREE.Vector3(...stageToLocal(drag.centerX + 100, drag.centerY, 0))
-    const refNew = refLocal.clone().applyMatrix4(effectiveDelta)
-    const a0 = Math.atan2(refLocal.z - centerLocal.z, refLocal.x - centerLocal.x)
-    const a1 = Math.atan2(refNew.z - centerNew.z, refNew.x - centerNew.x)
-    drag.lastTheta = a1 - a0
-    // Pendant le geste, le lacet suit en direct (pas seulement au lâcher) —
-    // sinon la façade de l'acteur ne pivote qu'un coup sec à la fin,
-    // signalé comme "pas en temps réel". L'arc/tracé final (plus coûteux,
-    // avec poignées Bézier) reste calculé uniquement au relâchement.
-    const thetaDegLive = (drag.lastTheta * 180) / Math.PI
-
-    // UN message groupé par échantillon (optimisation 2026-08-06) — la
-    // version par-membre faisait rediffuser le projet N fois par sample.
-    const rotating = drag.kind === 'rotate'
-    sidecar.setActivations(drag.cueId, drag.members.map((m) => {
-      const qLocal = new THREE.Vector3(...stageToLocal(m.baseX, m.baseY, 0))
-      const qNew = qLocal.clone().applyMatrix4(effectiveDelta)
-      return {
-        pointId: m.pointId,
-        targetXCm: qNew.x / CM_TO_M, targetYCm: qNew.z / CM_TO_M,
-        ...(rotating && (m.baseTravelYaw !== null || m.baseArrivalYaw !== null)
-          ? { orientationOverridden: true } : {}),
-        ...(rotating && m.baseTravelYaw !== null
-          ? { travelFixedYawDeg: m.baseTravelYaw + thetaDegLive } : {}),
-        ...(rotating && m.baseArrivalYaw !== null
-          ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDegLive } : {}),
+  const tick = useTick()
+  if (selectedPointIds.length === 0) return null
+  const tNow = tick?.tMs ?? 0
+  let label: string
+  let editing = true
+  const named = (cue: Cue | undefined | null) => cue ? (cue.name || cue.id.slice(0, 6)) : ''
+  if (selectedCueId) {
+    label = named(project.cues.find((c) => c.id === selectedCueId))
+  } else {
+    let best: { cue: Cue; effStart: number } | null = null
+    for (const pid of selectedPointIds) {
+      for (const cue of project.cues) {
+        const act = cue.activations[pid]
+        if (!act || (act.targetXCm === null && act.targetYCm === null)) continue
+        const effStart = cue.startMs + act.startOffsetMs
+        if (effStart <= tNow && (!best || effStart >= best.effStart)) best = { cue, effStart }
       }
-    }))
-  }
-
-  const handleDragEnd = () => {
-    const drag = dragRef.current
-    dragRef.current = null
-    dragActiveRef.current = false
-    if (controlsRef.current) controlsRef.current.enabled = true
-    if (!drag || drag.kind !== 'rotate' || Math.abs(drag.lastTheta) < 1e-4) return
-    // Écriture finale de la rotation : cible + ARC autour du centre +
-    // lacet tourné du même angle (identique à avant le passage à drei).
-    const thetaDeg = (drag.lastTheta * 180) / Math.PI
-    const finalEntries: Array<Record<string, unknown> & { pointId: string }> = []
-    for (const m of drag.members) {
-      const arc = rotationArc(m.baseX, m.baseY, drag.centerX, drag.centerY, drag.lastTheta)
-      // L'arc de rotation ne décrit le CHEMIN du bloc que si l'acteur
-      // TOURNE SUR PLACE — départ résolu du bloc ≈ position d'avant
-      // rotation. Pour un bloc qui AMÈNE l'acteur d'ailleurs (entrée
-      // backstage, déplacement), greffer l'arc sur ce départ produisait
-      // des trajectoires en crochet absurdes (signalé 2026-08-06,
-      // "déplacement de bloc + écartement + rotation : les courbes ne
-      // vont pas"). Dans ce cas, la rotation ne change que la cible.
-      const startPose = blockEntries?.[m.pointId]?.startPose ?? null
-      const inPlace = startPose !== null
-        && Math.hypot(startPose[0] - m.baseX, startPose[1] - m.baseY) < 50
-      // Un acteur seul (ou exactement sur le pivot) ne suit aucun arc —
-      // rotationArc renvoie alors pathPoints/startHandle/targetHandle à
-      // null, et les envoyer quand même EFFAÇAIT silencieusement toute
-      // courbe personnalisée déjà posée sur cet acteur à chaque simple
-      // rotation du lacet (signalé 2026-08-01 : "tourner le lacet
-      // réinitialise la courbe de l'acteur") — ces champs ne doivent être
-      // touchés que quand un arc réel a été calculé (groupe, rayon non nul).
-      const r = Math.hypot(m.baseX - drag.centerX, m.baseY - drag.centerY)
-      finalEntries.push({
-        pointId: m.pointId,
-        targetXCm: arc.targetXCm,
-        targetYCm: arc.targetYCm,
-        ...(inPlace && r >= 1e-6
-          ? { pathPoints: arc.pathPoints, startHandle: arc.startHandle, targetHandle: arc.targetHandle }
-          : {}),
-        ...(m.baseTravelYaw !== null || m.baseArrivalYaw !== null ? { orientationOverridden: true } : {}),
-        ...(m.baseTravelYaw !== null ? { travelFixedYawDeg: m.baseTravelYaw + thetaDeg } : {}),
-        ...(m.baseArrivalYaw !== null ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDeg } : {}),
-      })
+      if (best) break
     }
-    sidecar.setActivations(drag.cueId, finalEntries)
+    if (best) label = named(best.cue)
+    else { editing = false; label = '' }
   }
-
-  // Voir le useEffect "filet de sécurité" AVANT le retour anticipé plus
-  // haut — cette ref lui fournit toujours la dernière version du handler.
-  handleDragEndRef.current = handleDragEnd
-
-  const outline = [
-    new THREE.Vector3(...stageToLocal(minX, minY, 0)),
-    new THREE.Vector3(...stageToLocal(maxX, minY, 0)),
-    new THREE.Vector3(...stageToLocal(maxX, maxY, 0)),
-    new THREE.Vector3(...stageToLocal(minX, maxY, 0)),
-    new THREE.Vector3(...stageToLocal(minX, minY, 0)),
-  ].map((v) => new THREE.Vector3(v.x, 0.02, v.z))
-
   return (
-    <group ref={rootRef}>
-      {/* Contour de l'étendue de la sélection — PivotControls ne dessine
-          que le gizmo au pivot, pas un cadre autour de l'étendue. */}
-      <Line points={outline} color="#ffffff" lineWidth={2} transparent opacity={0.9}
-        depthTest={false} renderOrder={1040} />
-      <PivotControls
-        matrix={matrix}
-        autoTransform={false}
-        activeAxes={[true, false, true]}
-        disableScaling={singleMember}
-        disableSliders={false}
-        fixed
-        scale={gizmoScalePx}
-        lineWidth={2.5}
-        axisColors={['#4F6DF5', '#4F6DF5', '#4F6DF5']}
-        hoveredColor="#f5c84f"
-        depthTest={false}
-        onDragStart={handleDragStart}
-        onDrag={handleDrag}
-        onDragEnd={handleDragEnd}
-      />
-    </group>
+    <div className={`gesture-hud ${editing ? 'gesture-hud-edit' : 'gesture-hud-create'}`}>
+      {editing ? t('scene.gestureEdit', { name: label }) : t('scene.gestureCreate')}
+    </div>
+  )
+}
+
+/** Sonde de diagnostic (dev uniquement, audit fluidite 2026-08-07) :
+ * affiche les FPS REELS du canvas et le nom du renderer WebGL — un
+ * "SwiftShader"/"Basic Render" = rendu LOGICIEL (pas de GPU), un "Intel
+ * (R) UHD" sur un laptop gamer = mauvaise carte choisie. C'est le chiffre
+ * qui transforme "c'est lent" en cause identifiable. */
+function RendererProbe() {
+  const { gl } = useThree()
+  const frames = useRef(0)
+  const last = useRef(performance.now())
+  const [info, setInfo] = useState('')
+  useFrame(() => {
+    frames.current += 1
+    const now = performance.now()
+    if (now - last.current >= 1000) {
+      const fps = Math.round((frames.current * 1000) / (now - last.current))
+      frames.current = 0
+      last.current = now
+      let renderer = 'webgl?'
+      try {
+        const ctx = gl.getContext()
+        const ext = ctx.getExtension('WEBGL_debug_renderer_info')
+        renderer = ext ? String(ctx.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'masque'
+      } catch { /* ignore */ }
+      setInfo(`${fps} fps — ${renderer} — dpr ${gl.getPixelRatio().toFixed(2)}`)
+    }
+  })
+  if (!import.meta.env.DEV && localStorage.getItem('lumitrack.showFps') !== '1') return null
+  return (
+    <Html position={[0, 0, 0]} calculatePosition={() => [8, 8, 0]} style={{ pointerEvents: 'none' }}>
+      <div style={{
+        position: 'fixed', top: 2, left: 260, zIndex: 999,
+        background: 'rgba(10,10,14,0.85)', color: '#4fe081',
+        font: '11px ui-monospace, monospace', padding: '2px 8px', borderRadius: 4,
+        whiteSpace: 'nowrap',
+      }}>{info}</div>
+    </Html>
   )
 }
 
@@ -1646,6 +1466,20 @@ function SceneContent({
   onToggleGrid: () => void
   onFitToWindow: () => void
 }) {
+  // Retour visuel immediat des gestes (voir dragOverride.ts) : les
+  // positions AFFICHEES fusionnent l'override du geste en cours — les
+  // marqueurs suivent la souris sans attendre l'aller-retour moteur.
+  const dragOverrides = useDragOverrides()
+  const displayPositions = useMemo(() => {
+    if (!dragOverrides) return positions
+    const merged: Record<string, Pose> = { ...positions }
+    for (const [pid, [x, y]] of Object.entries(dragOverrides)) {
+      const base = positions[pid]
+      merged[pid] = [x, y, base?.[2] ?? 0, base?.[3] ?? 0]
+    }
+    return merged
+  }, [positions, dragOverrides])
+
   const widthM = project.stageWidthCm * CM_TO_M
   const heightM = project.stageHeightCm * CM_TO_M
 
@@ -1669,7 +1503,24 @@ function SceneContent({
          * curseur de référence (cm) fixé au premier échantillon du drag —
          * chaque membre suit alors le MÊME delta que la souris. */
         group: { pointId: string; baseX: number; baseY: number }[] | null
-        baseCursor: { x: number; y: number } | null }
+        baseCursor: { x: number; y: number } | null
+        /** Contextualisation clic/glisser (demande 2026-08-07) : down sur
+         * un membre d'une selection MULTIPLE -> on ne sait pas encore si
+         * c'est un deplacement du groupe (mouvement) ou une re-selection
+         * de CET acteur (clic sec). moved bascule au-dela de 4 px ecran ;
+         * au pointerup sans mouvement, clickSelect remplace la selection.
+         * Aucune ecriture n'est envoyee avant le seuil. */
+        startClient: { x: number; y: number }
+        moved: boolean
+        clickSelect: string | null
+        /** Écritures DIFFÉRÉES au premier mouvement réel (2026-08-07,
+         * "LA TIMELINE EST BEUGUE") : le pointerdown ne doit RIEN créer —
+         * un clic sec sur un acteur sans bloc actif créait un bloc vide
+         * (routage 'trou') ou un waypoint fantôme (routage 'plein fade')
+         * avant même le seuil de 4 px. La création/insertion n'est envoyée
+         * qu'au basculement de `moved`. */
+        pendingCreate: { arrivalMs: number } | null
+        pendingWaypoint: { cueId: string; index: number; wps: PathPoint[] } | null }
     | { kind: 'waypoint'; pointId: string; index: number; planeY: number; lastSent: number; cueId: string }
     | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number; cueId: string }
 
@@ -1697,6 +1548,18 @@ function SceneContent({
   const hitObjectRef = useRef(false)
   // Sélection d'un waypoint du tracé (Suppr le retire, voir keydown).
   const [selectedWaypoint, setSelectedWaypoint] = useState<{ pointId: string; index: number } | null>(null)
+  // Sélection d'un waypoint depuis les losanges de la timeline
+  // (waypoints.tsx, 2026-08-07) : sélectionne l'acteur ET son waypoint —
+  // les poignées d'édition apparaissent sur le terrain.
+  useEffect(() => {
+    const onSelect = (e: Event) => {
+      const { pointId, index } = (e as CustomEvent<{ pointId: string; index: number }>).detail
+      onSelectPoint(pointId)
+      setSelectedWaypoint({ pointId, index })
+    }
+    window.addEventListener(SELECT_WAYPOINT_EVENT, onSelect)
+    return () => window.removeEventListener(SELECT_WAYPOINT_EVENT, onSelect)
+  }, [onSelectPoint])
   // Lus par le onMove global au moment de l'évènement (l'effet ne dépend
   // pas du project : il se ré-abonnerait à chaque écho sinon).
   const liveRef = useRef<{ project: Project; entries: Record<string, BlockContextEntry> | null }>({ project, entries: null })
@@ -1934,10 +1797,39 @@ function SceneContent({
       )
     }
 
+    // Dernieres ecritures du geste en cours (rejouees non-preview au
+    // relachement) — hors SceneDrag pour ne pas toucher l'union de types.
+    const lastWriteRef = { current: null as null | {
+      cueId: string
+      cuePatch?: { startMs: number; durationMs: number }
+      entries?: Array<Record<string, unknown> & { pointId: string }>
+      pointId?: string
+      patch?: Record<string, unknown>
+    } }
+
     const endDrag = () => {
       const drag = dragRef.current
       if (!drag) return
       dragRef.current = null
+      clearDragOverrides()
+      // Rejeu FINAL des dernieres ecritures du geste (mode apercu,
+      // 2026-08-07) : les echantillons sont partis en preview (aucune
+      // rediffusion) — la version non-preview du dernier etat paie
+      // auto-duration/anti-superposition/rediffusion UNE fois.
+      const fin = lastWriteRef.current
+      lastWriteRef.current = null
+      if (fin) {
+        if (fin.cuePatch) sidecar.updateCue(fin.cueId, fin.cuePatch)
+        if (fin.entries) sidecar.setActivations(fin.cueId, fin.entries)
+        else if (fin.pointId && fin.patch) sidecar.setActivation(fin.cueId, fin.pointId, fin.patch)
+      }
+      // Clic SEC (aucun mouvement) sur un membre d'une selection multiple :
+      // le geste n'a rien ecrit — c'etait une re-selection, la selection
+      // se reduit a cet acteur au relachement (demande 2026-08-07 :
+      // "contextualiser deplacement du groupe vs nouvelle selection").
+      if (drag.kind === 'target' && !drag.moved && drag.clickSelect) {
+        onSelectPoint(drag.clickSelect)
+      }
       // Restore to the *locked* state, not unconditionally true — otherwise
       // finishing an actor drag would silently re-enable a locked camera.
       if (controlsRef.current) controlsRef.current.enabled = !cameraLocked
@@ -1946,6 +1838,31 @@ function SceneContent({
     const onMove = (e: PointerEvent) => {
       const drag = dragRef.current
       if (!drag) return
+      // Contextualisation clic/glisser (2026-08-07) : tant que le curseur
+      // n'a pas bouge de 4 px, le geste 'target' reste MUET — un clic sec
+      // sur un membre d'une selection multiple ne doit rien ecrire (il
+      // re-selectionnera l'acteur au pointerup), et un micro-tremblement
+      // de clic ne cree pas d'edition fantome.
+      if (drag.kind === 'target') {
+        if (!drag.moved) {
+          if (Math.hypot(e.clientX - drag.startClient.x, e.clientY - drag.startClient.y) < 4) return
+          drag.moved = true
+          // Écritures différées du pointerdown (2026-08-07) : c'est un
+          // VRAI geste, on peut maintenant créer/insérer.
+          if (drag.pendingWaypoint) {
+            const pw = drag.pendingWaypoint
+            sidecar.setActivation(pw.cueId, drag.pointId, { pathPoints: pw.wps })
+            setSelectedWaypoint({ pointId: drag.pointId, index: pw.index })
+            dragRef.current = { kind: 'waypoint', pointId: drag.pointId, index: pw.index, planeY: drag.planeY, lastSent: 0, cueId: pw.cueId }
+            return
+          }
+          if (drag.pendingCreate) {
+            sidecar.addCue('Entrée', Math.max(0, drag.pendingCreate.arrivalMs - 200), 200, '#4FF5E0', 0, drag.cueId)
+            onSelectCue(drag.cueId)
+            drag.pendingCreate = null
+          }
+        }
+      }
       // Chaque geste porte SON cue (bloc actif, bloc gouvernant du geste
       // libre, ou bloc créé au pointerdown) — ne pas dépendre du
       // selectedCueId de la closure, qui ne se met à jour qu'au re-render.
@@ -1967,6 +1884,19 @@ function SceneContent({
       }
 
       if (drag.kind === 'target') {
+        // Retour visuel immediat (non throttle) : le(s) marqueur(s)
+        // suivent la souris a chaque pointermove.
+        if (drag.group) {
+          if (drag.baseCursor) {
+            const dxV = xCm - drag.baseCursor.x
+            const dyV = yCm - drag.baseCursor.y
+            const ov: Record<string, [number, number]> = {}
+            for (const m of drag.group) ov[m.pointId] = [m.baseX + dxV, m.baseY + dyV]
+            setDragOverrides(ov)
+          }
+        } else {
+          setDragOverrides({ [drag.pointId]: [xCm, yCm] })
+        }
         // Geste libre dans un trou : le bloc s'étire pour que la durée
         // colle à distance/vitesse de référence, arrivée figée au playhead
         // du pointerdown (spec point 3). update_cue resynchronise
@@ -1976,9 +1906,11 @@ function SceneContent({
           const vref = proj.referenceSpeedCms || 220
           const fade = Math.max(200, (dist / vref) * 1000)
           const startMs = Math.max(0, drag.freeCreate.arrivalMs - fade)
-          sidecar.updateCue(gestureCueId, {
+          const cuePatch = {
             startMs, durationMs: Math.max(200, drag.freeCreate.arrivalMs - startMs),
-          })
+          }
+          sidecar.updateCuePreview(gestureCueId, cuePatch)
+          lastWriteRef.current = { ...(lastWriteRef.current ?? { cueId: gestureCueId }), cueId: gestureCueId, cuePatch }
         }
         if (drag.group) {
           // Transformation groupée : delta souris depuis le premier
@@ -1993,11 +1925,15 @@ function SceneContent({
           }
           // UN message groupé pour tout le groupe (optimisation
           // 2026-08-06) — N set_activation = N rediffusions du projet.
-          sidecar.setActivations(gestureCueId, drag.group.map((m) => ({
+          const entries = drag.group.map((m) => ({
             pointId: m.pointId, targetXCm: m.baseX + dx, targetYCm: m.baseY + dy,
-          })))
+          }))
+          sidecar.setActivationsPreview(gestureCueId, entries)
+          lastWriteRef.current = { ...(lastWriteRef.current ?? { cueId: gestureCueId }), cueId: gestureCueId, entries }
         } else {
-          sidecar.setActivation(gestureCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
+          const patch = { targetXCm: xCm, targetYCm: yCm }
+          sidecar.setActivationPreview(gestureCueId, drag.pointId, patch)
+          lastWriteRef.current = { ...(lastWriteRef.current ?? { cueId: gestureCueId }), cueId: gestureCueId, pointId: drag.pointId, patch }
         }
         return
       }
@@ -2010,7 +1946,8 @@ function SceneContent({
         const wps = (act.pathPoints ?? []).map((wp) => ({ ...wp }))
         if (!wps[drag.index]) return
         wps[drag.index] = { ...wps[drag.index], xCm, yCm }
-        sidecar.setActivation(gestureCueId, drag.pointId, { pathPoints: wps })
+        sidecar.setActivationPreview(gestureCueId, drag.pointId, { pathPoints: wps })
+        lastWriteRef.current = { cueId: gestureCueId, pointId: drag.pointId, patch: { pathPoints: wps } }
         return
       }
 
@@ -2020,14 +1957,14 @@ function SceneContent({
       if (!entry) return
       if (drag.anchor === 'start') {
         if (!entry.startPose) return
-        sidecar.setActivation(gestureCueId, drag.pointId, {
-          startHandle: { dxCm: xCm - entry.startPose[0], dyCm: yCm - entry.startPose[1] },
-        })
+        const patch = { startHandle: { dxCm: xCm - entry.startPose[0], dyCm: yCm - entry.startPose[1] } }
+        sidecar.setActivationPreview(gestureCueId, drag.pointId, patch)
+        lastWriteRef.current = { cueId: gestureCueId, pointId: drag.pointId, patch }
       } else if (drag.anchor === 'target') {
         if (!entry.targetPose) return
-        sidecar.setActivation(gestureCueId, drag.pointId, {
-          targetHandle: { dxCm: xCm - entry.targetPose[0], dyCm: yCm - entry.targetPose[1] },
-        })
+        const patch = { targetHandle: { dxCm: xCm - entry.targetPose[0], dyCm: yCm - entry.targetPose[1] } }
+        sidecar.setActivationPreview(gestureCueId, drag.pointId, patch)
+        lastWriteRef.current = { cueId: gestureCueId, pointId: drag.pointId, patch }
       } else {
         const wps = (act.pathPoints ?? []).map((wp) => ({ ...wp }))
         const wp = wps[drag.anchor]
@@ -2043,7 +1980,8 @@ function SceneContent({
           wp.outDyCm = dy
           if (!e.altKey) { wp.inDxCm = -dx; wp.inDyCm = -dy }
         }
-        sidecar.setActivation(gestureCueId, drag.pointId, { pathPoints: wps })
+        sidecar.setActivationPreview(gestureCueId, drag.pointId, { pathPoints: wps })
+        lastWriteRef.current = { cueId: gestureCueId, pointId: drag.pointId, patch: { pathPoints: wps } }
       }
     }
 
@@ -2058,6 +1996,14 @@ function SceneContent({
       // transformation multi-sélection a déjà pris le geste (son propre
       // dragRef est privé à SelectionTransform, d'où ce ref partagé).
       if (e.button !== 0 || dragRef.current || editingZone || boxDragActiveRef.current) return
+      // Hit-test 2D maison : un acteur sous le curseur prend le geste
+      // (les acteurs ne sont plus des objets interactifs R3F).
+      const hitActor = actorAtCursorRef.current(e)
+      if (hitActor) {
+        hitObjectRef.current = true
+        actorDownRef.current(e, hitActor)
+        return
+      }
       const rect = dom.getBoundingClientRect()
       lassoRef.current = {
         x0: e.clientX - rect.left, y0: e.clientY - rect.top,
@@ -2168,6 +2114,21 @@ function SceneContent({
     dom.addEventListener('pointermove', onMove)
     dom.addEventListener('pointerup', endDrag)
     dom.addEventListener('pointerleave', endDrag)
+    // Curseur 'grab' au survol d'un acteur (hit-test 2D, throttle rAF,
+    // ecriture du curseur uniquement sur CHANGEMENT pour ne pas ecraser
+    // les curseurs poses par les elements R3F restants).
+    let hoverRaf = 0
+    let hoverOn = false
+    const onHoverMove = (e: PointerEvent) => {
+      if (hoverRaf || dragRef.current || boxDragActiveRef.current) return
+      hoverRaf = requestAnimationFrame(() => {
+        hoverRaf = 0
+        const over = actorAtCursorRef.current(e) !== null
+        if (over && !hoverOn) { hoverOn = true; document.body.style.cursor = 'grab' }
+        else if (!over && hoverOn) { hoverOn = false; document.body.style.cursor = 'auto' }
+      })
+    }
+    dom.addEventListener('pointermove', onHoverMove, { passive: true })
     dom.addEventListener('pointerdown', lassoStart)
     dom.addEventListener('pointermove', lassoMove)
     dom.addEventListener('pointerup', lassoEnd)
@@ -2177,6 +2138,8 @@ function SceneContent({
       dom.removeEventListener('pointermove', onMove)
       dom.removeEventListener('pointerup', endDrag)
       dom.removeEventListener('pointerleave', endDrag)
+      dom.removeEventListener('pointermove', onHoverMove)
+      if (hoverRaf) cancelAnimationFrame(hoverRaf)
       dom.removeEventListener('pointerdown', lassoStart)
       dom.removeEventListener('pointermove', lassoMove)
       dom.removeEventListener('pointerup', lassoEnd)
@@ -2349,6 +2312,63 @@ function SceneContent({
       // séparé et déjà en place — ne rien faire ici pour ce cas).
       if (e.type !== 'contextmenu') return
       e.preventDefault()
+      // Les acteurs ne sont plus interactifs R3F : le clic droit sur l'un
+      // d'eux atterrit ici — router vers SON menu (hit-test 2D).
+      const hitActor = actorAtCursorRef.current(e)
+      if (hitActor) {
+        const point = project.points.find((p) => p.id === hitActor)
+        if (point) {
+          onSelectPoint(hitActor)
+          openContextMenu(e.clientX, e.clientY, buildActorContextMenuSections(point, project))
+          return
+        }
+      }
+      // Tranche D (2026-08-07) : "Ajouter un point (keyframe) au playhead"
+      // sur les acteurs selectionnes — pour chaque acteur dont le playhead
+      // tombe dans le FADE de son bloc gouvernant (LTP), insere un
+      // waypoint a sa position RESOLUE actuelle, a la fraction temporelle
+      // du playhead (meme mecanique que le geste libre). Groupe par bloc,
+      // UN setActivations par bloc concerne.
+      const selIds = selectedIdsRef.current
+      if (selIds.length > 0) {
+        const t = tMsRef.current
+        const inserts: { cueId: string; pointId: string; pathPoints: PathPoint[] }[] = []
+        for (const pid of selIds) {
+          const gov = governingActivationFor(pid, t)
+          const pose = positionsRef.current[pid]
+          if (!gov || !pose || t >= gov.fadeEnd || gov.fadeEnd <= gov.effStart) continue
+          const act = gov.cue.activations[pid]
+          const wps = (act.pathPoints ?? []).map((wp: PathPoint) => ({ ...wp }))
+          const segCount = wps.length + 1
+          const f = (t - gov.effStart) / (gov.fadeEnd - gov.effStart)
+          const segIdx = Math.min(segCount - 1, Math.max(0, Math.floor(f * segCount)))
+          wps.splice(segIdx, 0, { xCm: pose[0], yCm: pose[1], inDxCm: null, inDyCm: null, outDxCm: null, outDyCm: null })
+          inserts.push({ cueId: gov.cue.id, pointId: pid, pathPoints: wps })
+        }
+        const addKeyframe = () => {
+          const byCue = new Map<string, { pointId: string; pathPoints: PathPoint[] }[]>()
+          for (const ins of inserts) {
+            const arr = byCue.get(ins.cueId) ?? []
+            arr.push({ pointId: ins.pointId, pathPoints: ins.pathPoints })
+            byCue.set(ins.cueId, arr)
+          }
+          for (const [cueId, entries] of byCue) {
+            sidecar.setActivations(cueId, entries.map((en) => ({ pointId: en.pointId, pathPoints: en.pathPoints })))
+          }
+        }
+        openContextMenu(e.clientX, e.clientY, [
+          [{
+            label: t2('contextMenu.addKeyframeAtPlayhead', { n: inserts.length, m: selIds.length }),
+            onClick: addKeyframe,
+            disabled: inserts.length === 0,
+          }],
+          [
+            { label: gridOpacity > 0 ? t2('contextMenu.gridOff') : t2('contextMenu.gridOn'), onClick: onToggleGrid },
+            { label: t2('contextMenu.fitToWindow'), onClick: onFitToWindow },
+          ],
+        ])
+        return
+      }
       openContextMenu(e.clientX, e.clientY, [
         [
           { label: gridOpacity > 0 ? t('contextMenu.gridOff') : t('contextMenu.gridOn'), onClick: onToggleGrid },
@@ -2441,7 +2461,7 @@ function SceneContent({
     // Glisser un acteur DÉJÀ dans la sélection multiple ne la casse pas :
     // c'est le geste "transformer la sélection". Hors sélection : simple.
     if (!inSelection) onSelectPoint(pointId)
-    const pose = positions[pointId]
+    const pose = positionsRef.current[pointId]
     if (!pose) return
     // Actor height only depends on the group's Y-axis rotation, which never
     // touches Y — so local height == world height regardless of the
@@ -2467,19 +2487,24 @@ function SceneContent({
       const gov = governingActivationFor(pointId, t)
       if (gov && t < gov.fadeEnd && gov.fadeEnd > gov.effStart && members.length === 1) {
         // Plein fade : insertion d'un waypoint à la fraction TEMPORELLE du
-        // playhead (approximation du paramètre du tracé — le nœud est de
-        // toute façon aussitôt déplacé sous la souris), puis le geste
-        // continue comme un drag de waypoint classique.
+        // playhead — DIFFÉRÉE au premier mouvement réel (un clic sec ne
+        // doit pas laisser de waypoint fantôme dans le tracé). Au seuil,
+        // onMove envoie le splice et convertit le geste en drag waypoint.
         const act = gov.cue.activations[pointId]
         const wps = (act.pathPoints ?? []).map((wp: PathPoint) => ({ ...wp }))
         const segCount = wps.length + 1
         const f = (t - gov.effStart) / (gov.fadeEnd - gov.effStart)
         const segIdx = Math.min(segCount - 1, Math.max(0, Math.floor(f * segCount)))
         wps.splice(segIdx, 0, { xCm: pose[0], yCm: pose[1], inDxCm: null, inDyCm: null, outDxCm: null, outDyCm: null })
-        sidecar.setActivation(gov.cue.id, pointId, { pathPoints: wps })
         onSelectCue(gov.cue.id)
-        setSelectedWaypoint({ pointId, index: segIdx })
-        dragRef.current = { kind: 'waypoint', pointId, index: segIdx, planeY, lastSent: 0, cueId: gov.cue.id }
+        dragRef.current = {
+          kind: 'target', pointId, planeY, lastSent: 0, cueId: gov.cue.id,
+          freeCreate: null, group: null, baseCursor: null,
+          startClient: { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY },
+          moved: false, clickSelect: null,
+          pendingCreate: null,
+          pendingWaypoint: { cueId: gov.cue.id, index: segIdx, wps },
+        }
         if (controlsRef.current) controlsRef.current.enabled = false
         return
       }
@@ -2488,13 +2513,12 @@ function SceneContent({
         gestureCueId = gov.cue.id
         onSelectCue(gov.cue.id)
       } else {
-        // Trou : nouveau bloc, arrivée figée au playhead — la durée réelle
-        // est recalculée à chaque échantillon du geste (freeCreate).
+        // Trou : nouveau bloc, arrivée figée au playhead — la CRÉATION est
+        // différée au premier mouvement réel (un clic sec de sélection
+        // créait un bloc vide "Entrée (0)" à chaque clic, signalé
+        // 2026-08-07). L'id est figé ici, addCue part dans onMove.
         gestureCueId = crypto.randomUUID()
-        const arrivalMs = tMsRef.current
-        sidecar.addCue('Entrée', Math.max(0, arrivalMs - 200), 200, '#4FF5E0', 0, gestureCueId)
-        onSelectCue(gestureCueId)
-        freeCreate = { originX: pose[0], originY: pose[1], arrivalMs }
+        freeCreate = { originX: pose[0], originY: pose[1], arrivalMs: tMsRef.current }
       }
     }
 
@@ -2503,6 +2527,11 @@ function SceneContent({
       freeCreate,
       group: members.length > 1 ? groupBases(members) : null,
       baseCursor: null,
+      startClient: { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY },
+      moved: false,
+      clickSelect: inSelection && selectedIdsRef.current.length > 1 ? pointId : null,
+      pendingCreate: freeCreate ? { arrivalMs: freeCreate.arrivalMs } : null,
+      pendingWaypoint: null,
     }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
@@ -2531,17 +2560,57 @@ function SceneContent({
       freeCreate: null,
       group: members.length > 1 ? groupBases(members) : null,
       baseCursor: null,
+      startClient: { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY },
+      moved: false,
+      clickSelect: null,
+      pendingCreate: null,
+      pendingWaypoint: null,
     }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
 
-  const handleActorContextMenu = (e: ThreeEvent<MouseEvent>, pointId: string) => {
-    e.stopPropagation()
-    e.nativeEvent.preventDefault()
-    const point = project.points.find((p) => p.id === pointId)
-    if (!point) return
-    onSelectPoint(pointId)
-    openContextMenu(e.clientX, e.clientY, buildActorContextMenuSections(point, project))
+  // ---- Hit-test 2D maison des acteurs (audit fluidite 2026-08-07) ----
+  // En vue orthographique du dessus, "quel acteur est sous le curseur" est
+  // un simple test de distance en cm — pas besoin du raycast triangle par
+  // triangle de R3F sur ~300 meshes a chaque pointermove (LE cout du drop
+  // pendant les deplacements sur petite machine). Les fantomes/waypoints/
+  // poignees (peu nombreux, montes seulement en edition) restent en R3F.
+  const actorAtCursor = (e: { clientX: number; clientY: number }): string | null => {
+    if (!stageGroupRef.current) return null
+    const rect = gl.domElement.getBoundingClientRect()
+    PICK_NDC.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    )
+    PICK_RAYCASTER.setFromCamera(PICK_NDC, camera)
+    if (!PICK_RAYCASTER.ray.intersectPlane(PICK_PLANE, PICK_HIT)) return null
+    const local = stageGroupRef.current.worldToLocal(PICK_HIT.clone())
+    const cx = local.x / CM_TO_M
+    const cy = local.z / CM_TO_M
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const minPickCm = (12 / zoom) / CM_TO_M   // rayon de saisie plancher ~12 px
+    const pickR = Math.max(project.actorDiameterCm / 2 + 10, minPickCm)
+    let best: string | null = null
+    let bestD = Infinity
+    for (const p of project.points) {
+      if (p.isFocusPoint) continue           // les focus gardent leur marqueur R3F
+      const pose = positionsRef.current[p.id]
+      if (!pose) continue
+      const d = Math.hypot(pose[0] - cx, pose[1] - cy)
+      if (d < pickR && d < bestD) { bestD = d; best = p.id }
+    }
+    return best
+  }
+  const actorAtCursorRef = useRef(actorAtCursor)
+  actorAtCursorRef.current = actorAtCursor
+  const actorDownRef = useRef<(native: PointerEvent, pointId: string) => void>(() => {})
+  actorDownRef.current = (native, pointId) => {
+    handleActorPointerDown({
+      stopPropagation: () => {},
+      ctrlKey: native.ctrlKey,
+      metaKey: native.metaKey,
+      nativeEvent: native,
+    } as unknown as ThreeEvent<PointerEvent>, pointId)
   }
 
   const handleFocusPointContextMenu = (e: ThreeEvent<MouseEvent>, pointId: string) => {
@@ -2635,7 +2704,7 @@ function SceneContent({
         )}
 
         {project.points.map((point) => {
-          const pose = positions[point.id]
+          const pose = displayPositions[point.id]
           if (!pose) return null
           const opacity = editEntries === null ? 1
             : editEntries[point.id] ? EDIT_ACTIVATED_OPACITY : EDIT_BYSTANDER_OPACITY
@@ -2663,15 +2732,16 @@ function SceneContent({
           }
           return (
             <group key={point.id}>
+              {/* Purement affichage (hit-test 2D maison, 2026-08-07) : la
+                  saisie/le clic droit passent par le pointerdown DOM +
+                  actorAtCursor — 79 groupes sortis du raycast R3F qui
+                  tournait a CHAQUE pointermove. */}
               <Actor
                 pose={pose}
                 color={point.color}
                 selected={selectedPointIds.includes(point.id)}
-                draggable={true /* toujours : sans bloc actif, le geste route vers le bloc gouvernant ou en crée un */}
                 opacity={opacity}
                 radiusM={(project.actorDiameterCm / 2) * CM_TO_M}
-                onPointerDown={(e) => handleActorPointerDown(e, point.id)}
-                onContextMenu={(e) => handleActorContextMenu(e, point.id)}
               />
               <ActorLabel text={actorLabelText(point)} xCm={pose[0]} yCm={pose[1]} zCm={pose[2]} opacity={opacity}
                 scale={inBackstage ? 0.55 : 1} />
@@ -2691,7 +2761,7 @@ function SceneContent({
             gardé par selectedCueId (voir handleDragStart) pour ne jamais
             écrire sur un id de bloc vide. */}
         {selectedPointIds.length >= 1 && (
-          <SelectionTransform
+          <TransformBox
             project={project}
             positions={positions}
             selectedCueId={selectedCueId ?? ''}
@@ -2711,6 +2781,13 @@ function SceneContent({
           const emphasis = emphasisFor(point.id)
           return (
             <group key={`edit-${point.id}`}>
+              {entry.startPose && emphasis !== 'dim' && (
+                <StartGhost
+                  pose={[entry.startPose[0], entry.startPose[1], entry.startPose[2]]}
+                  color={point.color}
+                  opacity={EMPHASIS_OPACITY[emphasis]}
+                />
+              )}
               {entry.path.length > 0 && (
                 <Trajectory
                   path={entry.path}
@@ -2735,21 +2812,33 @@ function SceneContent({
                   />
                 )
               })()}
-              {entry.targetPose && (
-                <>
-                  <TargetGhost
-                    pose={entry.targetPose}
-                    color={point.color}
-                    emphasis={emphasis}
-                    onPointerDown={(e) => handleGhostPointerDown(e, point.id, entry.targetPose![2])}
-                  />
-                  <ActorLabel
-                    text={actorLabelText(point)}
-                    xCm={entry.targetPose[0]} yCm={entry.targetPose[1]} zCm={entry.targetPose[2]}
-                    opacity={EMPHASIS_OPACITY[emphasis]}
-                  />
-                </>
-              )}
+              {entry.targetPose && (() => {
+                // Ghost superpose a l'acteur (cible = position vivante au
+                // playhead, cas de toute selection a l'arret) : ne rien
+                // dessiner — l'acteur et son anneau de selection suffisent,
+                // et sa hitbox normale n'est plus concurrencee (retour
+                // 2026-08-07, 'on perd trop facilement la selection').
+                const livePose = positions[point.id]
+                if (livePose && Math.hypot(entry.targetPose[0] - livePose[0], entry.targetPose[1] - livePose[1]) < 15) {
+                  return null
+                }
+                return (
+                  <>
+                    <TargetGhost
+                      pose={entry.targetPose}
+                      color={point.color}
+                      emphasis={emphasis}
+                      radiusM={(project.actorDiameterCm / 2) * CM_TO_M}
+                      onPointerDown={(e) => handleGhostPointerDown(e, point.id, entry.targetPose![2])}
+                    />
+                    <ActorLabel
+                      text={actorLabelText(point)}
+                      xCm={entry.targetPose[0]} yCm={entry.targetPose[1]} zCm={entry.targetPose[2]}
+                      opacity={EMPHASIS_OPACITY[emphasis]}
+                    />
+                  </>
+                )
+              })()}
             </group>
           )
         })}
@@ -2780,8 +2869,6 @@ export interface SceneHandle {
 
 export const Scene = forwardRef<SceneHandle, {
   project: Project
-  positions: Record<string, Pose>
-  tMs: number
   selectedPointId: string | null
   selectedPointIds: string[]
   selectedCueId: string | null
@@ -2799,6 +2886,11 @@ export const Scene = forwardRef<SceneHandle, {
   onToggleGrid: () => void
   onFitToWindow: () => void
 }>(function Scene(props, ref) {
+  // Tick consomme ICI (refactor fluidite 2026-08-07) — App ne re-rend
+  // plus a chaque tick, seule la scene (qui en a besoin) s'y abonne.
+  const tick = useTick()
+  const positions = tick?.positions ?? EMPTY_POSITIONS
+  const tMs = tick?.tMs ?? 0
   // Rectangle du lasso : dessiné en HTML au-dessus du canvas (le canvas ne
   // peut pas rendre de DOM) — SceneContent pilote, ce wrapper affiche.
   const [lassoRect, setLassoRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -2810,9 +2902,26 @@ export const Scene = forwardRef<SceneHandle, {
   }), [])
   return (
     <div className="scene-canvas-wrap">
-      <Canvas onPointerMissed={(e) => dropHandleRef.current?.handleTerrainContextMenu(e)}>
-        <SceneContent {...props} onLassoRect={setLassoRect} dropHandleRef={dropHandleRef} />
+      <Canvas
+        onPointerMissed={(e) => dropHandleRef.current?.handleTerrainContextMenu(e)}
+        // Audit fluidite 2026-08-07 : DPR plafonne a 1.5 (un ecran 4K a
+        // DPR 2 quadruple les pixels a dessiner pour un gain visuel nul
+        // sur une vue technique) + high-performance force le vrai GPU sur
+        // les laptops double-carte (WebView2 prend l'iGPU par defaut).
+        // Cible : machine modeste (2026-08-07) — DPR 1.25 max et PAS de
+        // MSAA plein ecran (les elements sont des aplats 2D nets ; le
+        // terrain cuit a son propre anti-crenelage 4x dans sa texture).
+        dpr={[1, 1.25]}
+        gl={{ powerPreference: 'high-performance', antialias: false }}
+      >
+        <RendererProbe />
+        <SceneContent {...props} positions={positions} tMs={tMs} onLassoRect={setLassoRect} dropHandleRef={dropHandleRef} />
       </Canvas>
+      <GestureHud
+        project={props.project}
+        selectedPointIds={props.selectedPointIds}
+        selectedCueId={props.selectedCueId}
+      />
       {lassoRect && (
         <div
           className="scene-lasso"

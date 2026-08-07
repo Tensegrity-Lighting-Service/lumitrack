@@ -7,24 +7,38 @@
 // Ce qui s'édite : les courbes PAR AXE de l'activation du point sélectionné
 // dans le bloc. Chaque geste est optimiste localement, committé au lâcher
 // via set_activation {curves} (§13.1.7 : la lecture reste backend-only).
+//
+// Refonte B1 (2026-08-07, « le graph est devenu assez pourri ») :
+// cadrage vertical FIGÉ pendant un drag (fini la courbe qui « respire »
+// sous le curseur), grille graduée (horizontales à pas joli + verticales
+// alignées sur les ticks de la règle), readout numérique du nœud (t en ms,
+// v), snapping léger (v→0/1, t→playhead ; Alt désactive), poignées de tous
+// les nœuds de l'axe actif (estompées hors sélection), sélection MULTIPLE
+// par Maj-clic (déplacement/suppression groupés), marqueur de la valeur au
+// playhead, hauteur redimensionnable (côté CueTimeline).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Activation, Cue } from '../types'
 import { sidecar } from '../sidecar'
 import {
-  AXES, AXIS_COLORS, AXIS_LABEL_KEYS, bakeEasing, insertNode, linearNodes,
+  AXES, AXIS_COLORS, AXIS_LABEL_KEYS, bakeEasing, evalCurve, insertNode, linearNodes,
   segmentControls, smoothNodes, sortNodes,
 } from './curves'
 import type { Axis, CurveNode, HandleMode } from './curves'
+import { computeTicks } from './ticks'
+import { NumericInput } from '../ui/NumericInput'
 import { useT } from '../i18n'
 
 const PAD_V = 14
 const NODE_R = 4.5
 const HANDLE_R = 3
+const SNAP_PX = 6
 
 // Presse-papier de courbe (module : survit aux re-rendus, pas au reload).
 let curveClipboard: CurveNode[] | null = null
 
-interface Selection { axis: Axis; index: number }
+/** Sélection MULTIPLE mono-axe (B1) : indices dans l'ordre de clic, le
+ * DERNIER est le nœud « principal » (readout, modes de poignée). */
+interface Selection { axis: Axis; indices: number[] }
 
 function axisHasTarget(act: Activation, axis: Axis): boolean {
   switch (axis) {
@@ -34,7 +48,16 @@ function axisHasTarget(act: Activation, axis: Axis): boolean {
   }
 }
 
-export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, contentWidth, scrollLeft }: {
+/** Pas « joli » pour ~44 px entre deux lignes horizontales. */
+function niceStep(span: number, heightPx: number): number {
+  const raw = (span * 44) / Math.max(1, heightPx)
+  const mag = Math.pow(10, Math.floor(Math.log10(Math.max(1e-6, raw))))
+  const norm = raw / mag
+  const base = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10
+  return base * mag
+}
+
+export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, contentWidth, scrollLeft, viewportWidth, tMs }: {
   cue: Cue
   act: Activation | null
   pointId: string | null
@@ -43,17 +66,20 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
   height: number
   contentWidth: number
   scrollLeft: number
+  viewportWidth: number
+  tMs: number
 }) {
   const t = useT()
-  // Courbes en cours d'édition : état local initialisé depuis l'activation,
-  // réinitialisé quand le backend renvoie un nouveau snapshot (identité de
-  // `act` change) SAUF pendant un drag.
   const [draft, setDraft] = useState<Partial<Record<Axis, CurveNode[]>>>({})
   const [activeAxis, setActiveAxis] = useState<Axis>('x')
   const [hiddenAxes, setHiddenAxes] = useState<Set<Axis>>(new Set())
   const [selection, setSelection] = useState<Selection | null>(null)
+  const [dragReadout, setDragReadout] = useState<{ x: number; y: number; text: string } | null>(null)
   const draggingRef = useRef(false)
   const svgRef = useRef<SVGSVGElement>(null)
+  // Cadrage vertical FIGÉ pendant un drag (B1.1) : gelé au pointerdown,
+  // relâché au pointerup — la courbe ne « respire » plus sous le curseur.
+  const frozenRangeRef = useRef<[number, number] | null>(null)
 
   const availableAxes = useMemo(
     () => (act ? AXES.filter((a) => axisHasTarget(act, a)) : []),
@@ -72,9 +98,6 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
     }
   }, [availableAxes, activeAxis])
 
-  /** Courbe affichée pour un axe : brouillon local sinon celle de
-   * l'activation, sinon l'easing nommé converti (affiché en pointillés tant
-   * qu'il n'est pas édité). */
   const curveFor = useCallback((axis: Axis): { nodes: CurveNode[]; custom: boolean } => {
     const local = draft[axis]
     if (local) return { nodes: local, custom: true }
@@ -84,7 +107,7 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
   }, [draft, act])
 
   // ---- cadrage vertical automatique (spec: graphUpdateDimensions) ----
-  const [vMin, vMax] = useMemo(() => {
+  const [vMinAuto, vMaxAuto] = useMemo(() => {
     let lo = 0; let hi = 1
     for (const axis of availableAxes) {
       if (hiddenAxes.has(axis)) continue
@@ -98,23 +121,33 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
     const pad = (hi - lo) * 0.08 || 0.05
     return [lo - pad, hi + pad]
   }, [availableAxes, hiddenAxes, curveFor])
+  const vMin = frozenRangeRef.current?.[0] ?? vMinAuto
+  const vMax = frozenRangeRef.current?.[1] ?? vMaxAuto
 
   const fadeMs = Math.max(1, act?.fadeMs ?? cue.durationMs)
-  // Décalage de départ (2026-08-03) : cette activation démarre réellement
-  // startOffsetMs après le début nominal du bloc — sans ça, la zone de
-  // fade dessinée mentirait sur quand l'acteur bouge vraiment.
   const x0 = (cue.startMs + (act?.startOffsetMs ?? 0)) * pxPerMs
   const fadeW = fadeMs * pxPerMs
-  const tToX = useCallback((t: number) => x0 + t * fadeW, [x0, fadeW])
+  const tToX = useCallback((tt: number) => x0 + tt * fadeW, [x0, fadeW])
   const vToY = useCallback(
-    (v: number) => PAD_V + ((vMax - v) / (vMax - vMin)) * (height - 2 * PAD_V),
-    [vMin, vMax, height],
+    (v: number) => {
+      const lo = frozenRangeRef.current?.[0] ?? vMinAuto
+      const hi = frozenRangeRef.current?.[1] ?? vMaxAuto
+      return PAD_V + ((hi - v) / (hi - lo)) * (height - 2 * PAD_V)
+    },
+    [vMinAuto, vMaxAuto, height],
   )
   const xToT = useCallback((x: number) => (x - x0) / fadeW, [x0, fadeW])
   const yToV = useCallback(
-    (y: number) => vMax - ((y - PAD_V) / (height - 2 * PAD_V)) * (vMax - vMin),
-    [vMin, vMax, height],
+    (y: number) => {
+      const lo = frozenRangeRef.current?.[0] ?? vMinAuto
+      const hi = frozenRangeRef.current?.[1] ?? vMaxAuto
+      return hi - ((y - PAD_V) / (height - 2 * PAD_V)) * (hi - lo)
+    },
+    [vMinAuto, vMaxAuto, height],
   )
+
+  // Fraction du playhead dans la zone de fade (snap + marqueur).
+  const playheadFrac = (tMs - cue.startMs - (act?.startOffsetMs ?? 0)) / fadeMs
 
   const commit = useCallback((axis: Axis, nodes: CurveNode[] | null) => {
     if (!pointId) return
@@ -138,38 +171,87 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
     e.stopPropagation()
     e.preventDefault()
     setActiveAxis(axis)
-    setSelection({ axis, index })
+    // Maj-clic = toggle dans la sélection multiple (B1.6), sans drag.
+    if (e.shiftKey) {
+      setSelection((prev) => {
+        if (!prev || prev.axis !== axis) return { axis, indices: [index] }
+        const has = prev.indices.includes(index)
+        const indices = has ? prev.indices.filter((i) => i !== index) : [...prev.indices, index]
+        return indices.length ? { axis, indices } : null
+      })
+      return
+    }
+    const alreadySelected = !!selection && selection.axis === axis && selection.indices.includes(index)
+    const dragIndices = alreadySelected && selection ? selection.indices : [index]
+    setSelection({ axis, indices: alreadySelected && selection ? [...selection.indices.filter((i) => i !== index), index] : [index] })
     const el = e.currentTarget as Element
     el.setPointerCapture(e.pointerId)
     draggingRef.current = true
+    frozenRangeRef.current = [vMinAuto, vMaxAuto]
     const base = sortNodes(curveFor(axis).nodes)
-    const first = index === 0
-    const last = index === base.length - 1
+    const lastIdx = base.length - 1
+    // Marges de déplacement temporel du GROUPE : min des marges de chaque
+    // nœud sélectionné vers ses voisins HORS sélection (extrémités : t figé).
+    const selSet = new Set(dragIndices)
+    let dtLo = -Infinity
+    let dtHi = Infinity
+    for (const i of dragIndices) {
+      if (i === 0 || i === lastIdx) { dtLo = 0; dtHi = 0; continue }
+      let prev = i - 1
+      while (prev > 0 && selSet.has(prev)) prev--
+      let next = i + 1
+      while (next < lastIdx && selSet.has(next)) next++
+      dtLo = Math.max(dtLo, base[prev].t + 0.005 - base[i].t)
+      dtHi = Math.min(dtHi, base[next].t - 0.005 - base[i].t)
+    }
+    const orig = base[index]
 
     const onMove = (ev: PointerEvent) => {
       const p = pointerToCurve(ev)
       if (!p) return
-      const nodes = [...base]
-      const orig = base[index]
-      const lo = first ? orig.t : base[index - 1].t + 0.005
-      const hi = last ? orig.t : base[index + 1].t - 0.005
-      const t = Math.min(hi, Math.max(lo, first || last ? orig.t : p.t))
-      const dv = p.v - orig.v
-      const dt = t - orig.t
-      nodes[index] = {
-        ...orig, t, v: p.v,
-        inT: orig.inT === null ? null : orig.inT + dt,
-        inV: orig.inV === null ? null : orig.inV + dv,
-        outT: orig.outT === null ? null : orig.outT + dt,
-        outV: orig.outV === null ? null : orig.outV + dv,
+      let targetT = p.t
+      let targetV = p.v
+      // Snapping léger (B1.4) — Alt désactive : v vers 0/1, t vers le
+      // playhead, à moins de SNAP_PX px écran.
+      if (!ev.altKey) {
+        const vSnapTol = (SNAP_PX / Math.max(1, height - 2 * PAD_V)) * (vMax - vMin)
+        if (Math.abs(targetV) < vSnapTol) targetV = 0
+        else if (Math.abs(targetV - 1) < vSnapTol) targetV = 1
+        if (playheadFrac > 0 && playheadFrac < 1
+          && Math.abs(targetT - playheadFrac) * fadeW < SNAP_PX) targetT = playheadFrac
       }
+      const isEdge = index === 0 || index === lastIdx
+      const dt = isEdge ? 0 : Math.min(dtHi, Math.max(dtLo, targetT - orig.t))
+      const dv = targetV - orig.v
+      const nodes = base.map((n, i) => {
+        if (!selSet.has(i)) return n
+        const edge = i === 0 || i === lastIdx
+        const ndt = edge ? 0 : dt
+        return {
+          ...n,
+          t: n.t + ndt,
+          v: n.v + dv,
+          inT: n.inT === null ? null : n.inT + ndt,
+          inV: n.inV === null ? null : n.inV + dv,
+          outT: n.outT === null ? null : n.outT + ndt,
+          outV: n.outV === null ? null : n.outV + dv,
+        }
+      })
       setLocal(axis, nodes)
+      const moved = nodes[index]
+      setDragReadout({
+        x: tToX(moved.t),
+        y: vToY(moved.v) - 12,
+        text: `${Math.round(moved.t * fadeMs)} ms · ${moved.v.toFixed(3)}`,
+      })
     }
     const onUp = (ev: PointerEvent) => {
       el.releasePointerCapture(ev.pointerId)
       el.removeEventListener('pointermove', onMove as EventListener)
       el.removeEventListener('pointerup', onUp as EventListener)
       draggingRef.current = false
+      frozenRangeRef.current = null
+      setDragReadout(null)
       setDraft((d) => {
         const nodes = d[axis]
         if (nodes) commit(axis, nodes)
@@ -178,16 +260,17 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
     }
     el.addEventListener('pointermove', onMove as EventListener)
     el.addEventListener('pointerup', onUp as EventListener)
-  }, [curveFor, pointerToCurve, setLocal, commit])
+  }, [curveFor, pointerToCurve, setLocal, commit, selection, vMinAuto, vMaxAuto, vMin, vMax, height, fadeMs, fadeW, playheadFrac, tToX, vToY])
 
   const beginHandleDrag = useCallback((e: React.PointerEvent, axis: Axis, index: number, side: 'in' | 'out') => {
     e.stopPropagation()
     e.preventDefault()
     setActiveAxis(axis)
-    setSelection({ axis, index })
+    setSelection({ axis, indices: [index] })
     const el = e.currentTarget as Element
     el.setPointerCapture(e.pointerId)
     draggingRef.current = true
+    frozenRangeRef.current = [vMinAuto, vMaxAuto]
     const base = sortNodes(curveFor(axis).nodes)
 
     const onMove = (ev: PointerEvent) => {
@@ -225,6 +308,7 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
       el.removeEventListener('pointermove', onMove as EventListener)
       el.removeEventListener('pointerup', onUp as EventListener)
       draggingRef.current = false
+      frozenRangeRef.current = null
       setDraft((d) => {
         const nodes = d[axis]
         if (nodes) commit(axis, nodes)
@@ -233,7 +317,7 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
     }
     el.addEventListener('pointermove', onMove as EventListener)
     el.addEventListener('pointerup', onUp as EventListener)
-  }, [curveFor, pointerToCurve, setLocal, commit])
+  }, [curveFor, pointerToCurve, setLocal, commit, vMinAuto, vMaxAuto])
 
   const onDoubleClick = useCallback((e: React.MouseEvent) => {
     const p = pointerToCurve(e)
@@ -244,7 +328,7 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
     commit(activeAxis, next)
   }, [pointerToCurve, curveFor, activeAxis, setLocal, commit])
 
-  // Suppr : retire le nœud sélectionné (jamais les extrémités).
+  // Suppr : retire les nœuds sélectionnés (jamais les extrémités).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
@@ -258,8 +342,9 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
       e.preventDefault()
       const { nodes } = curveFor(selection.axis)
       const sorted = sortNodes(nodes)
-      if (selection.index === 0 || selection.index === sorted.length - 1) return
-      const next = sorted.filter((_, i) => i !== selection.index)
+      const removable = new Set(selection.indices.filter((i) => i !== 0 && i !== sorted.length - 1))
+      if (removable.size === 0) return
+      const next = sorted.filter((_, i) => !removable.has(i))
       setSelection(null)
       setLocal(selection.axis, next)
       commit(selection.axis, next)
@@ -269,6 +354,8 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
   }, [selection, curveFor, setLocal, commit])
 
   // ---- actions de barre ---------------------------------------------------
+
+  const primaryIndex = selection ? selection.indices[selection.indices.length - 1] : null
 
   const applyPreset = useCallback((name: string) => {
     const nodes = bakeEasing(name)
@@ -283,18 +370,45 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
   }, [curveFor, activeAxis, setLocal, commit])
 
   const setSelectedMode = useCallback((mode: HandleMode) => {
-    if (!selection) return
+    if (!selection || primaryIndex === null) return
     const sorted = sortNodes(curveFor(selection.axis).nodes)
-    const n = { ...sorted[selection.index], mode }
+    const n = { ...sorted[primaryIndex], mode }
     if (mode === 'symmetric' && n.inT !== null && n.outT !== null) {
       // Rend immédiatement symétrique autour du nœud (côté out gagnant).
       n.inT = n.t - ((n.outT ?? n.t) - n.t)
       n.inV = n.v - ((n.outV ?? n.v) - n.v)
     }
-    const nodes = sorted.map((m, i) => (i === selection.index ? n : m))
+    const nodes = sorted.map((m, i) => (i === primaryIndex ? n : m))
     setLocal(selection.axis, nodes)
     commit(selection.axis, nodes)
-  }, [selection, curveFor, setLocal, commit])
+  }, [selection, primaryIndex, curveFor, setLocal, commit])
+
+  /** Readout numérique (B1.3) : édite le nœud principal — t en ms depuis
+   * le début du fade (clampé entre voisins, extrémités figées), v libre. */
+  const editPrimary = useCallback((patch: { tMsIn?: number; v?: number }) => {
+    if (!selection || primaryIndex === null) return
+    const sorted = sortNodes(curveFor(selection.axis).nodes)
+    const i = primaryIndex
+    const n = { ...sorted[i] }
+    if (patch.tMsIn !== undefined && i !== 0 && i !== sorted.length - 1) {
+      const lo = sorted[i - 1].t + 0.005
+      const hi = sorted[i + 1].t - 0.005
+      const nt = Math.min(hi, Math.max(lo, patch.tMsIn / fadeMs))
+      const dt = nt - n.t
+      n.t = nt
+      n.inT = n.inT === null ? null : n.inT + dt
+      n.outT = n.outT === null ? null : n.outT + dt
+    }
+    if (patch.v !== undefined) {
+      const dv = patch.v - n.v
+      n.v = patch.v
+      n.inV = n.inV === null ? null : n.inV + dv
+      n.outV = n.outV === null ? null : n.outV + dv
+    }
+    const nodes = sorted.map((m, j) => (j === i ? n : m))
+    setLocal(selection.axis, nodes)
+    commit(selection.axis, nodes)
+  }, [selection, primaryIndex, curveFor, fadeMs, setLocal, commit])
 
   const resetAxis = useCallback(() => {
     setDraft((d) => ({ ...d, [activeAxis]: undefined }))
@@ -342,6 +456,23 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
   const holdW = Math.max(0, (cue.durationMs - fadeMs) * pxPerMs)
   const y0 = vToY(0)
   const y1 = vToY(1)
+
+  // Grille graduée (B1.2) : horizontales à pas joli avec labels épinglés,
+  // verticales = EXACTEMENT les ticks de la règle (alignement structurel).
+  const hStep = niceStep(vMax - vMin, height - 2 * PAD_V)
+  const hLines: number[] = []
+  for (let v = Math.ceil(vMin / hStep) * hStep; v <= vMax + 1e-9; v += hStep) {
+    hLines.push(Math.round(v * 1e6) / 1e6)
+  }
+  const vTicks = computeTicks(pxPerMs, scrollLeft, viewportWidth)
+
+  // Nœud principal pour le readout de la toolbar.
+  const primaryNode = selection && primaryIndex !== null
+    ? sortNodes(curveFor(selection.axis).nodes)[primaryIndex] ?? null
+    : null
+  const primaryIsEdge = selection && primaryIndex !== null
+    ? (primaryIndex === 0 || primaryIndex === sortNodes(curveFor(selection.axis).nodes).length - 1)
+    : false
 
   return (
     <div className="graph-track" style={{ height }}>
@@ -396,6 +527,30 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
             <button title={t('graph.mirrorHint')} onClick={() => setSelectedMode('symmetric')}>{t('graph.mirror')}</button>
           </>
         )}
+        {primaryNode && (
+          <>
+            <span className="graph-sep" />
+            <label className="graph-readout" title={t('graph.timeHint')}>
+              {t('graph.time')}
+              <NumericInput
+                value={Math.round(primaryNode.t * fadeMs)}
+                step={10}
+                onCommit={(v) => { if (v !== null && !primaryIsEdge) editPrimary({ tMsIn: v }) }}
+              />
+            </label>
+            <label className="graph-readout" title={t('graph.valueHint')}>
+              {t('graph.value')}
+              <NumericInput
+                value={Math.round(primaryNode.v * 1000) / 1000}
+                step={0.05}
+                onCommit={(v) => { if (v !== null) editPrimary({ v }) }}
+              />
+            </label>
+            {selection && selection.indices.length > 1 && (
+              <span className="graph-multi-count">{t('graph.multiCount', { count: selection.indices.length })}</span>
+            )}
+          </>
+        )}
         <span className="graph-sep" />
         <button onClick={copyCurve} title={t('graph.copyHint')}>{t('graph.copy')}</button>
         <button onClick={pasteCurve} disabled={!curveClipboard} title={t('graph.pasteHint')}>{t('graph.paste')}</button>
@@ -410,6 +565,24 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
         {/* Zone de fade (éditable) + zone de maintien du bloc. */}
         <rect x={x0} y={0} width={fadeW} height={height} className="graph-fade-zone" />
         {holdW > 0 && <rect x={x0 + fadeW} y={0} width={holdW} height={height} className="graph-hold-zone" />}
+
+        {/* Grille graduée (B1.2) : verticales = ticks de la règle. */}
+        {vTicks.map((tick) => (
+          <line
+            key={`vt-${tick.ms}`}
+            x1={tick.ms * pxPerMs} x2={tick.ms * pxPerMs} y1={0} y2={height}
+            className={tick.label !== null ? 'graph-grid-v graph-grid-v-major' : 'graph-grid-v'}
+          />
+        ))}
+        {hLines.map((v) => (
+          <g key={`h-${v}`}>
+            <line x1={scrollLeft} x2={scrollLeft + viewportWidth} y1={vToY(v)} y2={vToY(v)} className="graph-grid-h" />
+            <text x={scrollLeft + viewportWidth - 6} y={vToY(v) - 2} className="graph-grid-label" textAnchor="end">
+              {Math.round(v * 100) / 100}
+            </text>
+          </g>
+        ))}
+
         {/* Lignes de référence progrès 0 (départ) et 1 (cible). */}
         <line x1={x0} x2={x0 + fadeW} y1={y1} y2={y1} className="graph-ref-line" />
         <line x1={x0} x2={x0 + fadeW} y1={y0} y2={y0} className="graph-ref-line" />
@@ -427,6 +600,8 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
             const { t1, v1, t2, v2 } = segmentControls(a, b)
             d += ` C ${tToX(t1)} ${vToY(v1)}, ${tToX(t2)} ${vToY(v2)}, ${tToX(b.t)} ${vToY(b.v)}`
           }
+          // Marqueur au playhead (B1.7) : valeur de la courbe à l'instant lu.
+          const phv = playheadFrac >= 0 && playheadFrac <= 1 ? evalCurve(sorted, playheadFrac) : null
           return (
             <g key={axis}>
               <path
@@ -435,26 +610,36 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
                 style={{ stroke: color }}
                 onPointerDown={() => setActiveAxis(axis)}
               />
+              {phv !== null && (
+                <circle cx={tToX(playheadFrac)} cy={vToY(phv)} r={3} className="graph-playhead-dot" style={{ fill: color }} />
+              )}
+              {isActive && phv !== null && (
+                <text x={tToX(playheadFrac) + 6} y={vToY(phv) - 6} className="graph-playhead-value">{phv.toFixed(2)}</text>
+              )}
               {isActive && sorted.map((n, i) => {
-                const selected = selection?.axis === axis && selection.index === i
+                const selected = !!selection && selection.axis === axis && selection.indices.includes(i)
+                // Poignées de TOUS les nœuds de l'axe actif (B1.5) —
+                // pleines si le nœud est sélectionné, estompées sinon.
+                const handleClass = selected ? 'graph-handle' : 'graph-handle graph-handle-dim'
+                const lineClass = selected ? 'graph-handle-line' : 'graph-handle-line graph-handle-dim'
                 return (
                   <g key={i}>
-                    {selected && n.inT !== null && n.inV !== null && (
+                    {n.inT !== null && n.inV !== null && (
                       <>
-                        <line x1={tToX(n.t)} y1={vToY(n.v)} x2={tToX(n.inT)} y2={vToY(n.inV)} className="graph-handle-line" />
+                        <line x1={tToX(n.t)} y1={vToY(n.v)} x2={tToX(n.inT)} y2={vToY(n.inV)} className={lineClass} />
                         <circle
                           cx={tToX(n.inT)} cy={vToY(n.inV)} r={HANDLE_R}
-                          className="graph-handle" style={{ fill: color }}
+                          className={handleClass} style={{ fill: color }}
                           onPointerDown={(e) => beginHandleDrag(e, axis, i, 'in')}
                         />
                       </>
                     )}
-                    {selected && n.outT !== null && n.outV !== null && (
+                    {n.outT !== null && n.outV !== null && (
                       <>
-                        <line x1={tToX(n.t)} y1={vToY(n.v)} x2={tToX(n.outT)} y2={vToY(n.outV)} className="graph-handle-line" />
+                        <line x1={tToX(n.t)} y1={vToY(n.v)} x2={tToX(n.outT)} y2={vToY(n.outV)} className={lineClass} />
                         <circle
                           cx={tToX(n.outT)} cy={vToY(n.outV)} r={HANDLE_R}
-                          className="graph-handle" style={{ fill: color }}
+                          className={handleClass} style={{ fill: color }}
                           onPointerDown={(e) => beginHandleDrag(e, axis, i, 'out')}
                         />
                       </>
@@ -471,6 +656,11 @@ export function GraphEditor({ cue, act, pointId, pointName, pxPerMs, height, con
             </g>
           )
         })}
+
+        {/* Readout flottant pendant un drag (B1.3). */}
+        {dragReadout && (
+          <text x={dragReadout.x + 8} y={dragReadout.y} className="graph-drag-readout">{dragReadout.text}</text>
+        )}
       </svg>
     </div>
   )

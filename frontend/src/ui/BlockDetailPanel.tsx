@@ -21,13 +21,16 @@ import {
   DndContext, PointerSensor, useDraggable, useSensor, useSensors,
   type DragEndEvent, type DragMoveEvent,
 } from '@dnd-kit/core'
-import { sidecar } from '../sidecar'
+import { sidecar, useTick } from '../sidecar'
 import type { Activation, Cue, Point } from '../types'
 import { useT } from '../i18n'
-import { useTimelineView } from '../timeline/timelineView'
+import { useTimelineView, sendTimelineViewCommand } from '../timeline/timelineView'
 import { useAudioPeaks } from '../timeline/audioPeaks'
 import { MiniWaveform } from '../timeline/MiniWaveform'
 import { computeTicks } from '../timeline/ticks'
+import { attachTouchPinch, classifyWheel } from '../timeline/wheelGestures'
+import { WaypointDiamonds, waypointTimeFracs } from '../timeline/waypoints'
+import { replaceWaypointSelection, waypointKey } from '../timeline/waypointSelection'
 
 // Aligné sur MIN_AUTO_DURATION_MS (core/timeline.py) : plancher de fade,
 // jamais un bloc de durée nulle donc invisible/impossible à re-saisir.
@@ -43,16 +46,46 @@ function fmtS(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
-export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }: {
+export function BlockDetailPanel({ cue, projectPoints, audioPath, bottomPx, onClose }: {
   cue: Cue
   projectPoints: Point[]
-  tMs: number
   audioPath: string | null
+  /** Bord bas du panneau flottant = juste au-dessus de la timeline. */
+  bottomPx: number
   onClose: () => void
 }) {
   const t = useT()
+  // Tick consomme ici (refactor fluidite 2026-08-07).
+  const tMs = useTick()?.tMs ?? 0
   const { pxPerMs, scrollLeft } = useTimelineView()
   const peaks = useAudioPeaks(audioPath)
+  // Panneau FLOTTANT (fix 2026-08-07, "seulement 4 blocs rendus") : le
+  // dock vivait DANS le rail timeline à hauteur fixe — toute hauteur
+  // au-delà était coupée par le parent, scroll interne impuissant. Sorti
+  // du flux : hauteur redimensionnable INDÉPENDANTE de la timeline
+  // (poignée en haut, persistée), il se superpose au bas du terrain quand
+  // on l'agrandit, + mode PLEIN ÉCRAN façon YouTube (bouton à côté de ✕).
+  const [panelHeight, setPanelHeight] = useState(() => {
+    const saved = Number(localStorage.getItem('lumitrack.blockDetailHeight'))
+    return Number.isFinite(saved) && saved >= 180 ? Math.min(saved, window.innerHeight * 0.85) : 320
+  })
+  const [fullscreen, setFullscreen] = useState(false)
+  const beginPanelResize = (e: React.PointerEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = panelHeight
+    const onMove = (ev: PointerEvent) => {
+      const h = Math.max(180, Math.min(window.innerHeight * 0.85, startH + (startY - ev.clientY)))
+      setPanelHeight(h)
+      localStorage.setItem('lumitrack.blockDetailHeight', String(Math.round(h)))
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
   // Ref CALLBACK, pas un useRef classique : si ce bloc n'a encore aucun
   // acteur activé à l'ouverture du panneau, `.block-detail-tracks` ne
   // monte pas tout de suite (branche `rows.length === 0` plus bas) — un
@@ -60,6 +93,60 @@ export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }
   // apparaît enfin (premier acteur activé pendant que le panneau reste
   // ouvert), laissant viewportWidth bloqué à 0.
   const [tracksEl, setTracksEl] = useState<HTMLDivElement | null>(null)
+  // Lasso de sélection des losanges de waypoints (2026-08-07) : glisser
+  // sur le FOND des rangées (pas une barre ni un losange) dessine un
+  // rectangle ; la sélection suit EN DIRECT, reste après le relâchement
+  // (Suppr, drag groupé, menu). Coordonnées locales au conteneur tracks.
+  const [wpLasso, setWpLasso] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
+
+  // Zoom/pan à la molette DANS le panneau (tranche E, 2026-08-07) : la
+  // timeline principale est masquée par l'overlay — on lui DÉLÈGUE les
+  // gestes (elle seule possède le scroll DOM et l'animation de zoom).
+  // L'ancre part en TEMPS : les deux fenêtres n'ont pas le même bord
+  // gauche. Mêmes conventions que la vraie timeline : molette = zoom au
+  // curseur, Maj+molette = défilement.
+  const viewRef = useRef({ pxPerMs, scrollLeft })
+  viewRef.current = { pxPerMs, scrollLeft }
+  useEffect(() => {
+    if (!tracksEl) return
+    // Même sensibilité continue + routage trackpad que la timeline
+    // principale (wheelGestures, 2026-08-07).
+    const onWheel = (e: WheelEvent) => {
+      const intent = classifyWheel(e)
+      if (!intent) return
+      e.preventDefault()
+      if (intent.kind === 'panV') {
+        // Défilement vertical DU PANNEAU (ses rangées d'acteurs), pas de
+        // délégation : c'est son propre conteneur scrollable.
+        const body = tracksEl.closest('.block-detail-body')
+        if (body) body.scrollTop += intent.deltaPx
+      } else if (intent.kind === 'pan') {
+        sendTimelineViewCommand({ scrollDeltaPx: intent.deltaPx })
+      } else {
+        const rect = tracksEl.getBoundingClientRect()
+        const v = viewRef.current
+        const anchorMs = Math.max(0, (v.scrollLeft + e.clientX - rect.left) / v.pxPerMs)
+        sendTimelineViewCommand({ zoomFactor: intent.factor, anchorMs })
+      }
+    }
+    tracksEl.addEventListener('wheel', onWheel, { passive: false })
+    return () => tracksEl.removeEventListener('wheel', onWheel)
+  }, [tracksEl])
+
+  // Écran tactile : deux doigts = panoramique + pincement, délégués à la
+  // timeline principale comme la molette.
+  useEffect(() => {
+    if (!tracksEl) return
+    return attachTouchPinch(tracksEl, ({ panDeltaPx, zoomFactor, centerX }) => {
+      if (panDeltaPx !== 0) sendTimelineViewCommand({ scrollDeltaPx: panDeltaPx })
+      if (zoomFactor !== 1) {
+        const rect = tracksEl.getBoundingClientRect()
+        const v = viewRef.current
+        const anchorMs = Math.max(0, (v.scrollLeft + centerX - rect.left) / v.pxPerMs)
+        sendTimelineViewCommand({ zoomFactor, anchorMs })
+      }
+    })
+  }, [tracksEl])
   const [viewportWidth, setViewportWidth] = useState(0)
   const pxPerMsRef = useRef(pxPerMs)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 3 } }))
@@ -123,12 +210,28 @@ export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }
   const blockWidth = cue.durationMs * pxPerMs
 
   return (
-    <div className="block-detail-dock">
+    <div
+      className={`block-detail-dock${fullscreen ? ' block-detail-fullscreen' : ''}`}
+      style={fullscreen ? undefined : { bottom: bottomPx, height: panelHeight }}
+    >
+      {!fullscreen && (
+        <div
+          className="block-detail-resize-grip"
+          title={t('blockDetail.resizeHint')}
+          onPointerDown={beginPanelResize}
+        />
+      )}
       <div className="block-detail-head">
         <span className="swatch" style={{ background: cue.color }} />
         <h2>{cue.name}</h2>
         <span className="block-detail-duration">{fmtS(cue.durationMs)}</span>
         <span className="block-detail-spacer" />
+        <button
+          onClick={() => setFullscreen((v) => !v)}
+          title={fullscreen ? t('blockDetail.exitFullscreen') : t('blockDetail.fullscreen')}
+        >
+          {fullscreen ? '🗗' : '⛶'}
+        </button>
         <button onClick={onClose} title={t('blockDetail.close')}>✕</button>
       </div>
       {rows.length === 0 ? (
@@ -155,8 +258,84 @@ export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }
                 </div>
               ))}
             </div>
-            <div className="block-detail-tracks" ref={setTracksEl}>
-              <div className="block-detail-ruler" style={{ height: RULER_MINI_H }}>
+            <div
+              className="block-detail-tracks"
+              ref={setTracksEl}
+              onPointerDown={(e) => {
+                // Lasso : uniquement depuis le FOND (rangée ou conteneur),
+                // jamais depuis une barre, un losange ou la mini-règle.
+                const target = e.target as HTMLElement
+                if (!(target.classList.contains('block-detail-row-track') || target === e.currentTarget)) return
+                if (e.button !== 0) return
+                e.preventDefault()
+                const host = e.currentTarget
+                const rect = host.getBoundingClientRect()
+                const x0 = e.clientX - rect.left
+                const y0 = e.clientY - rect.top
+                const top0 = RULER_MINI_H + (audioPath ? MINI_AUDIO_H : 0)
+                const apply = (x1: number, y1: number) => {
+                  setWpLasso({ x0, y0, x1, y1 })
+                  const lx0 = Math.min(x0, x1)
+                  const lx1 = Math.max(x0, x1)
+                  const ly0 = Math.min(y0, y1)
+                  const ly1 = Math.max(y0, y1)
+                  const keys: string[] = []
+                  rows.forEach(({ pointId, act }, j) => {
+                    const rowTop = top0 + j * ROW_H
+                    if (rowTop + ROW_H < ly0 || rowTop > ly1) return
+                    const fade = Math.max(1, act.fadeMs)
+                    const fr = waypointTimeFracs(act.pathPoints ?? [])
+                    fr.forEach((f, i) => {
+                      const x = (cue.startMs + act.startOffsetMs + f * fade) * pxPerMs - scrollLeft
+                      if (x >= lx0 && x <= lx1) keys.push(waypointKey(pointId, i))
+                    })
+                  })
+                  replaceWaypointSelection(keys)
+                }
+                const onMove = (ev: PointerEvent) => {
+                  apply(ev.clientX - rect.left, ev.clientY - rect.top)
+                }
+                const onUp = () => {
+                  window.removeEventListener('pointermove', onMove)
+                  window.removeEventListener('pointerup', onUp)
+                  setWpLasso(null)
+                }
+                window.addEventListener('pointermove', onMove)
+                window.addEventListener('pointerup', onUp)
+              }}
+            >
+              {wpLasso && (
+                <div
+                  className="tl-wp-lasso"
+                  style={{
+                    left: Math.min(wpLasso.x0, wpLasso.x1),
+                    top: Math.min(wpLasso.y0, wpLasso.y1),
+                    width: Math.abs(wpLasso.x1 - wpLasso.x0),
+                    height: Math.abs(wpLasso.y1 - wpLasso.y0),
+                  }}
+                />
+              )}
+              {/* Mini-règle CLIQUABLE (tranche E, 2026-08-07) : seek au
+                  clic + scrub au glisser, même comportement que la règle
+                  principale — le playhead vit déjà (tMs). */}
+              <div
+                className="block-detail-ruler block-detail-ruler-seek"
+                style={{ height: RULER_MINI_H }}
+                onPointerDown={(e) => {
+                  e.preventDefault()
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  const seekAt = (clientX: number) =>
+                    sidecar.seek(Math.max(0, (scrollLeft + clientX - rect.left) / pxPerMs))
+                  seekAt(e.clientX)
+                  const onMove = (ev: PointerEvent) => seekAt(ev.clientX)
+                  const onUp = () => {
+                    window.removeEventListener('pointermove', onMove)
+                    window.removeEventListener('pointerup', onUp)
+                  }
+                  window.addEventListener('pointermove', onMove)
+                  window.addEventListener('pointerup', onUp)
+                }}
+              >
                 {ticks.map((tick) => (
                   <div
                     key={tick.ms}
@@ -182,6 +361,7 @@ export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }
                   key={pointId}
                   pointId={pointId}
                   point={point}
+                  cue={cue}
                   cueStartMs={cue.startMs}
                   pxPerMs={pxPerMs}
                   scrollLeft={scrollLeft}
@@ -197,9 +377,10 @@ export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }
   )
 }
 
-function BlockDetailBar({ pointId, point, cueStartMs, pxPerMs, scrollLeft, act, preview }: {
+function BlockDetailBar({ pointId, point, cue, cueStartMs, pxPerMs, scrollLeft, act, preview }: {
   pointId: string
   point: Point | undefined
+  cue: Cue
   cueStartMs: number
   pxPerMs: number
   scrollLeft: number
@@ -241,6 +422,17 @@ function BlockDetailBar({ pointId, point, cueStartMs, pxPerMs, scrollLeft, act, 
           }}
         />
       </div>
+      {/* Losanges de keyframes de CETTE activation (2026-08-07) : clic =
+          éditer dans la scène, glisser = retimer, clic droit = menu. */}
+      <WaypointDiamonds
+        cue={cue}
+        act={act}
+        pointId={pointId}
+        pxPerMs={pxPerMs}
+        baseMs={0}
+        xOffsetPx={scrollLeft}
+        centerY={ROW_H * 0.5}
+      />
     </div>
   )
 }

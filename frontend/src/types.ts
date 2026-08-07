@@ -89,6 +89,11 @@ export interface PathPoint {
   inDyCm: number | null
   outDxCm: number | null
   outDyCm: number | null
+  /** Fraction temporelle 0..1 du fade à laquelle l'acteur DOIT passer par
+   * ce waypoint (moteur v4, 2026-08-07) — null/absent = répartition
+   * automatique par longueur d'arc (comportement historique). Posé par le
+   * glisser des losanges de la timeline. */
+  tFrac?: number | null
 }
 
 export interface PathHandle {
@@ -333,6 +338,13 @@ export interface AckMessage {
   type: 'ack'
 }
 
+/** Crash détecté : le fichier de secours de la session précédente existe
+ * encore (une sortie propre l'aurait effacé) — App propose la
+ * récupération (2026-08-07). */
+export interface RescueAvailableMessage {
+  type: 'rescue_available'
+}
+
 export interface IfacesMessage {
   type: 'ifaces'
   addresses: string[]
@@ -363,5 +375,5 @@ export interface PsnPreviewMessage {
 
 export type ServerMessage =
   | ProjectMessage | TickMessage | BlockContextMessage | TrajectoriesMessage
-  | ErrorMessage | SavedMessage | AckMessage
+  | ErrorMessage | SavedMessage | AckMessage | RescueAvailableMessage
   | IfacesMessage | PsnPreviewMessage | BundleArchiveMessage

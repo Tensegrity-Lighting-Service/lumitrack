@@ -1,6 +1,10 @@
 [package]
 name = "app"
-version = "0.1.0"
+# Version INTERNE du crate Rust — c'est elle que cargo affiche dans les
+# logs de build ("Compiling app vX"), source de confusion (2026-08-07 :
+# "il build une 0.1.0"). La VRAIE version de l'app vit dans
+# tauri.conf.json ; celle-ci n'a aucun effet, alignée grossièrement.
+version = "0.3.0"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
