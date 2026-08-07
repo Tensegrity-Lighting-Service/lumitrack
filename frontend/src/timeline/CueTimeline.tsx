@@ -171,6 +171,12 @@ export function CueTimeline({ project, connected, selectedCueId, selectedPointId
   const graphPointName = graphPointId
     ? project.points.find((p) => p.id === graphPointId)?.name ?? graphPointId
     : null
+  // Couleur par acteur pour les losanges de waypoints des acteurs non
+  // courants (recalculé au changement de roster seulement).
+  const pointColors = useMemo(
+    () => new Map(project.points.map((p) => [p.id, p.color])),
+    [project.points],
+  )
   const graphVisible = showGraph && selectedCue !== null
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -336,6 +342,7 @@ export function CueTimeline({ project, connected, selectedCueId, selectedPointId
       if (!intent) return
       e.preventDefault()
       if (intent.kind === 'pan') el.scrollLeft += intent.deltaPx
+      else if (intent.kind === 'panV') el.scrollTop += intent.deltaPx
       else zoomAt(intent.factor, e.clientX)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -1004,10 +1011,28 @@ export function CueTimeline({ project, connected, selectedCueId, selectedPointId
                       <span className="cue-block-count">{count}</span>
                     </div>
                     <div className="cue-block-body" />
-                    {/* Losanges de keyframes (2026-08-07) : waypoints du
-                        tracé de l'acteur sélectionné dans ce bloc — clic =
-                        éditer dans la scène, glisser = retimer, clic droit
-                        = supprimer/timing auto. */}
+                    {/* Losanges de keyframes (2026-08-07) : TOUS les
+                        waypoints du bloc sélectionné (couleur de leur
+                        acteur, translucides), l'acteur courant par-dessus
+                        en plein — "pas de losange" signalé quand seul
+                        l'acteur courant était affiché et qu'il n'avait pas
+                        de tracé. Clic = éditer dans la scène, glisser =
+                        retimer, clic droit = supprimer/timing auto. */}
+                    {cue.id === selectedCueId && Object.entries(cue.activations)
+                      .filter(([pid, a]) => (a.pathPoints?.length ?? 0) > 0 && pid !== graphPointId)
+                      .map(([pid, a]) => (
+                        <WaypointDiamonds
+                          key={pid}
+                          cue={cue}
+                          act={a}
+                          pointId={pid}
+                          pxPerMs={effPxPerMs}
+                          baseMs={startMs}
+                          centerY={(LANE_H - 6) * 0.68}
+                          color={pointColors.get(pid)}
+                          dim
+                        />
+                      ))}
                     {cue.id === selectedCueId && graphPointId && cue.activations[graphPointId] && (
                       <WaypointDiamonds
                         cue={cue}

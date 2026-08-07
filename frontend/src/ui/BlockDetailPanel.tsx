@@ -109,7 +109,12 @@ export function BlockDetailPanel({ cue, projectPoints, audioPath, bottomPx, onCl
       const intent = classifyWheel(e)
       if (!intent) return
       e.preventDefault()
-      if (intent.kind === 'pan') {
+      if (intent.kind === 'panV') {
+        // Défilement vertical DU PANNEAU (ses rangées d'acteurs), pas de
+        // délégation : c'est son propre conteneur scrollable.
+        const body = tracksEl.closest('.block-detail-body')
+        if (body) body.scrollTop += intent.deltaPx
+      } else if (intent.kind === 'pan') {
         sendTimelineViewCommand({ scrollDeltaPx: intent.deltaPx })
       } else {
         const rect = tracksEl.getBoundingClientRect()

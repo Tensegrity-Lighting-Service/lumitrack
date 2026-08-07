@@ -53,7 +53,7 @@ PROJECT_FORMAT = "Lumitrack"
 PROJECT_VERSION = 4
 # Version de l'APP qui a écrit le fichier — purement informatif (message
 # d'erreur utile, diagnostic). À garder alignée sur tauri.conf.json.
-APP_VERSION = "0.3.0-beta.8"
+APP_VERSION = "0.3.0-beta.9"
 
 # Marqueur de l'ancien format de bundle (dossier = paquet, manifest.json +
 # media/ + versions/) — conservé uniquement pour la lecture rétrocompatible,

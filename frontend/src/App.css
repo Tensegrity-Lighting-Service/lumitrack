@@ -744,6 +744,12 @@
 /* Timing impose (tFrac pose) : accent turquoise, comme le playhead value. */
 .tl-waypoint-timed { background: #4ff5e0; }
 .tl-waypoint-timed:hover { background: #7ff8ea; }
+/* Acteurs non courants : plus petits, translucides, couleur d'acteur. */
+.tl-waypoint-dim {
+  width: 7px; height: 7px; margin-left: -3.5px; margin-top: -3.5px;
+  opacity: 0.55; z-index: 3;
+}
+.tl-waypoint-dim:hover { opacity: 1; }
 
 /* Bouton retour ligne droite (tracé spatial) dans l'inspecteur */
 .inspector-clear-path {

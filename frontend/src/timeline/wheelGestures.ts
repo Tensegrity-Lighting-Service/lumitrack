@@ -37,17 +37,26 @@ export function wheelZoomFactor(e: WheelEvent): number {
 
 export type WheelIntent =
   | { kind: 'pan'; deltaPx: number }
+  | { kind: 'panV'; deltaPx: number }
   | { kind: 'zoom'; factor: number }
 
-/** Classe un événement wheel en intention : panoramique ou zoom. Retourne
- * null si l'événement ne porte aucun delta utile (ne pas preventDefault). */
+/** Classe un événement wheel en intention : panoramique H/V ou zoom.
+ * Retourne null si l'événement ne porte aucun delta utile (ne pas
+ * preventDefault). Shift = défilement VERTICAL (demande 2026-08-07 : le
+ * panoramique horizontal est déjà couvert par le balayage trackpad et le
+ * clic-molette-glisser). */
 export function classifyWheel(e: WheelEvent): WheelIntent | null {
   if (e.ctrlKey) return { kind: 'zoom', factor: wheelZoomFactor(e) }
   const ax = Math.abs(e.deltaX)
   const ay = Math.abs(e.deltaY)
-  if (e.shiftKey || ax > ay) {
+  if (e.shiftKey) {
+    // Certains systèmes transposent déjà Shift+molette en deltaX : on
+    // reprend l'axe dominant, la destination reste le défilement vertical.
     const d = ax > ay ? e.deltaX : e.deltaY
-    return d !== 0 ? { kind: 'pan', deltaPx: d } : null
+    return d !== 0 ? { kind: 'panV', deltaPx: d } : null
+  }
+  if (ax > ay) {
+    return e.deltaX !== 0 ? { kind: 'pan', deltaPx: e.deltaX } : null
   }
   return e.deltaY !== 0 ? { kind: 'zoom', factor: wheelZoomFactor(e) } : null
 }

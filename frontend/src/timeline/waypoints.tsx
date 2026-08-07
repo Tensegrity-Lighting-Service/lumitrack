@@ -55,7 +55,7 @@ const DRAG_SEND_MS = 33
 /** Rangée de losanges d'UNE activation. `baseMs` = temps du bord gauche du
  * conteneur positionné (cue.startMs quand on rend DANS le bloc, 0 dans un
  * contenu absolu du panneau détail). */
-export function WaypointDiamonds({ cue, act, pointId, pxPerMs, baseMs, centerY, xOffsetPx = 0 }: {
+export function WaypointDiamonds({ cue, act, pointId, pxPerMs, baseMs, centerY, xOffsetPx = 0, color, dim = false }: {
   cue: Cue
   act: Activation
   pointId: string
@@ -65,6 +65,11 @@ export function WaypointDiamonds({ cue, act, pointId, pxPerMs, baseMs, centerY, 
   /** Décalage écran supplémentaire (repère viewport du panneau détail :
    * scrollLeft en pixels) — 0 dans le contenu scrollé de la timeline. */
   xOffsetPx?: number
+  /** Couleur de l'acteur (losanges des acteurs NON courants dans le bloc
+   * de la timeline principale) — les timings imposés restent turquoise. */
+  color?: string
+  /** Acteur non courant : losange plus petit et translucide. */
+  dim?: boolean
 }) {
   const wps = act.pathPoints ?? []
   const dragRef = useRef<{
@@ -155,10 +160,11 @@ export function WaypointDiamonds({ cue, act, pointId, pxPerMs, baseMs, centerY, 
       {wps.map((wp, i) => (
         <div
           key={i}
-          className={`tl-waypoint${wp.tFrac !== null && wp.tFrac !== undefined ? ' tl-waypoint-timed' : ''}`}
+          className={`tl-waypoint${wp.tFrac !== null && wp.tFrac !== undefined ? ' tl-waypoint-timed' : ''}${dim ? ' tl-waypoint-dim' : ''}`}
           style={{
             left: (cue.startMs - baseMs + offsetMs + fracs[i] * fadeMs) * pxPerMs - xOffsetPx,
             top: centerY,
+            ...(color && !(wp.tFrac !== null && wp.tFrac !== undefined) ? { background: color } : {}),
           }}
           title={t('timeline.waypointHint', { n: i + 1 })}
           onPointerDown={(e) => onDown(e, i)}
