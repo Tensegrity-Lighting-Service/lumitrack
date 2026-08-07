@@ -1,0 +1,528 @@
+// Boîte de transformation type After Effects / Capture (tranches C1-C3,
+// 2026-08-07) — remplace le gizmo PivotControls (SelectionTransformLegacy,
+// rebranchable via USE_LEGACY_GIZMO tant que celle-ci n'est pas validée).
+//
+// - 8 poignées d'étirement : le point OPPOSÉ est fixe ; Maj maintenu =
+//   symétrique par rapport à l'ANCRE (au centre par défaut, comme AE) ;
+//   arête = un axe, coin = deux axes ratio libre.
+// - Point d'ANCRAGE déplaçable : un CÔNE dont la POINTE est le pivot
+//   (référence Capture) — pivot des rotations et du scale symétrique.
+//   Session-only, revient au centre quand la sélection change.
+// - Anneau de rotation DOUBLE-MODE autour de l'ancre : bande pleine
+//   intérieure = rotation du GROUPE (positions + lacet, arcs Bézier si
+//   rotation sur place) ; bord fin extérieur = rotation du LACET INDIVIDUEL
+//   de chaque acteur en DELTA additif (seules les phases en mode 'fixed'
+//   sont touchées — path/focus jamais, arbitrage Florian).
+// - Drag de l'intérieur = déplacement (snap grille).
+//
+// Modèle de geste : pattern ZoneHandles (pointerdown r3f arme dragRef, un
+// useEffect écoute pointermove/up/cancel sur window, raycast du plan sol
+// converti en cm scène via le parent StageGroup) — PAS le onDrag de drei.
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
+import { Html, Line } from '@react-three/drei'
+import type { MapControls as MapControlsImpl } from 'three-stdlib'
+import * as THREE from 'three'
+import { sidecar } from '../sidecar'
+import type { BlockContextEntry, Pose, Project } from '../types'
+import {
+  BOX_HANDLES, boundsOf, handlePointCm, oppositePointCm, rotationArc, scaleFactors,
+  type Bounds, type BoxHandleDef,
+} from './transformBox'
+import { BOX_PAD_PX, CM_TO_M, DRAG_SEND_INTERVAL_MS, HANDLE_PX, ScreenSizedHandle, stageToLocal } from './sceneShared'
+
+type Member = {
+  pointId: string; baseX: number; baseY: number
+  /** null si la phase n'est pas en mode "fixed" — path/focus sont dérivés
+   * par le backend, jamais d'angle écrit (demande Florian 2026-08-01). */
+  baseTravelYaw: number | null
+  baseArrivalYaw: number | null
+}
+
+type BoxDragKind = 'move' | 'scale' | 'rotate-group' | 'rotate-yaw' | 'anchor'
+
+interface BoxDrag {
+  kind: BoxDragKind
+  members: Member[]
+  cueId: string
+  bounds0: Bounds
+  anchorCm: { x: number; y: number }
+  startCursorCm: { x: number; y: number }
+  handle: BoxHandleDef | null
+  handleStartCm: { x: number; y: number } | null
+  startTheta: number
+  lastTheta: number
+  lastSent: number
+  entriesAtStart: Record<string, BlockContextEntry> | null
+}
+
+const GROUND = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+
+export function TransformBox({ project, positions, selectedCueId, selectedPointIds, controlsRef, snapToGrid, gridSizeCm, dragActiveRef, resolveGestureCue, blockEntries }: {
+  project: Project
+  positions: Record<string, Pose>
+  selectedCueId: string
+  resolveGestureCue: (pointIds: string[]) => string
+  blockEntries: Record<string, BlockContextEntry> | null
+  selectedPointIds: string[]
+  controlsRef: React.RefObject<MapControlsImpl | null>
+  snapToGrid: boolean
+  gridSizeCm: number
+  dragActiveRef: React.RefObject<boolean>
+}) {
+  const { camera, gl } = useThree()
+
+  const membersNow = (): Member[] => {
+    const cue = project.cues.find((c) => c.id === selectedCueId)
+    const out: Member[] = []
+    for (const id of selectedPointIds) {
+      const act = cue?.activations[id]
+      const pose = positions[id]
+      const baseX = act?.targetXCm ?? pose?.[0]
+      const baseY = act?.targetYCm ?? pose?.[1]
+      if (baseX === undefined || baseX === null || baseY === undefined || baseY === null) continue
+      const travelMode = act?.travelOrientationMode ?? 'fixed'
+      const arrivalMode = act?.arrivalOrientationMode ?? 'hold'
+      out.push({
+        pointId: id, baseX, baseY,
+        baseTravelYaw: travelMode === 'fixed' ? (act?.travelFixedYawDeg ?? 0) : null,
+        baseArrivalYaw: arrivalMode === 'fixed' ? (act?.arrivalFixedYawDeg ?? 0) : null,
+      })
+    }
+    return out
+  }
+
+  const live = membersNow()
+  const zoomNow = (camera as THREE.OrthographicCamera).zoom || 1
+  const padCm = (BOX_PAD_PX / zoomNow) / CM_TO_M
+  const bounds = boundsOf(live, padCm)
+
+  // Ancre : OFFSET relatif au centre bbox (elle suit le groupe qui bouge),
+  // null = centre. Session-only, reset au changement de sélection.
+  const [anchorOffset, setAnchorOffset] = useState<{ dx: number; dy: number } | null>(null)
+  const selectionKey = [...selectedPointIds].sort().join('|')
+  useEffect(() => { setAnchorOffset(null) }, [selectionKey])
+
+  // Badge degrés pendant une rotation (null = pas de rotation en cours).
+  const [liveThetaDeg, setLiveThetaDeg] = useState<number | null>(null)
+
+  const dragRef = useRef<BoxDrag | null>(null)
+  const rootRef = useRef<THREE.Group>(null)
+  const shiftRef = useRef(false)
+
+  // Raycast curseur -> cm scène. Le parent de rootRef porte la matrice
+  // MONDE du StageGroup (terrain placé/tourné) — même précaution que le
+  // fix "tu l'as juste inversée" du legacy.
+  const raycasterRef = useRef(new THREE.Raycaster())
+  const cursorCmFrom = (e: PointerEvent): { x: number; y: number } | null => {
+    const parent = rootRef.current?.parent
+    if (!parent) return null
+    const rect = gl.domElement.getBoundingClientRect()
+    const ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    )
+    raycasterRef.current.setFromCamera(ndc, camera)
+    const hit = new THREE.Vector3()
+    if (!raycasterRef.current.ray.intersectPlane(GROUND, hit)) return null
+    const local = parent.worldToLocal(hit.clone())
+    return { x: local.x / CM_TO_M, y: local.z / CM_TO_M }
+  }
+
+  // Handler de fin toujours frais pour le filet global (même piège de
+  // hooks que le legacy : TOUT hook avant le return null conditionnel).
+  const handleDragEndRef = useRef<() => void>(() => {})
+  const handleMoveRef = useRef<(e: PointerEvent) => void>(() => {})
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      shiftRef.current = e.shiftKey
+      if (dragRef.current) handleMoveRef.current(e)
+    }
+    const onUp = () => { if (dragRef.current) handleDragEndRef.current() }
+    window.addEventListener('pointermove', onMove, { capture: true, passive: true })
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove, { capture: true })
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [])
+
+  if (!bounds || live.length < 1) return null
+  const singleMember = live.length === 1
+  const { minX, minY, maxX, maxY } = bounds
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+  const anchorCm = {
+    x: centerX + (anchorOffset?.dx ?? 0),
+    y: centerY + (anchorOffset?.dy ?? 0),
+  }
+
+  const begin = (e: { stopPropagation: () => void; nativeEvent?: PointerEvent }, kind: BoxDragKind, handle: BoxHandleDef | null = null) => {
+    e.stopPropagation()
+    const native = (e as { nativeEvent?: PointerEvent }).nativeEvent
+    if (!native) return
+    const members = membersNow()
+    if (members.length === 0) return
+    // Lacet individuel sans aucun membre en mode fixed : ne rien armer —
+    // et surtout ne pas appeler resolveGestureCue, qui peut CRÉER un bloc.
+    if (kind === 'rotate-yaw'
+      && !members.some((m) => m.baseTravelYaw !== null || m.baseArrivalYaw !== null)) return
+    const cursor = cursorCmFrom(native)
+    if (!cursor) return
+    // L'ancre se déplace en local pur : pas de bloc à résoudre.
+    const cueId = kind === 'anchor' ? '' : resolveGestureCue(members.map((m) => m.pointId))
+    const bounds0: Bounds = { minX, minY, maxX, maxY }
+    dragRef.current = {
+      kind, members, cueId, bounds0,
+      anchorCm: { ...anchorCm },
+      startCursorCm: cursor,
+      handle,
+      handleStartCm: handle ? handlePointCm(handle, bounds0) : null,
+      startTheta: Math.atan2(cursor.y - anchorCm.y, cursor.x - anchorCm.x),
+      lastTheta: 0,
+      lastSent: 0,
+      entriesAtStart: blockEntries,
+    }
+    dragActiveRef.current = true
+    if (controlsRef.current) controlsRef.current.enabled = false
+  }
+
+  const handleMove = (e: PointerEvent) => {
+    const drag = dragRef.current
+    if (!drag) return
+    const cursor = cursorCmFrom(e)
+    if (!cursor) return
+
+    if (drag.kind === 'anchor') {
+      // Local pur, pas de throttle réseau. Aimantation douce (10 px) au
+      // centre bbox et aux membres.
+      const snapCm = (10 / zoomNow) / CM_TO_M
+      let ax = cursor.x
+      let ay = cursor.y
+      const candidates = [{ x: centerX, y: centerY }, ...drag.members.map((m) => ({ x: m.baseX, y: m.baseY }))]
+      for (const c of candidates) {
+        if (Math.hypot(c.x - ax, c.y - ay) < snapCm) { ax = c.x; ay = c.y; break }
+      }
+      setAnchorOffset({ dx: ax - centerX, dy: ay - centerY })
+      return
+    }
+
+    const now = performance.now()
+    if (now - drag.lastSent < DRAG_SEND_INTERVAL_MS) return
+    drag.lastSent = now
+
+    if (drag.kind === 'move') {
+      let dx = cursor.x - drag.startCursorCm.x
+      let dy = cursor.y - drag.startCursorCm.y
+      if (snapToGrid && gridSizeCm > 0) {
+        // Aimante le déplacement DU GROUPE à la grille (comme le legacy).
+        dx = Math.round(dx / gridSizeCm) * gridSizeCm
+        dy = Math.round(dy / gridSizeCm) * gridSizeCm
+      }
+      sidecar.setActivations(drag.cueId, drag.members.map((m) => ({
+        pointId: m.pointId,
+        targetXCm: m.baseX + dx,
+        targetYCm: m.baseY + dy,
+      })))
+      return
+    }
+
+    if (drag.kind === 'scale' && drag.handle && drag.handleStartCm) {
+      // Maj lu à CHAQUE move (togglable en plein geste, bases figées) :
+      // point fixe = ancre (symétrique AE) ou point opposé.
+      const fixedPt = shiftRef.current ? drag.anchorCm : oppositePointCm(drag.handle, drag.bounds0)
+      const { fx, fy } = scaleFactors(drag.handle, fixedPt, drag.handleStartCm, cursor)
+      sidecar.setActivations(drag.cueId, drag.members.map((m) => ({
+        pointId: m.pointId,
+        targetXCm: fixedPt.x + (m.baseX - fixedPt.x) * fx,
+        targetYCm: fixedPt.y + (m.baseY - fixedPt.y) * fy,
+      })))
+      return
+    }
+
+    // Rotations : angle balayé autour de l'ANCRE, convention stage
+    // (atan2(y, x)) — la même que rotationArc, par construction.
+    const theta = Math.atan2(cursor.y - drag.anchorCm.y, cursor.x - drag.anchorCm.x) - drag.startTheta
+    drag.lastTheta = theta
+    const thetaDeg = (theta * 180) / Math.PI
+    setLiveThetaDeg(thetaDeg)
+
+    if (drag.kind === 'rotate-group') {
+      const c = Math.cos(theta)
+      const s = Math.sin(theta)
+      sidecar.setActivations(drag.cueId, drag.members.map((m) => {
+        const rx = m.baseX - drag.anchorCm.x
+        const ry = m.baseY - drag.anchorCm.y
+        return {
+          pointId: m.pointId,
+          targetXCm: drag.anchorCm.x + rx * c - ry * s,
+          targetYCm: drag.anchorCm.y + rx * s + ry * c,
+          ...(m.baseTravelYaw !== null || m.baseArrivalYaw !== null ? { orientationOverridden: true } : {}),
+          ...(m.baseTravelYaw !== null ? { travelFixedYawDeg: m.baseTravelYaw + thetaDeg } : {}),
+          ...(m.baseArrivalYaw !== null ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDeg } : {}),
+        }
+      }))
+      return
+    }
+
+    // rotate-yaw : SEULES les façades tournent (delta additif, phases
+    // fixed uniquement) — positions et trajectoires intouchées.
+    const eligible = drag.members.filter((m) => m.baseTravelYaw !== null || m.baseArrivalYaw !== null)
+    sidecar.setActivations(drag.cueId, eligible.map((m) => ({
+      pointId: m.pointId,
+      orientationOverridden: true,
+      ...(m.baseTravelYaw !== null ? { travelFixedYawDeg: m.baseTravelYaw + thetaDeg } : {}),
+      ...(m.baseArrivalYaw !== null ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDeg } : {}),
+    })))
+  }
+
+  const handleDragEnd = () => {
+    const drag = dragRef.current
+    dragRef.current = null
+    dragActiveRef.current = false
+    setLiveThetaDeg(null)
+    if (controlsRef.current) controlsRef.current.enabled = true
+    if (!drag) return
+
+    if (drag.kind === 'rotate-yaw' && Math.abs(drag.lastTheta) >= 1e-4) {
+      // Écriture finale exacte (le dernier move peut avoir été throttlé).
+      const thetaDeg = (drag.lastTheta * 180) / Math.PI
+      const eligible = drag.members.filter((m) => m.baseTravelYaw !== null || m.baseArrivalYaw !== null)
+      sidecar.setActivations(drag.cueId, eligible.map((m) => ({
+        pointId: m.pointId,
+        orientationOverridden: true,
+        ...(m.baseTravelYaw !== null ? { travelFixedYawDeg: m.baseTravelYaw + thetaDeg } : {}),
+        ...(m.baseArrivalYaw !== null ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDeg } : {}),
+      })))
+      return
+    }
+
+    if (drag.kind !== 'rotate-group' || Math.abs(drag.lastTheta) < 1e-4) return
+    // Écriture finale de la rotation de groupe : cible + ARC autour de
+    // l'ANCRE + lacet — mêmes gardes que le legacy (inPlace < 50 cm,
+    // rayon non nul avant d'écrire pathPoints, sinon on effacerait des
+    // courbes personnalisées).
+    const thetaDeg = (drag.lastTheta * 180) / Math.PI
+    const finalEntries: Array<Record<string, unknown> & { pointId: string }> = []
+    for (const m of drag.members) {
+      const arc = rotationArc(m.baseX, m.baseY, drag.anchorCm.x, drag.anchorCm.y, drag.lastTheta)
+      const startPose = drag.entriesAtStart?.[m.pointId]?.startPose ?? null
+      const inPlace = startPose !== null
+        && Math.hypot(startPose[0] - m.baseX, startPose[1] - m.baseY) < 50
+      const r = Math.hypot(m.baseX - drag.anchorCm.x, m.baseY - drag.anchorCm.y)
+      finalEntries.push({
+        pointId: m.pointId,
+        targetXCm: arc.targetXCm,
+        targetYCm: arc.targetYCm,
+        ...(inPlace && r >= 1e-6
+          ? { pathPoints: arc.pathPoints, startHandle: arc.startHandle, targetHandle: arc.targetHandle }
+          : {}),
+        ...(m.baseTravelYaw !== null || m.baseArrivalYaw !== null ? { orientationOverridden: true } : {}),
+        ...(m.baseTravelYaw !== null ? { travelFixedYawDeg: m.baseTravelYaw + thetaDeg } : {}),
+        ...(m.baseArrivalYaw !== null ? { arrivalFixedYawDeg: m.baseArrivalYaw + thetaDeg } : {}),
+      })
+    }
+    sidecar.setActivations(drag.cueId, finalEntries)
+  }
+
+  handleDragEndRef.current = handleDragEnd
+  handleMoveRef.current = handleMove
+
+  const widthM = (maxX - minX) * CM_TO_M
+  const heightM = (maxY - minY) * CM_TO_M
+  const outline = [
+    new THREE.Vector3(...stageToLocal(minX, minY, 0)),
+    new THREE.Vector3(...stageToLocal(maxX, minY, 0)),
+    new THREE.Vector3(...stageToLocal(maxX, maxY, 0)),
+    new THREE.Vector3(...stageToLocal(minX, maxY, 0)),
+    new THREE.Vector3(...stageToLocal(minX, minY, 0)),
+  ].map((v) => new THREE.Vector3(v.x, 0.02, v.z))
+  const anchorLocal = stageToLocal(anchorCm.x, anchorCm.y, 0)
+  const cornersCm = [
+    { x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY },
+  ]
+
+  return (
+    <group ref={rootRef}>
+      <Line points={outline} color="#ffffff" lineWidth={2} transparent opacity={0.9}
+        depthTest={false} renderOrder={1040} />
+
+      {/* Intérieur = déplacement (plane invisible, comme ZoneHandles). */}
+      <mesh
+        position={[(minX + maxX) / 2 * CM_TO_M, 0.015, (minY + maxY) / 2 * CM_TO_M]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        renderOrder={1039}
+        onPointerDown={(e) => begin(e, 'move')}
+        onPointerOver={() => { document.body.style.cursor = 'move' }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        <planeGeometry args={[widthM, heightM]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} depthTest={false} />
+      </mesh>
+
+      {/* 8 poignées d'étirement — pas pour un acteur seul. */}
+      {!singleMember && BOX_HANDLES.map((h) => {
+        const p = handlePointCm(h, bounds)
+        return (
+          <ScreenSizedHandle
+            key={h.key}
+            position={stageToLocal(p.x, p.y, 3)}
+            sizePx={HANDLE_PX}
+            args={h.axis === 'x' ? [0.35, 1, 1] : h.axis === 'z' ? [1, 1, 0.35] : [1, 1, 1]}
+            color="#ffffff"
+            cursor={h.cursor}
+            renderOrder={1042}
+            onPointerDown={(e) => begin(e, 'scale', h)}
+          />
+        )
+      })}
+
+      {/* Anneau double-mode autour de l'ancre. */}
+      <RotationRing
+        anchorLocal={anchorLocal}
+        anchorCm={anchorCm}
+        cornersCm={cornersCm}
+        showGroupBand={!singleMember}
+        onDownBand={(e) => begin(e, 'rotate-group')}
+        onDownEdge={(e) => begin(e, 'rotate-yaw')}
+      />
+
+      {/* Ancre : cône dont la POINTE est le pivot (référence Capture). */}
+      {!singleMember && (
+        <AnchorCone
+          anchorLocal={anchorLocal}
+          onPointerDown={(e) => begin(e, 'anchor')}
+        />
+      )}
+
+      {/* Badge degrés pendant une rotation. */}
+      {liveThetaDeg !== null && (
+        <Html position={[anchorLocal[0], 0.4, anchorLocal[2]]} center style={{ pointerEvents: 'none' }}>
+          <div className="transform-angle-badge">{liveThetaDeg.toFixed(1)}°</div>
+        </Html>
+      )}
+    </group>
+  )
+}
+
+/** Anneau de rotation : bande pleine (groupe) + bord fin extérieur (lacet
+ * individuel). Rayon = distance max ancre→coins + marge, en unités
+ * LOCALES, recalculé quand le zoom ou la géométrie changent de >2 % (les
+ * ringGeometry sont recréées à ce moment-là seulement). */
+function RotationRing({ anchorLocal, anchorCm, cornersCm, showGroupBand, onDownBand, onDownEdge }: {
+  anchorLocal: [number, number, number]
+  anchorCm: { x: number; y: number }
+  cornersCm: { x: number; y: number }[]
+  showGroupBand: boolean
+  onDownBand: (e: { stopPropagation: () => void; nativeEvent?: PointerEvent }) => void
+  onDownEdge: (e: { stopPropagation: () => void; nativeEvent?: PointerEvent }) => void
+}) {
+  const [dims, setDims] = useState({ rM: 1, pxM: 0.01 })
+  const [hover, setHover] = useState<'band' | 'edge' | null>(null)
+  useFrame(({ camera }) => {
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const pxM = 1 / zoom
+    const distM = Math.max(
+      0,
+      ...cornersCm.map((c) => Math.hypot(c.x - anchorCm.x, c.y - anchorCm.y) * CM_TO_M),
+    )
+    const rM = Math.max(70 * pxM, distM + 18 * pxM)
+    if (Math.abs(rM - dims.rM) / rM > 0.02 || Math.abs(pxM - dims.pxM) / pxM > 0.02) {
+      setDims({ rM, pxM })
+    }
+  })
+  const { rM, pxM } = dims
+  const bandGeom = useMemo(() => new THREE.RingGeometry(rM, rM + 14 * pxM, 64), [rM, pxM])
+  const edgeGeom = useMemo(() => new THREE.RingGeometry(rM + 16 * pxM, rM + 24 * pxM, 64), [rM, pxM])
+  const edgeHitGeom = useMemo(() => new THREE.RingGeometry(rM + 14 * pxM, rM + 30 * pxM, 48), [rM, pxM])
+  useEffect(() => () => { bandGeom.dispose() }, [bandGeom])
+  useEffect(() => () => { edgeGeom.dispose() }, [edgeGeom])
+  useEffect(() => () => { edgeHitGeom.dispose() }, [edgeHitGeom])
+  const pos: [number, number, number] = [anchorLocal[0], 0.02, anchorLocal[2]]
+  return (
+    <group>
+      {showGroupBand && (
+        <mesh
+          geometry={bandGeom}
+          position={pos}
+          rotation={[-Math.PI / 2, 0, 0]}
+          renderOrder={1041}
+          onPointerDown={onDownBand}
+          onPointerOver={() => { setHover('band'); document.body.style.cursor = 'grab' }}
+          onPointerOut={() => { setHover(null); document.body.style.cursor = 'auto' }}
+        >
+          <meshBasicMaterial color="#4F6DF5" transparent opacity={hover === 'band' ? 0.45 : 0.22}
+            depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+      <mesh
+        geometry={edgeGeom}
+        position={pos}
+        rotation={[-Math.PI / 2, 0, 0]}
+        renderOrder={1041}
+        onPointerDown={onDownEdge}
+        onPointerOver={() => { setHover('edge'); document.body.style.cursor = 'alias' }}
+        onPointerOut={() => { setHover(null); document.body.style.cursor = 'auto' }}
+      >
+        <meshBasicMaterial color="#f5c84f" transparent opacity={hover === 'edge' ? 0.4 : 0.15}
+          depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+      {/* Hitbox élargie du bord (fin = dur à viser). */}
+      <mesh
+        geometry={edgeHitGeom}
+        position={pos}
+        rotation={[-Math.PI / 2, 0, 0]}
+        renderOrder={1040}
+        onPointerDown={onDownEdge}
+        onPointerOver={() => { setHover('edge'); document.body.style.cursor = 'alias' }}
+        onPointerOut={() => { setHover(null); document.body.style.cursor = 'auto' }}
+      >
+        <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  )
+}
+
+/** Cône d'ancrage : géométrie unité dont la POINTE touche y=0 (le pivot),
+ * mise à l'échelle écran-constante par frame (~18 px). */
+function AnchorCone({ anchorLocal, onPointerDown }: {
+  anchorLocal: [number, number, number]
+  onPointerDown: (e: { stopPropagation: () => void; nativeEvent?: PointerEvent }) => void
+}) {
+  const ref = useRef<THREE.Group>(null)
+  useFrame(({ camera }) => {
+    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
+    const s = 18 / zoom
+    if (ref.current) ref.current.scale.set(s, s, s)
+  })
+  return (
+    <group ref={ref} position={[anchorLocal[0], 0, anchorLocal[2]]}>
+      {/* Cône pointe en BAS : rotation π sur X, décalé pour que la pointe
+          soit à y=0 exactement — la pointe EST le pivot. */}
+      <mesh
+        position={[0, 0.5, 0]}
+        rotation={[Math.PI, 0, 0]}
+        renderOrder={1043}
+        onPointerDown={onPointerDown}
+        onPointerOver={() => { document.body.style.cursor = 'grab' }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        <coneGeometry args={[0.35, 1, 12]} />
+        <meshBasicMaterial color="#f5c84f" depthTest={false} />
+      </mesh>
+      {/* Hitbox élargie. */}
+      <mesh
+        position={[0, 0.5, 0]}
+        renderOrder={1042}
+        onPointerDown={onPointerDown}
+        onPointerOver={() => { document.body.style.cursor = 'grab' }}
+        onPointerOut={() => { document.body.style.cursor = 'auto' }}
+      >
+        <sphereGeometry args={[1.1, 8, 8]} />
+        <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} />
+      </mesh>
+    </group>
+  )
+}

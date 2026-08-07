@@ -39,12 +39,13 @@ import { buildActorContextMenuSections, buildFocusPointContextMenuSections } fro
 import { t } from '../i18n'
 import { CM_TO_M, DRAG_SEND_INTERVAL_MS, HANDLE_PX, stageToLocal, ScreenSizedHandle, type DragKind } from './sceneShared'
 import { SelectionTransformLegacy } from './SelectionTransformLegacy'
+import { TransformBox } from './TransformBoxGizmo'
 
 // Bascule pièce-détachée (tranche C0, 2026-08-07) : l'ancien gizmo
 // PivotControls reste rebranchable en UNE ligne pendant la validation de
 // la nouvelle TransformBox — à supprimer avec SelectionTransformLegacy.tsx
 // une fois la TransformBox validée par Florian.
-const USE_LEGACY_GIZMO = true
+const USE_LEGACY_GIZMO = false
 
 // Redesign 2026-08-04 (Florian: "les acteurs sont vraiment petits sur un
 // terrain de cette taille, et à l'inverse le point sélectionné est trop
@@ -2283,7 +2284,18 @@ function SceneContent({
             gardé par selectedCueId (voir handleDragStart) pour ne jamais
             écrire sur un id de bloc vide. */}
         {selectedPointIds.length >= 1 && (
-          USE_LEGACY_GIZMO && <SelectionTransformLegacy
+          USE_LEGACY_GIZMO ? <SelectionTransformLegacy
+            project={project}
+            positions={positions}
+            selectedCueId={selectedCueId ?? ''}
+            selectedPointIds={selectedPointIds}
+            controlsRef={controlsRef}
+            snapToGrid={snapToGrid}
+            gridSizeCm={project.gridSizeCm}
+            dragActiveRef={boxDragActiveRef}
+            resolveGestureCue={resolveGestureCue}
+            blockEntries={liveRef.current.entries}
+          /> : <TransformBox
             project={project}
             positions={positions}
             selectedCueId={selectedCueId ?? ''}
