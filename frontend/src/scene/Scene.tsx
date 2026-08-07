@@ -1258,7 +1258,16 @@ function SceneContent({
          * curseur de référence (cm) fixé au premier échantillon du drag —
          * chaque membre suit alors le MÊME delta que la souris. */
         group: { pointId: string; baseX: number; baseY: number }[] | null
-        baseCursor: { x: number; y: number } | null }
+        baseCursor: { x: number; y: number } | null
+        /** Contextualisation clic/glisser (demande 2026-08-07) : down sur
+         * un membre d'une selection MULTIPLE -> on ne sait pas encore si
+         * c'est un deplacement du groupe (mouvement) ou une re-selection
+         * de CET acteur (clic sec). moved bascule au-dela de 4 px ecran ;
+         * au pointerup sans mouvement, clickSelect remplace la selection.
+         * Aucune ecriture n'est envoyee avant le seuil. */
+        startClient: { x: number; y: number }
+        moved: boolean
+        clickSelect: string | null }
     | { kind: 'waypoint'; pointId: string; index: number; planeY: number; lastSent: number; cueId: string }
     | { kind: 'handle'; pointId: string; anchor: 'start' | 'target' | number; side: 'in' | 'out'; planeY: number; lastSent: number; cueId: string }
 
@@ -1527,6 +1536,13 @@ function SceneContent({
       const drag = dragRef.current
       if (!drag) return
       dragRef.current = null
+      // Clic SEC (aucun mouvement) sur un membre d'une selection multiple :
+      // le geste n'a rien ecrit — c'etait une re-selection, la selection
+      // se reduit a cet acteur au relachement (demande 2026-08-07 :
+      // "contextualiser deplacement du groupe vs nouvelle selection").
+      if (drag.kind === 'target' && !drag.moved && drag.clickSelect) {
+        onSelectPoint(drag.clickSelect)
+      }
       // Restore to the *locked* state, not unconditionally true — otherwise
       // finishing an actor drag would silently re-enable a locked camera.
       if (controlsRef.current) controlsRef.current.enabled = !cameraLocked
@@ -1535,6 +1551,17 @@ function SceneContent({
     const onMove = (e: PointerEvent) => {
       const drag = dragRef.current
       if (!drag) return
+      // Contextualisation clic/glisser (2026-08-07) : tant que le curseur
+      // n'a pas bouge de 4 px, le geste 'target' reste MUET — un clic sec
+      // sur un membre d'une selection multiple ne doit rien ecrire (il
+      // re-selectionnera l'acteur au pointerup), et un micro-tremblement
+      // de clic ne cree pas d'edition fantome.
+      if (drag.kind === 'target') {
+        if (!drag.moved) {
+          if (Math.hypot(e.clientX - drag.startClient.x, e.clientY - drag.startClient.y) < 4) return
+          drag.moved = true
+        }
+      }
       // Chaque geste porte SON cue (bloc actif, bloc gouvernant du geste
       // libre, ou bloc créé au pointerdown) — ne pas dépendre du
       // selectedCueId de la closure, qui ne se met à jour qu'au re-render.
@@ -2092,6 +2119,9 @@ function SceneContent({
       freeCreate,
       group: members.length > 1 ? groupBases(members) : null,
       baseCursor: null,
+      startClient: { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY },
+      moved: false,
+      clickSelect: inSelection && selectedIdsRef.current.length > 1 ? pointId : null,
     }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
@@ -2120,6 +2150,9 @@ function SceneContent({
       freeCreate: null,
       group: members.length > 1 ? groupBases(members) : null,
       baseCursor: null,
+      startClient: { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY },
+      moved: false,
+      clickSelect: null,
     }
     if (controlsRef.current) controlsRef.current.enabled = false
   }
