@@ -20,6 +20,7 @@ import type { BlockContextMessage, Cue, Pose, Project } from '../types'
 import { sidecar, useTick } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
+import { attachTouchPinch, classifyWheel } from './wheelGestures'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
 import { showContextMenu } from '../ui/contextMenuStore'
@@ -325,20 +326,30 @@ export function CueTimeline({ project, connected, selectedCueId, selectedPointId
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    // Sensibilité continue + trackpad (2026-08-07) : classifyWheel route
+    // pincement/balayage/molette, wheelZoomFactor rend le zoom
+    // proportionnel au delta (un cran de souris = ×1.25 comme avant, un
+    // micro-événement de trackpad ne zoome que d'un poil).
     const onWheel = (e: WheelEvent) => {
-      if (e.shiftKey) {
-        const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
-        if (d !== 0) {
-          e.preventDefault()
-          el.scrollLeft += d
-        }
-      } else {
-        e.preventDefault()
-        zoomAt(e.deltaY < 0 ? 1.25 : 0.8, e.clientX)
-      }
+      const intent = classifyWheel(e)
+      if (!intent) return
+      e.preventDefault()
+      if (intent.kind === 'pan') el.scrollLeft += intent.deltaPx
+      else zoomAt(intent.factor, e.clientX)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
+  }, [zoomAt])
+
+  // Écran tactile : deux doigts = panoramique + pincement combinés (façon
+  // carte), un doigt garde les interactions normales (drag, scrub).
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    return attachTouchPinch(el, ({ panDeltaPx, zoomFactor, centerX }) => {
+      if (panDeltaPx !== 0) el.scrollLeft += panDeltaPx
+      if (zoomFactor !== 1) zoomAt(zoomFactor, centerX)
+    })
   }, [zoomAt])
 
   // Commandes venues du BlockDetailPanel (tranche E, 2026-08-07) : la

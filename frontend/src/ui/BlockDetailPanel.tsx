@@ -28,6 +28,7 @@ import { useTimelineView, sendTimelineViewCommand } from '../timeline/timelineVi
 import { useAudioPeaks } from '../timeline/audioPeaks'
 import { MiniWaveform } from '../timeline/MiniWaveform'
 import { computeTicks } from '../timeline/ticks'
+import { attachTouchPinch, classifyWheel } from '../timeline/wheelGestures'
 
 // Aligné sur MIN_AUTO_DURATION_MS (core/timeline.py) : plancher de fade,
 // jamais un bloc de durée nulle donc invisible/impossible à re-saisir.
@@ -101,20 +102,38 @@ export function BlockDetailPanel({ cue, projectPoints, audioPath, bottomPx, onCl
   viewRef.current = { pxPerMs, scrollLeft }
   useEffect(() => {
     if (!tracksEl) return
+    // Même sensibilité continue + routage trackpad que la timeline
+    // principale (wheelGestures, 2026-08-07).
     const onWheel = (e: WheelEvent) => {
+      const intent = classifyWheel(e)
+      if (!intent) return
       e.preventDefault()
-      if (e.shiftKey) {
-        const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
-        if (d !== 0) sendTimelineViewCommand({ scrollDeltaPx: d })
+      if (intent.kind === 'pan') {
+        sendTimelineViewCommand({ scrollDeltaPx: intent.deltaPx })
       } else {
         const rect = tracksEl.getBoundingClientRect()
         const v = viewRef.current
         const anchorMs = Math.max(0, (v.scrollLeft + e.clientX - rect.left) / v.pxPerMs)
-        sendTimelineViewCommand({ zoomFactor: e.deltaY < 0 ? 1.25 : 0.8, anchorMs })
+        sendTimelineViewCommand({ zoomFactor: intent.factor, anchorMs })
       }
     }
     tracksEl.addEventListener('wheel', onWheel, { passive: false })
     return () => tracksEl.removeEventListener('wheel', onWheel)
+  }, [tracksEl])
+
+  // Écran tactile : deux doigts = panoramique + pincement, délégués à la
+  // timeline principale comme la molette.
+  useEffect(() => {
+    if (!tracksEl) return
+    return attachTouchPinch(tracksEl, ({ panDeltaPx, zoomFactor, centerX }) => {
+      if (panDeltaPx !== 0) sendTimelineViewCommand({ scrollDeltaPx: panDeltaPx })
+      if (zoomFactor !== 1) {
+        const rect = tracksEl.getBoundingClientRect()
+        const v = viewRef.current
+        const anchorMs = Math.max(0, (v.scrollLeft + centerX - rect.left) / v.pxPerMs)
+        sendTimelineViewCommand({ zoomFactor, anchorMs })
+      }
+    })
   }, [tracksEl])
   const [viewportWidth, setViewportWidth] = useState(0)
   const pxPerMsRef = useRef(pxPerMs)
