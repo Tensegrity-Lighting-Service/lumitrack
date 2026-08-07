@@ -54,7 +54,12 @@ const MIN_PX_PER_MS = 0.001
 const MAX_PX_PER_MS = 2 // 0.5 s par 1000 px
 const CONTENT_PAD_PX = 160
 
-const CUE_PALETTE = ['#4F6DF5', '#F5734F', '#B06FE0', '#4FF58C', '#4FF5E0', '#F5C84F']
+// Palette désaturée (tranche G, 2026-08-07) : tons ~45 % de saturation
+// accordés au thème sombre — l'ancienne palette fluo (#4FF58C…) rendait
+// la timeline illisible. Ne concerne que les NOUVEAUX blocs ; les projets
+// existants gardent leurs couleurs (le rendu adouci de App.css fait le
+// reste pour eux).
+const CUE_PALETTE = ['#5B6EAE', '#A8695B', '#8B6FA8', '#5F9377', '#5C8E99', '#A18F5C']
 
 
 // Graduations : extraites dans ./ticks.ts (mission "panneau détail du bloc

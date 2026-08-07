@@ -598,6 +598,10 @@
   border-radius: 4px; overflow: hidden;
   font-size: 11px; color: white;
   cursor: grab; user-select: none;
+  /* Liseré identitaire (tranche G, 2026-08-07) : la couleur pleine ne vit
+     plus que sur ce fil de 3 px — le reste du bloc est adouci pour coller
+     au thème sombre ("pas très sexy", palette fluo illisible). */
+  border-left: 3px solid var(--cue-color);
 }
 .cue-block-dragging { cursor: grabbing; opacity: 0.9; }
 .cue-resize {
@@ -609,17 +613,19 @@
 .cue-block-header {
   display: flex; align-items: center; justify-content: space-between;
   height: 16px; flex-shrink: 0; padding: 0 6px;
-  background: var(--cue-color);
+  /* Aplat pleine saturation -> teinte fondue dans le thème (tranche G). */
+  background: color-mix(in srgb, var(--cue-color) 52%, #1b1e26);
+  color: #e8e8ec;
   font-weight: 600;
 }
 .cue-block-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cue-block-count {
-  background: rgba(255,255,255,0.3); border-radius: 8px;
+  background: rgba(255,255,255,0.14); border-radius: 8px;
   padding: 0 6px; margin-left: 6px; flex-shrink: 0;
 }
 .cue-block-body {
   flex: 1;
-  background: color-mix(in srgb, var(--cue-color) 28%, #14161a);
+  background: color-mix(in srgb, var(--cue-color) 15%, #14161a);
 }
 /* Global selection highlight (§ "principe d'highlight sur element
    selectionne au niveau global"): same idea as .roster li.selected and the
