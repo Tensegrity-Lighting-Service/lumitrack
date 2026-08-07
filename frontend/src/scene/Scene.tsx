@@ -32,11 +32,14 @@ import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { fileSrc } from '../fileSrc'
 import { ErrorBoundary } from '../ui/ErrorBoundary'
-import { sidecar } from '../sidecar'
+import { sidecar, useTick } from '../sidecar'
 import type { Activation, BackstageZone, BlockContextEntry, BlockContextMessage, Cue, PathPoint, Point, Project, Pose } from '../types'
 import { openContextMenu } from '../ui/contextMenuStore'
 import { buildActorContextMenuSections, buildFocusPointContextMenuSections } from '../ui/actorContextMenu'
 import { t } from '../i18n'
+
+// Reference STABLE pour 'aucun tick encore' (evite un nouvel objet par rendu).
+const EMPTY_POSITIONS: Record<string, Pose> = {}
 import { CM_TO_M, DRAG_SEND_INTERVAL_MS, HANDLE_PX, stageToLocal, ScreenSizedHandle, type DragKind } from './sceneShared'
 import { SelectionTransformLegacy } from './SelectionTransformLegacy'
 import { TransformBox } from './TransformBoxGizmo'
@@ -2432,8 +2435,6 @@ export interface SceneHandle {
 
 export const Scene = forwardRef<SceneHandle, {
   project: Project
-  positions: Record<string, Pose>
-  tMs: number
   selectedPointId: string | null
   selectedPointIds: string[]
   selectedCueId: string | null
@@ -2451,6 +2452,11 @@ export const Scene = forwardRef<SceneHandle, {
   onToggleGrid: () => void
   onFitToWindow: () => void
 }>(function Scene(props, ref) {
+  // Tick consomme ICI (refactor fluidite 2026-08-07) — App ne re-rend
+  // plus a chaque tick, seule la scene (qui en a besoin) s'y abonne.
+  const tick = useTick()
+  const positions = tick?.positions ?? EMPTY_POSITIONS
+  const tMs = tick?.tMs ?? 0
   // Rectangle du lasso : dessiné en HTML au-dessus du canvas (le canvas ne
   // peut pas rendre de DOM) — SceneContent pilote, ce wrapper affiche.
   const [lassoRect, setLassoRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -2463,7 +2469,7 @@ export const Scene = forwardRef<SceneHandle, {
   return (
     <div className="scene-canvas-wrap">
       <Canvas onPointerMissed={(e) => dropHandleRef.current?.handleTerrainContextMenu(e)}>
-        <SceneContent {...props} onLassoRect={setLassoRect} dropHandleRef={dropHandleRef} />
+        <SceneContent {...props} positions={positions} tMs={tMs} onLassoRect={setLassoRect} dropHandleRef={dropHandleRef} />
       </Canvas>
       {lassoRect && (
         <div

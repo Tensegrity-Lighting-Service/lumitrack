@@ -21,7 +21,7 @@ import {
   DndContext, PointerSensor, useDraggable, useSensor, useSensors,
   type DragEndEvent, type DragMoveEvent,
 } from '@dnd-kit/core'
-import { sidecar } from '../sidecar'
+import { sidecar, useTick } from '../sidecar'
 import type { Activation, Cue, Point } from '../types'
 import { useT } from '../i18n'
 import { useTimelineView, sendTimelineViewCommand } from '../timeline/timelineView'
@@ -43,16 +43,17 @@ function fmtS(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
-export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, bottomPx, onClose }: {
+export function BlockDetailPanel({ cue, projectPoints, audioPath, bottomPx, onClose }: {
   cue: Cue
   projectPoints: Point[]
-  tMs: number
   audioPath: string | null
   /** Bord bas du panneau flottant = juste au-dessus de la timeline. */
   bottomPx: number
   onClose: () => void
 }) {
   const t = useT()
+  // Tick consomme ici (refactor fluidite 2026-08-07).
+  const tMs = useTick()?.tMs ?? 0
   const { pxPerMs, scrollLeft } = useTimelineView()
   const peaks = useAudioPeaks(audioPath)
   // Panneau FLOTTANT (fix 2026-08-07, "seulement 4 blocs rendus") : le

@@ -336,6 +336,30 @@ export function useTick(): TickMessage | null {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.tick)
 }
 
+/** Statuts du roster derives du tick, sous forme de CLE STABLE (refactor
+ * fluidite 2026-08-07) : useSyncExternalStore compare par Object.is — une
+ * string identique = AUCUN re-rendu. L'app racine ne s'abonne donc plus au
+ * tick brut (qui la re-rendait entiere ~26x/s) : elle ne re-rend que quand
+ * un acteur demarre/s'arrete ou apparait/disparait reellement.
+ * Format : "movingIds...#presentIds..." (ids separes par |). */
+export function useRosterStatusKey(project: Project | null): string {
+  return useSyncExternalStore(sidecar.subscribe, () => {
+    const t = sidecar.tick
+    if (!project || !t) return ''
+    let moving = ''
+    for (const cue of project.cues) {
+      for (const [pid, act] of Object.entries(cue.activations)) {
+        if (t.tMs >= cue.startMs && t.tMs < cue.startMs + act.fadeMs) moving += pid + '|'
+      }
+    }
+    let present = ''
+    for (const p of project.points) {
+      if (t.positions[p.id]) present += p.id + '|'
+    }
+    return moving + '#' + present
+  })
+}
+
 export function useBlockContext(): BlockContextMessage | null {
   return useSyncExternalStore(sidecar.subscribe, () => sidecar.blockContext)
 }

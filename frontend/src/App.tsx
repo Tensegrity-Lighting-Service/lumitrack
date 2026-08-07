@@ -4,7 +4,7 @@ import { Scene, type SceneHandle } from './scene/Scene'
 import { CueTimeline } from './timeline/CueTimeline'
 import {
   sidecar, useBlockContext, useBundlePath, useConnected, useProject, usePsnRunning,
-  useRedoAvailable, useTick, useUndoAvailable,
+  useRedoAvailable, useRosterStatusKey, useUndoAvailable,
 } from './sidecar'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -509,7 +509,6 @@ function App() {
   const t = useT()
   const locale = useLocale()
   const project = useProject()
-  const tick = useTick()
   const connected = useConnected()
   const psnRunning = usePsnRunning()
   const blockContext = useBlockContext()
@@ -834,22 +833,20 @@ function App() {
   // rendu AVANT les enfants (inspecteurs), voir stageCoords.ts.
   if (project) setStageCenter(project.stageWidthCm, project.stageHeightCm)
 
-  const tMs = tick?.tMs ?? 0
-  const playing = tick?.playing ?? false
-  const durationMs = tick?.durationMs ?? 1000
-  const positions = tick?.positions ?? {}
-  const timecodeIn = tick?.timecode ?? null
+  // Refactor fluidite (2026-08-07) : App ne s'abonne PLUS au tick brut —
+  // Scene/CueTimeline/BlockDetailPanel le consomment eux-memes, et le
+  // roster passe par une cle STABLE (useRosterStatusKey) qui ne re-rend
+  // l'app que quand un statut change vraiment. Les callbacks ponctuels
+  // lisent sidecar.tick directement (valeur du moment du clic).
 
-  const movingPointIds = useMemo(() => {
-    const moving = new Set<string>()
-    if (!project) return moving
-    for (const cue of project.cues) {
-      for (const [pointId, act] of Object.entries(cue.activations)) {
-        if (tMs >= cue.startMs && tMs < cue.startMs + act.fadeMs) moving.add(pointId)
-      }
+  const rosterStatusKey = useRosterStatusKey(project)
+  const { movingPointIds, presentPointIds } = useMemo(() => {
+    const [movingPart, presentPart] = rosterStatusKey.split('#')
+    return {
+      movingPointIds: new Set((movingPart ?? '').split('|').filter(Boolean)),
+      presentPointIds: new Set((presentPart ?? '').split('|').filter(Boolean)),
     }
-    return moving
-  }, [project, tMs])
+  }, [rosterStatusKey])
 
   const selectedCue = project?.cues.find((c) => c.id === selectedCueId) ?? null
 
@@ -883,7 +880,8 @@ function App() {
     const pointId = selectedPointIds[0]
     let match: Cue | null = null
     for (const cue of project.cues) {
-      if (tMs < cue.startMs || tMs >= cue.startMs + cue.durationMs) continue
+      const tNow = sidecar.tick?.tMs ?? 0
+      if (tNow < cue.startMs || tNow >= cue.startMs + cue.durationMs) continue
       if (!cue.activations[pointId]) continue
       if (!match || cue.startMs > match.startMs) match = cue
     }
@@ -915,7 +913,7 @@ function App() {
       if (e.code === 'Space') {
         if (isTextField(target)) return
         e.preventDefault()
-        if (playing) sidecar.pause()
+        if (sidecar.tick?.playing) sidecar.pause()
         else sidecar.play()
         return
       }
@@ -956,7 +954,7 @@ function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [playing, selectedCueId, selectedPointIds, project, saveOrSaveAs])
+  }, [selectedCueId, selectedPointIds, project, saveOrSaveAs])
 
   if (!project) {
     return (
@@ -1220,7 +1218,7 @@ function App() {
                                 project={project}
                                 selected={selectedPointIds.includes(p.id)}
                                 moving={movingPointIds.has(p.id)}
-                                offstage={!positions[p.id]}
+                                offstage={!presentPointIds.has(p.id)}
                                 onSelect={selectRange(p)}
                                 dropLine={dropIndicator?.overId === `point:${p.id}` ? (dropIndicator.after ? 'after' : 'before') : null}
                               />
@@ -1243,7 +1241,7 @@ function App() {
                       project={project}
                       selected={selectedPointIds.includes(p.id)}
                       moving={movingPointIds.has(p.id)}
-                      offstage={!positions[p.id]}
+                      offstage={!presentPointIds.has(p.id)}
                       onSelect={selectRange(p)}
                       dropLine={dropIndicator?.overId === `point:${p.id}` ? (dropIndicator.after ? 'after' : 'before') : null}
                     />
@@ -1275,8 +1273,6 @@ function App() {
         <Scene
           ref={sceneRef}
           project={project}
-          positions={positions}
-          tMs={tMs}
           selectedPointId={selectedPointId}
           selectedPointIds={selectedPointIds}
           onSelectPoints={setSelectedPointIds}
@@ -1431,7 +1427,6 @@ function App() {
           <BlockDetailPanel
             cue={selectedCue}
             projectPoints={project.points}
-            tMs={tMs}
             audioPath={project.audioPath}
             bottomPx={timelineHeight + 8}
             onClose={() => setShowBlockDetail(false)}
@@ -1439,16 +1434,11 @@ function App() {
         )}
         <CueTimeline
           project={project}
-          tMs={tMs}
-          playing={playing}
-          durationMs={durationMs}
           connected={connected}
           selectedCueId={selectedCueId}
           selectedPointId={selectedPointId}
           onSelectCue={setSelectedCueId}
           blockContext={blockContext}
-          positions={positions}
-          timecode={timecodeIn}
           onOpenBlockDetail={() => setShowBlockDetail(true)}
         />
       </footer>

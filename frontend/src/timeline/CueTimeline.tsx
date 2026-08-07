@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import type { BlockContextMessage, Cue, Pose, Project } from '../types'
-import { sidecar } from '../sidecar'
+import { sidecar, useTick } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
@@ -59,6 +59,8 @@ const CONTENT_PAD_PX = 160
 // la timeline illisible. Ne concerne que les NOUVEAUX blocs ; les projets
 // existants gardent leurs couleurs (le rendu adouci de App.css fait le
 // reste pour eux).
+const EMPTY_POSITIONS: Record<string, Pose> = {}
+
 const CUE_PALETTE = ['#5B6EAE', '#A8695B', '#8B6FA8', '#5F9377', '#5C8E99', '#A18F5C']
 
 
@@ -73,10 +75,10 @@ interface DragState {
   startClientY: number
   origStartMs: number
   origDurationMs: number
+  durationMs: number
   origLane: number
   /** Proposition courante (affichée pendant le geste, committée au lâcher). */
   startMs: number
-  durationMs: number
   lane: number
   moved: boolean
 }
@@ -90,18 +92,14 @@ function formatTimecodeMs(ms: number): string {
   return `${pad(h)}:${pad(m)}:${sec.toFixed(3).padStart(6, '0')}`
 }
 
-export function CueTimeline({ project, tMs, playing, durationMs, connected, selectedCueId, selectedPointId, onSelectCue, blockContext, positions, timecode, onOpenBlockDetail }: {
+export function CueTimeline({ project, connected, selectedCueId, selectedPointId, onSelectCue, blockContext, onOpenBlockDetail }: {
   project: Project
-  tMs: number
-  playing: boolean
-  durationMs: number
   connected: boolean
   selectedCueId: string | null
   selectedPointId: string | null
   onSelectCue: (cueId: string | null) => void
   /** État du timecode In (Art-Net) quand le suivi est armé — badge à côté
    * du temps : TC reçu (vert) ou en attente (orange). null = suivi off. */
-  timecode: { receiving: boolean; fps: number | null; hmsf: [number, number, number, number] | null } | null
   /** Contexte du bloc sélectionné (départ/cible résolus) — pilote le badge
    * de vitesse affiché directement sur le bloc, pas seulement dans
    * l'inspecteur ("la vitesse peut pas s'afficher dans le bloc même ?"). */
@@ -109,11 +107,19 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
   /** Positions RÉSOLUES par le backend (tick, même source que la scène) —
    * jamais recalculées ici : "diviser au playhead" fige exactement ce qui
    * est déjà affiché, pas une approximation frontend (§13.1.7). */
-  positions: Record<string, Pose>
   /** Ouvre le panneau détail du bloc (menu contextuel) — le bloc visé est
    * déjà sélectionné par `onSelectCue` avant l'appel. */
   onOpenBlockDetail: () => void
 }) {
+  // Tick consomme ICI (refactor fluidite 2026-08-07) : App ne re-rend
+  // plus au tick ; la timeline (playhead, badge TC, split) s'abonne seule.
+  const tick = useTick()
+  const tMs = tick?.tMs ?? 0
+  const playing = tick?.playing ?? false
+  const durationMs = tick?.durationMs ?? 1000
+  const positions = tick?.positions ?? EMPTY_POSITIONS
+  const timecode = tick?.timecode ?? null
+
   const t = useT()
   const cues = project.cues
   // Pistes persistantes (mission multi-pistes) : chaque bloc porte sa
