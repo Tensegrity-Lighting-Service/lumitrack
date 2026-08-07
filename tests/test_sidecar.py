@@ -85,6 +85,54 @@ def test_set_timecode_chase_arms_transport_and_persists():
     del type(session.timecode_input).running
 
 
+def test_blocks_never_overlap_on_a_lane():
+    """Invariant tranche H (2026-08-07) : jamais deux blocs superposes sur
+    une meme piste, quel que soit le chemin — add_cue, update_cue
+    (deplacement/etirement/changement de piste), duree auto. Politique :
+    le bloc MODIFIE est reloge sur la premiere piste libre, jamais les
+    autres (pas d'effet domino)."""
+    session = Session()
+    session.project.cues = []
+    _run(_handle_message(session, {"type": "add_cue", "name": "A",
+                                   "startMs": 0, "durationMs": 4000, "id": "a", "lane": 0}))
+    # Creation chevauchante -> relogee piste 1, A intact.
+    _run(_handle_message(session, {"type": "add_cue", "name": "B",
+                                   "startMs": 2000, "durationMs": 4000, "id": "b", "lane": 0}))
+    a = session.project.cue_by_id("a"); b = session.project.cue_by_id("b")
+    assert (a.lane, a.start_ms) == (0, 0)
+    assert b.lane == 1
+
+    # Deplacement de B hors conflit -> il peut revenir piste 0.
+    _run(_handle_message(session, {"type": "update_cue", "cueId": "b",
+                                   "startMs": 5000, "lane": 0}))
+    assert session.project.cue_by_id("b").lane == 0
+
+    # Etirement de A jusque dans B -> A (le modifie) est reloge, B intact.
+    _run(_handle_message(session, {"type": "update_cue", "cueId": "a",
+                                   "durationMs": 6000}))
+    a = session.project.cue_by_id("a"); b = session.project.cue_by_id("b")
+    assert (b.lane, b.start_ms) == (0, 5000)
+    assert a.lane == 1
+
+
+def test_overlapping_save_is_sanitized_on_load():
+    """Une sauvegarde d'AVANT l'invariant (blocs superposes) est assainie
+    au chargement, dans l'ordre chronologique."""
+    session = Session()
+    d = session.project.to_dict()
+    d["cues"] = [
+        {"id": "x", "name": "X", "color": "#111111", "startMs": 0,
+         "durationMs": 3000, "lane": 0, "autoDuration": False, "activations": {}},
+        {"id": "y", "name": "Y", "color": "#222222", "startMs": 1000,
+         "durationMs": 3000, "lane": 0, "autoDuration": False, "activations": {}},
+        {"id": "z", "name": "Z", "color": "#333333", "startMs": 2000,
+         "durationMs": 3000, "lane": 0, "autoDuration": False, "activations": {}},
+    ]
+    session.set_project(Project.from_dict(d))
+    lanes = {c.id: c.lane for c in session.project.cues}
+    assert lanes == {"x": 0, "y": 1, "z": 2}
+
+
 def test_save_bundle_reply_echoes_the_exact_path(tmp_path):
     """Format zip 2026-08-06 : plus de dossier dedie auto-cree, le fichier
     est ecrit exactement au chemin demande et la reponse le reflete."""

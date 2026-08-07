@@ -424,6 +424,12 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
     return best
   }, [snapCandidates, cues, effPxPerMs])
 
+  // Blocs à jour pour le clamp anti-superposition pendant un drag (tranche
+  // H, 2026-08-07) — une ref, pas une dépendance du useCallback : les
+  // handlers restent stables pendant le geste.
+  const cuesRef = useRef(project.cues)
+  cuesRef.current = project.cues
+
   const beginBlockDrag = useCallback((e: React.PointerEvent<HTMLDivElement>, cue: Cue, mode: DragState['mode']) => {
     // Seul le clic gauche sélectionne/déplace un bloc — le clic milieu
     // (panoramique tactile) au-dessus d'un bloc ne doit ni le sélectionner
@@ -452,6 +458,12 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
       let startMs = d.origStartMs
       let dur = d.origDurationMs
       let lane = d.origLane
+      // Voisins de piste pour le clamp anti-superposition (tranche H) —
+      // le bloc bute contre eux, le backend reste le filet garanti.
+      const laneNeighbors = (l: number) =>
+        cuesRef.current.filter((c) => c.id !== d.cueId && (c.lane ?? 0) === l)
+      const overlaps = (s: number, du: number, l: number) =>
+        laneNeighbors(l).some((n) => s < n.startMs + n.durationMs && n.startMs < s + du)
       if (d.mode === 'move') {
         // Déplacement vertical = changement de piste (drop possible sur la
         // piste vide du bas — une nouvelle piste vide apparaît derrière).
@@ -465,14 +477,40 @@ export function CueTimeline({ project, tMs, playing, durationMs, connected, sele
           if (snappedEnd !== startMs + dur) startMs = snappedEnd - dur
         }
         startMs = Math.max(0, startMs)
+        // Clamp : en cas de collision, se caler du côté le plus proche du
+        // voisin ; si l'espace est trop étroit (toujours en conflit),
+        // garder la dernière position valide du geste.
+        for (const n of laneNeighbors(lane)) {
+          const nEnd = n.startMs + n.durationMs
+          if (startMs < nEnd && n.startMs < startMs + dur) {
+            startMs = (startMs + dur / 2) < (n.startMs + n.durationMs / 2)
+              ? Math.max(0, n.startMs - dur)
+              : nEnd
+          }
+        }
+        if (overlaps(startMs, dur, lane)) {
+          startMs = d.startMs
+          lane = d.lane
+        }
       } else if (d.mode === 'resize-r') {
         dur = Math.max(MIN_CUE_MS, d.origDurationMs + deltaMs)
         const end = snap(d.origStartMs + dur, d.cueId, noSnap)
         dur = Math.max(MIN_CUE_MS, end - d.origStartMs)
+        // Bute contre le premier voisin à droite sur la piste.
+        for (const n of laneNeighbors(lane)) {
+          if (n.startMs >= d.origStartMs && d.origStartMs + dur > n.startMs) {
+            dur = Math.max(MIN_CUE_MS, n.startMs - d.origStartMs)
+          }
+        }
       } else {
         const end = d.origStartMs + d.origDurationMs
         startMs = Math.min(end - MIN_CUE_MS, Math.max(0, d.origStartMs + deltaMs))
         startMs = Math.min(end - MIN_CUE_MS, Math.max(0, snap(startMs, d.cueId, noSnap)))
+        // Bute contre le premier voisin à gauche sur la piste.
+        for (const n of laneNeighbors(lane)) {
+          const nEnd = n.startMs + n.durationMs
+          if (nEnd <= end && startMs < nEnd) startMs = Math.min(end - MIN_CUE_MS, nEnd)
+        }
         dur = end - startMs
       }
       const moved = d.moved || Math.abs(ev.clientX - d.startClientX) > 3

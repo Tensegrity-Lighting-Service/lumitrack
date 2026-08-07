@@ -150,6 +150,10 @@ class Session:
                 logger.exception("Autosave illisible (%s) — projet de démo", path)
         if self.project is None:
             self.project = _demo_project()
+        # Même assainissement anti-superposition qu'au chargement d'un
+        # projet (set_project) — l'autosave restauré peut précéder
+        # l'invariant (tranche H, 2026-08-07).
+        _sanitize_all_lanes(self.project)
         self.dirty = False
         self.timeline = Timeline(self.project)
         self.transport = Transport()
@@ -182,6 +186,11 @@ class Session:
 
     def set_project(self, project: Project):
         self.project = project
+        # Assainissement anti-superposition (tranche H, 2026-08-07) : les
+        # sauvegardes d'AVANT l'invariant peuvent contenir des blocs
+        # superposés — relogés chronologiquement AVANT de construire la
+        # timeline.
+        _sanitize_all_lanes(project)
         self.dirty = True
         self.timeline = Timeline(project)
         self.transport.set_duration(self.timeline.duration_ms)
@@ -349,6 +358,56 @@ def _apply_auto_duration(project: Project, cue: Cue) -> None:
             act.fade_ms = computed_fade_ms
             finish_times.append(act.start_offset_ms + computed_fade_ms)
     cue.duration_ms = max(finish_times, default=MIN_AUTO_DURATION_MS)
+    # Une durée auto qui s'allonge peut faire déborder le bloc sur son
+    # voisin de piste — l'invariant "jamais deux blocs superposés" (tranche
+    # H, 2026-08-07) est ré-établi ici comme après toute mutation de
+    # fenêtre.
+    _resolve_lane_overlap(project, cue)
+
+
+def _cues_overlap(a: Cue, b: Cue) -> bool:
+    return (a.start_ms < b.start_ms + b.duration_ms
+            and b.start_ms < a.start_ms + a.duration_ms)
+
+
+def _resolve_lane_overlap(project: Project, cue: Cue) -> None:
+    """Invariant "jamais deux blocs superposés sur une même piste" (demande
+    Florian 2026-08-07) — filet GARANTI côté moteur, quel que soit le chemin
+    (geste libre, +bloc, drag, resize, durée auto, dupliquer, coller...).
+    Le frontend clampe déjà pendant le geste pour le confort ; ici, si le
+    bloc modifié chevauche un voisin de sa piste, il est relogé sur la
+    PREMIÈRE piste où son intervalle est libre (piste existante, sinon une
+    nouvelle en dessous). Politique déterministe : c'est le bloc MODIFIÉ
+    qui bouge, jamais les autres (pas d'effet domino)."""
+    def conflicts(lane: int) -> bool:
+        return any(c is not cue and (c.lane or 0) == lane and _cues_overlap(cue, c)
+                   for c in project.cues)
+
+    if not conflicts(cue.lane or 0):
+        return
+    lane = 0
+    while conflicts(lane):
+        lane += 1
+    cue.lane = lane
+
+
+def _sanitize_all_lanes(project: Project) -> None:
+    """Assainissement GLOBAL (chargement d'une sauvegarde d'avant
+    l'invariant) : place les blocs un par un dans l'ordre chronologique, en
+    ne résolvant chaque bloc que contre les blocs DÉJÀ placés — sinon le
+    premier bloc traité se ferait éjecter de sa piste par des blocs pas
+    encore relogés (constaté au premier jet du test)."""
+    placed: list = []
+    for cue in sorted(project.cues, key=lambda c: (c.start_ms, c.id)):
+        def conflicts(lane: int) -> bool:
+            return any((p.lane or 0) == lane and _cues_overlap(cue, p) for p in placed)
+        lane = cue.lane or 0
+        if conflicts(lane):
+            lane = 0
+            while conflicts(lane):
+                lane += 1
+        cue.lane = lane
+        placed.append(cue)
 
 
 def _sync_activation_orientation_defaults(cue: Cue, act: Activation) -> None:
@@ -842,6 +901,7 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             default_yaw_turn_ms=500.0,
         )
         session.project.cues.append(cue)
+        _resolve_lane_overlap(session.project, cue)
         session.project.sort_cues()
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
@@ -907,6 +967,8 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             cue.default_yaw_turn_ms = msg["defaultYawTurnMs"]
         if any(k in msg for k in orientation_default_keys):
             _apply_cue_orientation_defaults(cue)
+        if any(k in msg for k in ("startMs", "durationMs", "lane")):
+            _resolve_lane_overlap(session.project, cue)
         session.project.sort_cues()
         session.timeline.rebuild()
         session.transport.set_duration(session.timeline.duration_ms)
