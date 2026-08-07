@@ -936,9 +936,24 @@
    isolée. Docké au-dessus de CueTimeline (App.tsx), pas de backdrop — la
    vraie timeline reste utilisable pendant que ce panneau est ouvert. */
 .block-detail-dock {
+  /* Panneau FLOTTANT (fix 2026-08-07) : sorti du rail timeline a hauteur
+     fixe qui coupait tout depassement — bottom/height poses en inline
+     (bottom = au-dessus de la timeline, height redimensionnable). */
+  position: fixed; left: 0; right: 0; z-index: 45;
+  display: flex; flex-direction: column;
   background: #16161c; border-top: 1px solid #2c2c36; border-bottom: 1px solid #2c2c36;
-  padding: 8px 14px 6px; flex-shrink: 0;
+  padding: 8px 14px 6px;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
 }
+.block-detail-fullscreen {
+  inset: 0; height: auto; z-index: 60;
+  border: none; box-shadow: none;
+}
+.block-detail-resize-grip {
+  position: absolute; top: -3px; left: 0; right: 0; height: 7px;
+  cursor: ns-resize; z-index: 1;
+}
+.block-detail-resize-grip:hover { background: color-mix(in srgb, #4F6DF5 40%, transparent); }
 .block-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .block-detail-head h2 { margin: 0; font-size: 13px; }
 .block-detail-duration { font-size: 11px; color: #9a9aa8; font-family: ui-monospace, monospace; }
@@ -948,9 +963,10 @@
    UNIQUEMENT les pistes, jamais la colonne des étiquettes, pour que sa
    largeur mesurée (viewportWidth) corresponde exactement à la fenêtre de
    temps visible. */
-/* 200px -> 62vh (tranche E, 2026-08-07) : un bloc à 78 acteurs n'affichait
-   que ~22 lignes, le reste invisible ("tronqué ou caché"). */
-.block-detail-body { display: flex; max-height: 62vh; overflow-y: auto; }
+/* Le body remplit le panneau flottant (fix 2026-08-07) — plus de
+   max-height : c'est la hauteur du panneau (redimensionnable/plein
+   ecran) qui decide, le body scrolle a l'interieur. */
+.block-detail-body { display: flex; flex: 1; min-height: 0; overflow-y: auto; }
 .block-detail-ruler-seek { cursor: pointer; }
 .block-detail-labels { flex-shrink: 0; border-right: 1px solid #26262e; }
 .block-detail-tracks { position: relative; flex: 1; min-width: 0; overflow: hidden; }

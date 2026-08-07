@@ -1431,6 +1431,7 @@ function App() {
             projectPoints={project.points}
             tMs={tMs}
             audioPath={project.audioPath}
+            bottomPx={timelineHeight + 8}
             onClose={() => setShowBlockDetail(false)}
           />
         )}

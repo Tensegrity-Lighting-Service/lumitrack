@@ -43,16 +43,45 @@ function fmtS(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
-export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }: {
+export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, bottomPx, onClose }: {
   cue: Cue
   projectPoints: Point[]
   tMs: number
   audioPath: string | null
+  /** Bord bas du panneau flottant = juste au-dessus de la timeline. */
+  bottomPx: number
   onClose: () => void
 }) {
   const t = useT()
   const { pxPerMs, scrollLeft } = useTimelineView()
   const peaks = useAudioPeaks(audioPath)
+  // Panneau FLOTTANT (fix 2026-08-07, "seulement 4 blocs rendus") : le
+  // dock vivait DANS le rail timeline à hauteur fixe — toute hauteur
+  // au-delà était coupée par le parent, scroll interne impuissant. Sorti
+  // du flux : hauteur redimensionnable INDÉPENDANTE de la timeline
+  // (poignée en haut, persistée), il se superpose au bas du terrain quand
+  // on l'agrandit, + mode PLEIN ÉCRAN façon YouTube (bouton à côté de ✕).
+  const [panelHeight, setPanelHeight] = useState(() => {
+    const saved = Number(localStorage.getItem('lumitrack.blockDetailHeight'))
+    return Number.isFinite(saved) && saved >= 180 ? Math.min(saved, window.innerHeight * 0.85) : 320
+  })
+  const [fullscreen, setFullscreen] = useState(false)
+  const beginPanelResize = (e: React.PointerEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = panelHeight
+    const onMove = (ev: PointerEvent) => {
+      const h = Math.max(180, Math.min(window.innerHeight * 0.85, startH + (startY - ev.clientY)))
+      setPanelHeight(h)
+      localStorage.setItem('lumitrack.blockDetailHeight', String(Math.round(h)))
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
   // Ref CALLBACK, pas un useRef classique : si ce bloc n'a encore aucun
   // acteur activé à l'ouverture du panneau, `.block-detail-tracks` ne
   // monte pas tout de suite (branche `rows.length === 0` plus bas) — un
@@ -149,12 +178,28 @@ export function BlockDetailPanel({ cue, projectPoints, tMs, audioPath, onClose }
   const blockWidth = cue.durationMs * pxPerMs
 
   return (
-    <div className="block-detail-dock">
+    <div
+      className={`block-detail-dock${fullscreen ? ' block-detail-fullscreen' : ''}`}
+      style={fullscreen ? undefined : { bottom: bottomPx, height: panelHeight }}
+    >
+      {!fullscreen && (
+        <div
+          className="block-detail-resize-grip"
+          title={t('blockDetail.resizeHint')}
+          onPointerDown={beginPanelResize}
+        />
+      )}
       <div className="block-detail-head">
         <span className="swatch" style={{ background: cue.color }} />
         <h2>{cue.name}</h2>
         <span className="block-detail-duration">{fmtS(cue.durationMs)}</span>
         <span className="block-detail-spacer" />
+        <button
+          onClick={() => setFullscreen((v) => !v)}
+          title={fullscreen ? t('blockDetail.exitFullscreen') : t('blockDetail.fullscreen')}
+        >
+          {fullscreen ? '🗗' : '⛶'}
+        </button>
         <button onClick={onClose} title={t('blockDetail.close')}>✕</button>
       </div>
       {rows.length === 0 ? (
