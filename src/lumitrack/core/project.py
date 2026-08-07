@@ -32,8 +32,15 @@ from typing import Optional
 
 PROJECT_FORMAT = "Lumitrack"
 # Version du SCHÉMA de sauvegarde (2026-08-06, "met un marqueur dans la
-# sauvegarde avec la version") : à INCRÉMENTER à chaque changement de
-# format qui rendrait le fichier illisible par une app plus ancienne.
+# sauvegarde avec la version") : à INCRÉMENTER UNIQUEMENT quand le FORMAT
+# des données change (nouveau champ, sémantique modifiée) — jamais pour un
+# changement d'UI pur (précision Florian 2026-08-07 : "uniquement si il y a
+# un changement qui impacte la sauvegarde et non pas l'UI"). Un build 0.3.x
+# bêta qui ne touche que l'interface garde donc la même version de schéma,
+# et ses sauvegardes restent ouvrables par le canal stable — le refus
+# d'ouverture ne se déclenche qu'entre schémas réellement différents.
+# Pourquoi refuser : une app à schéma N qui re-sauvegarderait un fichier de
+# schéma N+1 PERDRAIT silencieusement les champs qu'elle ne connaît pas.
 # from_dict REFUSE d'ouvrir un fichier de version supérieure ("mettez à
 # jour Lumitrack") — ouvrir un fichier plus ancien reste toujours possible
 # (les champs manquants prennent leurs valeurs par défaut).
