@@ -1293,7 +1293,7 @@ function RendererProbe() {
       setInfo(`${fps} fps — ${renderer} — dpr ${gl.getPixelRatio().toFixed(2)}`)
     }
   })
-  if (!import.meta.env.DEV) return null
+  if (!import.meta.env.DEV && localStorage.getItem('lumitrack.showFps') !== '1') return null
   return (
     <Html position={[0, 0, 0]} calculatePosition={() => [8, 8, 0]} style={{ pointerEvents: 'none' }}>
       <div style={{

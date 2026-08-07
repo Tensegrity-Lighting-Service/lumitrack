@@ -66,7 +66,17 @@ class SidecarClient {
         this.undoAvailable = msg.undoAvailable
         this.redoAvailable = msg.redoAvailable
       } else if (msg.type === 'tick') {
+        // Transport a l'arret : un tick au meme instant n'apporte rien —
+        // le stocker (lecteurs ponctuels) SANS emettre evite ~26
+        // re-rendus/s de la scene au repos (audit fluidite 2026-08-07).
+        // Pendant un geste, l'affichage des acteurs manipules passe par
+        // dragOverride (local), et l'ecriture finale rediffuse un projet.
+        const prev = this.tick
         this.tick = msg
+        if (prev && prev.tMs === msg.tMs && prev.playing === msg.playing
+          && JSON.stringify(prev.timecode ?? null) === JSON.stringify(msg.timecode ?? null)) {
+          return
+        }
       } else if (msg.type === 'block_context') {
         this.blockContext = msg
       } else if (msg.type === 'trajectories') {
