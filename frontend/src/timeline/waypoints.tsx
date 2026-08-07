@@ -11,11 +11,54 @@
 // entre les jalons temporisés voisins — approximation d'affichage (le
 // moteur répartit par longueur d'arc), qui devient EXACTE dès qu'un
 // timing est posé.
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import type { Activation, Cue, PathPoint } from '../types'
 import { sidecar } from '../sidecar'
 import { showContextMenu } from '../ui/contextMenuStore'
 import { t } from '../i18n'
+import {
+  clearWaypointSelection, getLiveDelta, isWaypointSelected, replaceWaypointSelection,
+  selectedWaypointCount, selectionByActor, setLiveDelta, toggleWaypointSelection,
+  useWaypointSelectionVersion, waypointKey,
+} from './waypointSelection'
+
+/** Supprime tous les waypoints sélectionnés (groupé par acteur, un seul
+ * setActivations) — utilisé par le menu des losanges et la touche Suppr
+ * du panneau détail. */
+export function deleteSelectedWaypoints(cue: Cue) {
+  const by = selectionByActor()
+  const entries: Array<{ pointId: string; pathPoints: PathPoint[] }> = []
+  for (const [pid, indices] of by) {
+    const act = cue.activations[pid]
+    if (!act) continue
+    const drop = new Set(indices)
+    entries.push({ pointId: pid, pathPoints: (act.pathPoints ?? []).filter((_, i) => !drop.has(i)) })
+  }
+  if (entries.length) sidecar.setActivations(cue.id, entries)
+  clearWaypointSelection()
+}
+
+/** Retiming GROUPÉ : applique un delta de fraction à toute la sélection
+ * (clamp par waypoint entre ses voisins), une écriture par acteur. */
+function commitGroupDelta(cue: Cue, delta: number) {
+  const by = selectionByActor()
+  const entries: Array<{ pointId: string; pathPoints: PathPoint[] }> = []
+  for (const [pid, indices] of by) {
+    const act = cue.activations[pid]
+    if (!act) continue
+    const wps = act.pathPoints ?? []
+    const fr = waypointTimeFracs(wps)
+    const sel = new Set(indices)
+    const next = wps.map((wp, i) => {
+      if (!sel.has(i)) return { ...wp }
+      const lo = (i > 0 ? fr[i - 1] : 0) + 0.005
+      const hi = (i < fr.length - 1 ? fr[i + 1] : 1) - 0.005
+      return { ...wp, tFrac: Math.min(hi, Math.max(lo, fr[i] + delta)) }
+    })
+    entries.push({ pointId: pid, pathPoints: next })
+  }
+  if (entries.length) sidecar.setActivations(cue.id, entries)
+}
 
 /** Fraction temporelle effective de chaque waypoint (0..1 du fade). */
 export function waypointTimeFracs(wps: PathPoint[]): number[] {
@@ -50,8 +93,6 @@ export function emitSelectWaypoint(pointId: string, index: number) {
   window.dispatchEvent(new CustomEvent(SELECT_WAYPOINT_EVENT, { detail: { pointId, index } }))
 }
 
-const DRAG_SEND_MS = 33
-
 /** Rangée de losanges d'UNE activation. `baseMs` = temps du bord gauche du
  * conteneur positionné (cue.startMs quand on rend DANS le bloc, 0 dans un
  * contenu absolu du panneau détail). */
@@ -76,41 +117,52 @@ export function WaypointDiamonds({ cue, act, pointId, pxPerMs, baseMs, centerY, 
     index: number
     startClientX: number
     moved: boolean
-    lastSent: number
     fracs: number[]
   } | null>(null)
+  // Suivi LOCAL du losange pendant le drag ("ça rame", 2026-08-07) : les
+  // aperçus moteur ne rediffusent rien (par design), donc sans état local
+  // le losange restait figé jusqu'au relâchement. Pendant le geste : zéro
+  // réseau, le losange suit le curseur ; UNE écriture au relâchement.
+  const [liveDrag, setLiveDrag] = useState<{ index: number; frac: number } | null>(null)
+  // Re-rend au changement de sélection multiple / de delta groupé live.
+  useWaypointSelectionVersion()
   if (wps.length === 0) return null
 
   const fadeMs = Math.max(1, act.fadeMs ?? cue.durationMs)
   const offsetMs = act.startOffsetMs ?? 0
   const fracs = waypointTimeFracs(wps)
 
-  const writeTiming = (index: number, tFrac: number, preview: boolean) => {
-    const next = wps.map((wp, i) => (i === index ? { ...wp, tFrac } : { ...wp }))
-    if (preview) sidecar.setActivationPreview(cue.id, pointId, { pathPoints: next })
-    else sidecar.setActivation(cue.id, pointId, { pathPoints: next })
+  const clampTarget = (drag: { index: number; startClientX: number; fracs: number[] }, clientX: number) => {
+    const dx = clientX - drag.startClientX
+    const lo = (drag.index > 0 ? drag.fracs[drag.index - 1] : 0) + 0.005
+    const hi = (drag.index < drag.fracs.length - 1 ? drag.fracs[drag.index + 1] : 1) - 0.005
+    return Math.min(hi, Math.max(lo, drag.fracs[drag.index] + dx / pxPerMs / fadeMs))
   }
 
   const onDown = (e: React.PointerEvent, index: number) => {
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
+    // Maj-clic : toggle dans la sélection multiple, sans drag.
+    if (e.shiftKey) {
+      toggleWaypointSelection(pointId, index)
+      return
+    }
+    // Saisir un losange DÉJÀ sélectionné avec d'autres = drag GROUPÉ
+    // (delta commun affiché en direct via le store, écrit au relâchement).
+    const group = isWaypointSelected(pointId, index) && selectedWaypointCount() > 1
     const el = e.currentTarget as Element
     el.setPointerCapture(e.pointerId)
-    dragRef.current = { index, startClientX: e.clientX, moved: false, lastSent: 0, fracs }
+    dragRef.current = { index, startClientX: e.clientX, moved: false, fracs }
     const onMove = (ev: PointerEvent) => {
       const drag = dragRef.current
       if (!drag) return
       const dx = ev.clientX - drag.startClientX
       if (!drag.moved && Math.abs(dx) < 3) return
       drag.moved = true
-      const lo = (drag.index > 0 ? drag.fracs[drag.index - 1] : 0) + 0.005
-      const hi = (drag.index < drag.fracs.length - 1 ? drag.fracs[drag.index + 1] : 1) - 0.005
-      const target = Math.min(hi, Math.max(lo, drag.fracs[drag.index] + dx / pxPerMs / fadeMs))
-      const now = performance.now()
-      if (now - drag.lastSent < DRAG_SEND_MS) return
-      drag.lastSent = now
-      writeTiming(drag.index, target, true)
+      const frac = clampTarget(drag, ev.clientX)
+      if (group) setLiveDelta(frac - drag.fracs[drag.index])
+      else setLiveDrag({ index: drag.index, frac })
     }
     const onUp = (ev: PointerEvent) => {
       el.releasePointerCapture(ev.pointerId)
@@ -118,31 +170,62 @@ export function WaypointDiamonds({ cue, act, pointId, pxPerMs, baseMs, centerY, 
       el.removeEventListener('pointerup', onUp as EventListener)
       const drag = dragRef.current
       dragRef.current = null
+      setLiveDrag(null)
       if (!drag) return
       if (!drag.moved) {
-        // Clic sec : sélectionne le waypoint dans la scène (poignées).
+        // Clic sec : ce waypoint devient LA sélection + édition scène.
+        replaceWaypointSelection([waypointKey(pointId, drag.index)])
         emitSelectWaypoint(pointId, drag.index)
         return
       }
-      const dx = ev.clientX - drag.startClientX
-      const lo = (drag.index > 0 ? drag.fracs[drag.index - 1] : 0) + 0.005
-      const hi = (drag.index < drag.fracs.length - 1 ? drag.fracs[drag.index + 1] : 1) - 0.005
-      const target = Math.min(hi, Math.max(lo, drag.fracs[drag.index] + dx / pxPerMs / fadeMs))
-      writeTiming(drag.index, target, false)
+      const frac = clampTarget(drag, ev.clientX)
+      if (group) {
+        const delta = frac - drag.fracs[drag.index]
+        setLiveDelta(0)
+        commitGroupDelta(cue, delta)
+        return
+      }
+      const next = wps.map((wp, i) => (i === drag.index ? { ...wp, tFrac: frac } : { ...wp }))
+      sidecar.setActivation(cue.id, pointId, { pathPoints: next })
     }
     el.addEventListener('pointermove', onMove as EventListener)
     el.addEventListener('pointerup', onUp as EventListener)
   }
 
   const onMenu = (e: React.MouseEvent, index: number) => {
+    // Acteurs du bloc qui ont encore un tracé (pour la suppression groupée).
+    const actorsWithWps = Object.entries(cue.activations)
+      .filter(([, a]) => (a.pathPoints?.length ?? 0) > 0)
+    const selCount = selectedWaypointCount()
     showContextMenu(e, [
       [{
+        label: t('timeline.waypointDeleteSelection', { n: selCount }),
+        danger: true,
+        disabled: selCount < 2,
+        onClick: () => deleteSelectedWaypoints(cue),
+      },
+      {
         label: t('timeline.waypointDelete'),
         danger: true,
         onClick: () => {
           const next = wps.filter((_, i) => i !== index)
           sidecar.setActivation(cue.id, pointId, { pathPoints: next })
         },
+      },
+      {
+        label: t('timeline.waypointDeleteAllActor'),
+        danger: true,
+        disabled: wps.length < 2,
+        onClick: () => sidecar.setActivation(cue.id, pointId, { pathPoints: [] }),
+      },
+      {
+        label: t('timeline.waypointDeleteAllBlock', { n: actorsWithWps.length }),
+        danger: true,
+        disabled: actorsWithWps.length < 2,
+        onClick: () => sidecar.setActivations(
+          cue.id,
+          actorsWithWps.map(([pid]) => ({ pointId: pid, pathPoints: [] })),
+        ),
       }],
       [{
         label: t('timeline.waypointAutoTiming'),
@@ -157,12 +240,22 @@ export function WaypointDiamonds({ cue, act, pointId, pxPerMs, baseMs, centerY, 
 
   return (
     <>
-      {wps.map((wp, i) => (
+      {wps.map((wp, i) => {
+        const isSel = isWaypointSelected(pointId, i)
+        // Fraction affichée : drag local > delta groupé live > état projet.
+        let frac = fracs[i]
+        if (liveDrag?.index === i) frac = liveDrag.frac
+        else if (isSel && getLiveDelta() !== 0) {
+          const lo = (i > 0 ? fracs[i - 1] : 0) + 0.005
+          const hi = (i < fracs.length - 1 ? fracs[i + 1] : 1) - 0.005
+          frac = Math.min(hi, Math.max(lo, fracs[i] + getLiveDelta()))
+        }
+        return (
         <div
           key={i}
-          className={`tl-waypoint${wp.tFrac !== null && wp.tFrac !== undefined ? ' tl-waypoint-timed' : ''}${dim ? ' tl-waypoint-dim' : ''}`}
+          className={`tl-waypoint${wp.tFrac !== null && wp.tFrac !== undefined ? ' tl-waypoint-timed' : ''}${dim ? ' tl-waypoint-dim' : ''}${isSel ? ' tl-waypoint-selected' : ''}`}
           style={{
-            left: (cue.startMs - baseMs + offsetMs + fracs[i] * fadeMs) * pxPerMs - xOffsetPx,
+            left: (cue.startMs - baseMs + offsetMs + frac * fadeMs) * pxPerMs - xOffsetPx,
             top: centerY,
             ...(color && !(wp.tFrac !== null && wp.tFrac !== undefined) ? { background: color } : {}),
           }}
@@ -171,7 +264,8 @@ export function WaypointDiamonds({ cue, act, pointId, pxPerMs, baseMs, centerY, 
           onContextMenu={(e) => onMenu(e, i)}
           onDoubleClick={(e) => e.stopPropagation()}
         />
-      ))}
+        )
+      })}
     </>
   )
 }

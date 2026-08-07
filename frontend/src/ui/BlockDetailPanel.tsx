@@ -29,7 +29,8 @@ import { useAudioPeaks } from '../timeline/audioPeaks'
 import { MiniWaveform } from '../timeline/MiniWaveform'
 import { computeTicks } from '../timeline/ticks'
 import { attachTouchPinch, classifyWheel } from '../timeline/wheelGestures'
-import { WaypointDiamonds } from '../timeline/waypoints'
+import { WaypointDiamonds, waypointTimeFracs } from '../timeline/waypoints'
+import { replaceWaypointSelection, waypointKey } from '../timeline/waypointSelection'
 
 // Aligné sur MIN_AUTO_DURATION_MS (core/timeline.py) : plancher de fade,
 // jamais un bloc de durée nulle donc invisible/impossible à re-saisir.
@@ -92,6 +93,11 @@ export function BlockDetailPanel({ cue, projectPoints, audioPath, bottomPx, onCl
   // apparaît enfin (premier acteur activé pendant que le panneau reste
   // ouvert), laissant viewportWidth bloqué à 0.
   const [tracksEl, setTracksEl] = useState<HTMLDivElement | null>(null)
+  // Lasso de sélection des losanges de waypoints (2026-08-07) : glisser
+  // sur le FOND des rangées (pas une barre ni un losange) dessine un
+  // rectangle ; la sélection suit EN DIRECT, reste après le relâchement
+  // (Suppr, drag groupé, menu). Coordonnées locales au conteneur tracks.
+  const [wpLasso, setWpLasso] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
 
   // Zoom/pan à la molette DANS le panneau (tranche E, 2026-08-07) : la
   // timeline principale est masquée par l'overlay — on lui DÉLÈGUE les
@@ -252,7 +258,63 @@ export function BlockDetailPanel({ cue, projectPoints, audioPath, bottomPx, onCl
                 </div>
               ))}
             </div>
-            <div className="block-detail-tracks" ref={setTracksEl}>
+            <div
+              className="block-detail-tracks"
+              ref={setTracksEl}
+              onPointerDown={(e) => {
+                // Lasso : uniquement depuis le FOND (rangée ou conteneur),
+                // jamais depuis une barre, un losange ou la mini-règle.
+                const target = e.target as HTMLElement
+                if (!(target.classList.contains('block-detail-row-track') || target === e.currentTarget)) return
+                if (e.button !== 0) return
+                e.preventDefault()
+                const host = e.currentTarget
+                const rect = host.getBoundingClientRect()
+                const x0 = e.clientX - rect.left
+                const y0 = e.clientY - rect.top
+                const top0 = RULER_MINI_H + (audioPath ? MINI_AUDIO_H : 0)
+                const apply = (x1: number, y1: number) => {
+                  setWpLasso({ x0, y0, x1, y1 })
+                  const lx0 = Math.min(x0, x1)
+                  const lx1 = Math.max(x0, x1)
+                  const ly0 = Math.min(y0, y1)
+                  const ly1 = Math.max(y0, y1)
+                  const keys: string[] = []
+                  rows.forEach(({ pointId, act }, j) => {
+                    const rowTop = top0 + j * ROW_H
+                    if (rowTop + ROW_H < ly0 || rowTop > ly1) return
+                    const fade = Math.max(1, act.fadeMs)
+                    const fr = waypointTimeFracs(act.pathPoints ?? [])
+                    fr.forEach((f, i) => {
+                      const x = (cue.startMs + act.startOffsetMs + f * fade) * pxPerMs - scrollLeft
+                      if (x >= lx0 && x <= lx1) keys.push(waypointKey(pointId, i))
+                    })
+                  })
+                  replaceWaypointSelection(keys)
+                }
+                const onMove = (ev: PointerEvent) => {
+                  apply(ev.clientX - rect.left, ev.clientY - rect.top)
+                }
+                const onUp = () => {
+                  window.removeEventListener('pointermove', onMove)
+                  window.removeEventListener('pointerup', onUp)
+                  setWpLasso(null)
+                }
+                window.addEventListener('pointermove', onMove)
+                window.addEventListener('pointerup', onUp)
+              }}
+            >
+              {wpLasso && (
+                <div
+                  className="tl-wp-lasso"
+                  style={{
+                    left: Math.min(wpLasso.x0, wpLasso.x1),
+                    top: Math.min(wpLasso.y0, wpLasso.y1),
+                    width: Math.abs(wpLasso.x1 - wpLasso.x0),
+                    height: Math.abs(wpLasso.y1 - wpLasso.y0),
+                  }}
+                />
+              )}
               {/* Mini-règle CLIQUABLE (tranche E, 2026-08-07) : seek au
                   clic + scrub au glisser, même comportement que la règle
                   principale — le playhead vit déjà (tMs). */}

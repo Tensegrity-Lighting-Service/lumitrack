@@ -750,6 +750,19 @@
   opacity: 0.55; z-index: 3;
 }
 .tl-waypoint-dim:hover { opacity: 1; }
+/* Sélection multiple (lasso/Maj-clic) : halo bleu, pleine opacité. */
+.tl-waypoint-selected {
+  opacity: 1;
+  box-shadow: 0 0 0 2px #4f6df5;
+  z-index: 5;
+}
+/* Rectangle du lasso de waypoints (panneau détail). */
+.tl-wp-lasso {
+  position: absolute; z-index: 30; pointer-events: none;
+  border: 1px solid rgba(79, 109, 245, 0.9);
+  background: rgba(79, 109, 245, 0.12);
+  border-radius: 2px;
+}
 
 /* Bouton retour ligne droite (tracé spatial) dans l'inspecteur */
 .inspector-clear-path {

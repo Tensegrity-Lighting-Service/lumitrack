@@ -21,7 +21,8 @@ import { sidecar, useTick } from '../sidecar'
 import { AudioTrack } from './AudioTrack'
 import { GraphEditor } from './GraphEditor'
 import { attachTouchPinch, classifyWheel } from './wheelGestures'
-import { WaypointDiamonds } from './waypoints'
+import { WaypointDiamonds, deleteSelectedWaypoints } from './waypoints'
+import { clearWaypointSelection, selectedWaypointCount } from './waypointSelection'
 import { maxSpeedMs, msToKmh, speedCategory } from './speed'
 import { useT } from '../i18n'
 import { showContextMenu } from '../ui/contextMenuStore'
@@ -199,6 +200,25 @@ export function CueTimeline({ project, connected, selectedCueId, selectedPointId
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // Suppr avec une sélection MULTIPLE de waypoints (lasso/Maj-clic) :
+  // supprime tout le lot — en capture, AVANT le raccourci global qui
+  // supprimerait le bloc. Sélection vidée au changement de bloc (les
+  // indices ne survivent pas à un autre contexte).
+  useEffect(() => { clearWaypointSelection() }, [selectedCueId])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const tgt = e.target as HTMLElement
+      if (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || tgt.tagName === 'TEXTAREA') return
+      if (selectedWaypointCount() === 0 || !selectedCue) return
+      e.stopPropagation()
+      e.preventDefault()
+      deleteSelectedWaypoints(selectedCue)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [selectedCue])
   // Le temps d'un geste de zoom, les blocs/playhead doivent suivre pxPerMs
   // AU PIXEL PRÈS, comme la règle/le waveform (aucune transition) — sinon
   // leurs transitions CSS respectives (`.cue-block` lissage d'écho backend,
