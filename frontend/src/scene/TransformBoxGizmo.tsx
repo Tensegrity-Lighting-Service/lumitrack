@@ -60,6 +60,9 @@ interface BoxDrag {
   startTheta: number
   lastTheta: number
   lastSent: number
+  /** Dernieres entrees envoyees en APERCU — rejouees en ecriture
+   * FINALE (non-preview) au relachement pour move/scale. */
+  lastEntries: Array<Record<string, unknown> & { pointId: string }> | null
   entriesAtStart: Record<string, BlockContextEntry> | null
 }
 
@@ -195,6 +198,7 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
       startTheta: Math.atan2(cursor.y - anchorCm.y, cursor.x - anchorCm.x),
       lastTheta: 0,
       lastSent: 0,
+      lastEntries: null,
       entriesAtStart: blockEntries,
     }
     dragActiveRef.current = true
@@ -238,11 +242,13 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
         dx = Math.round(dx / gridSizeCm) * gridSizeCm
         dy = Math.round(dy / gridSizeCm) * gridSizeCm
       }
-      sidecar.setActivations(drag.cueId, drag.members.map((m) => ({
+      const entries = drag.members.map((m) => ({
         pointId: m.pointId,
         targetXCm: m.baseX + dx,
         targetYCm: m.baseY + dy,
-      })))
+      }))
+      drag.lastEntries = entries
+      sidecar.setActivationsPreview(drag.cueId, entries)
       return
     }
 
@@ -260,17 +266,24 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
         y: cursor.y - (drag.handleStartCm.y - drag.handleStartRawCm.y),
       }
       const { fx, fy } = scaleFactors(drag.handle, fixedPt, drag.handleStartRawCm, cursorAdj)
-      sidecar.setActivations(drag.cueId, drag.members.map((m) => ({
+      const entries = drag.members.map((m) => ({
         pointId: m.pointId,
         targetXCm: fixedPt.x + (m.baseX - fixedPt.x) * fx,
         targetYCm: fixedPt.y + (m.baseY - fixedPt.y) * fy,
-      })))
+      }))
+      drag.lastEntries = entries
+      sidecar.setActivationsPreview(drag.cueId, entries)
       return
     }
 
     // Rotations : angle balayé autour de l'ANCRE, convention stage
     // (atan2(y, x)) — la même que rotationArc, par construction.
-    const theta = Math.atan2(cursor.y - drag.anchorCm.y, cursor.x - drag.anchorCm.x) - drag.startTheta
+    let theta = Math.atan2(cursor.y - drag.anchorCm.y, cursor.x - drag.anchorCm.x) - drag.startTheta
+    // MAJ pendant une rotation = crans de 5 degres ENTIERS (demande
+    // 2026-08-07) — l'angle continu reste le defaut.
+    if (shiftRef.current) {
+      theta = (Math.round(((theta * 180) / Math.PI) / 5) * 5 * Math.PI) / 180
+    }
     drag.lastTheta = theta
     const thetaDeg = (theta * 180) / Math.PI
     setLiveThetaDeg(thetaDeg)
@@ -278,7 +291,7 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
     if (drag.kind === 'rotate-group') {
       const c = Math.cos(theta)
       const s = Math.sin(theta)
-      sidecar.setActivations(drag.cueId, drag.members.map((m) => {
+      sidecar.setActivationsPreview(drag.cueId, drag.members.map((m) => {
         const rx = m.baseX - drag.anchorCm.x
         const ry = m.baseY - drag.anchorCm.y
         return {
@@ -296,7 +309,7 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
     // rotate-yaw : SEULES les façades tournent (delta additif, phases
     // fixed uniquement) — positions et trajectoires intouchées.
     const eligible = drag.members.filter((m) => m.baseTravelYaw !== null || m.baseArrivalYaw !== null)
-    sidecar.setActivations(drag.cueId, eligible.map((m) => ({
+    sidecar.setActivationsPreview(drag.cueId, eligible.map((m) => ({
       pointId: m.pointId,
       orientationOverridden: true,
       ...(m.baseTravelYaw !== null ? { travelFixedYawDeg: m.baseTravelYaw + thetaDeg } : {}),
@@ -311,6 +324,13 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
     setLiveThetaDeg(null)
     if (controlsRef.current) controlsRef.current.enabled = true
     if (!drag) return
+
+    // Move/scale : rejouer le dernier apercu en ecriture FINALE —
+    // c'est elle qui paie auto-duration + rediffusion projet, une fois.
+    if ((drag.kind === 'move' || drag.kind === 'scale') && drag.lastEntries) {
+      sidecar.setActivations(drag.cueId, drag.lastEntries)
+      return
+    }
 
     if (drag.kind === 'rotate-yaw' && Math.abs(drag.lastTheta) >= 1e-4) {
       // Écriture finale exacte (le dernier move peut avoir été throttlé).

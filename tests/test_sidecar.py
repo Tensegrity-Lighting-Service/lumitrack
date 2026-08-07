@@ -85,6 +85,32 @@ def test_set_timecode_chase_arms_transport_and_persists():
     del type(session.timecode_input).running
 
 
+def test_set_activations_preview_skips_broadcast_and_auto_duration():
+    """Mode APERCU (2026-08-07, 'ca rame toujours' a 78 acteurs) : un
+    echantillon preview:true applique les cibles + rebuild (le tick porte
+    le retour visuel) mais repond un ack (pas de rediffusion projet) et
+    saute la passe auto-duration ; l'ecriture finale non-preview paie tout
+    une seule fois."""
+    session = Session()
+    cue = session.project.cues[0]
+    cue.auto_duration = True
+    dur_before = cue.duration_ms
+    reply = _run(_handle_message(session, {
+        "type": "set_activations", "cueId": cue.id, "preview": True,
+        "entries": [{"pointId": "p1", "targetXCm": 4000.0, "targetYCm": 2000.0}],
+    }))
+    assert reply == {"type": "ack"}          # reply non-None = pas de broadcast
+    assert cue.activations["p1"].target_x_cm == 4000.0
+    assert cue.duration_ms == dur_before     # auto-duration sautee en preview
+
+    reply = _run(_handle_message(session, {
+        "type": "set_activations", "cueId": cue.id,
+        "entries": [{"pointId": "p1", "targetXCm": 4000.0, "targetYCm": 2000.0}],
+    }))
+    assert reply is None                     # ecriture finale = broadcast
+    assert cue.duration_ms != dur_before     # auto-duration reappliquee
+
+
 def test_blocks_never_overlap_on_a_lane():
     """Invariant tranche H (2026-08-07) : jamais deux blocs superposes sur
     une meme piste, quel que soit le chemin — add_cue, update_cue

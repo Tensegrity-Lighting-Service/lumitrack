@@ -1012,6 +1012,18 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
             err = _apply_activation_patch(session, cue, entry)
             if err is not None:
                 return err
+        # Mode APERÇU (2026-08-07, "ça rame toujours" avec 78 acteurs) :
+        # pendant un geste continu, le frontend marque ses échantillons
+        # preview:true — on saute la passe auto-duration (recalcul des
+        # fades de TOUT le bloc, O(P) répété 10-30x/s) et SURTOUT la
+        # rediffusion du projet complet (voir le return {"type":"ack"}
+        # ci-dessous : un reply non-None court-circuite le broadcast).
+        # Le rebuild reste : le tick à 30 Hz porte les positions résolues,
+        # c'est LUI le retour visuel du geste. L'écriture FINALE du geste
+        # (pointerup) arrive sans preview et paie tout une seule fois.
+        if msg.get("preview"):
+            session.timeline.rebuild()
+            return {"type": "ack"}
         if cue.auto_duration:
             _apply_auto_duration(session.project, cue)
         session.timeline.rebuild()

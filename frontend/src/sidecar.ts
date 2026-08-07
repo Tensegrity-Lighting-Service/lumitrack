@@ -120,6 +120,13 @@ class SidecarClient {
   redo() { this.send({ type: 'redo' }) }
 
   // ---- PSN (§12.9: stays independent of edit vs. playback mode) ----
+  /** Variante APERÇU de setActivations (2026-08-07) : pendant un geste
+   * continu, le moteur applique + rebuild mais NE rediffuse PAS le projet
+   * (le tick 30 Hz porte le retour visuel) et saute l'auto-duration.
+   * Toujours suivre d'une écriture finale NON-preview au relâchement. */
+  setActivationsPreview(cueId: string, entries: Array<Record<string, unknown> & { pointId: string }>) {
+    this.send({ type: 'set_activations', cueId, entries, preview: true })
+  }
   setTimecodeChase(enabled?: boolean, ifaceIp?: string) {
     this.send({ type: 'set_timecode_chase', enabled, ifaceIp })
   }
