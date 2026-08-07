@@ -52,7 +52,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": "nsis",
     "createUpdaterArtifacts": true,
     "externalBin": ["binaries/lumitrack-sidecar"],
     "fileAssociations": [
