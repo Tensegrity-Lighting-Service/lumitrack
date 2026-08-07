@@ -49,10 +49,12 @@ if errorlevel 1 (
 
 echo.
 echo ==============================================================
-echo  [3/3] Manifeste updater ^(latest.json^)
+echo  [3/3] Manifeste updater ^(latest.json, canal %1^)
 echo ==============================================================
 cd ..
-python packaging\make_latest_json.py
+rem Argument optionnel "beta" : latest.json pointe vers la release
+rem ROULANTE `beta` au lieu de la release versionnee (tranche F).
+python packaging\make_latest_json.py %1
 if errorlevel 1 (
   echo ECHEC etape 3/3 : latest.json.
   exit /b 1

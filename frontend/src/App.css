@@ -1130,3 +1130,19 @@
 .update-progress-bar { height: 5px; border-radius: 3px; background: #23262f; overflow: hidden; }
 .update-progress-bar > div { height: 100%; background: #4f6df5; border-radius: 3px; transition: width 0.2s; }
 .update-error { color: #e0644f; font-size: 12px; margin-top: 10px; }
+
+/* Canal beta + toast a jour (tranche F, 2026-08-07) */
+.update-beta-tag {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  color: #f5c84f; border: 1px solid #6b5a1f; background: #3a3212;
+  border-radius: 8px; padding: 1px 8px; margin: 0 0 8px;
+}
+.update-beta-warning { color: #e0a44f; }
+.update-toast {
+  position: fixed; bottom: 18px; right: 18px; z-index: 300;
+  background: #1b1e26; border: 1px solid #2b2f38; border-radius: 6px;
+  padding: 10px 14px; font-size: 12px; color: #cfd3dc;
+  display: flex; gap: 10px; align-items: center;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+}
+.update-toast button { background: none; border: none; color: #7a8093; }

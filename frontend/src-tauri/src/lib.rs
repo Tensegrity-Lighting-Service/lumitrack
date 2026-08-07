@@ -24,6 +24,90 @@ fn startup_file() -> Option<String> {
     .filter(|a| a.to_lowercase().ends_with(".lumitrack"))
 }
 
+/// Canal de mise à jour (tranche F, 2026-08-07) : le canal est choisi à
+/// RUNTIME par le frontend (réglage machine, localStorage), donc les
+/// endpoints statiques de tauri.conf.json ne suffisent plus — ces deux
+/// commandes construisent l'updater avec l'endpoint du canal demandé.
+/// - stable : latest.json de la DERNIÈRE release GitHub (les prereleases
+///   en sont exclues par GitHub, le canal stable ne voit jamais la bêta) ;
+/// - beta : latest.json de la release ROULANTE taguée `beta` (prerelease),
+///   écrasée à chaque build bêta. Même clé de signature pour les deux.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod updater_channel {
+  const STABLE_URL: &str =
+    "https://github.com/Tensegrity-Lighting-Service/lumitrack/releases/latest/download/latest.json";
+  const BETA_URL: &str =
+    "https://github.com/Tensegrity-Lighting-Service/lumitrack/releases/download/beta/latest.json";
+
+  fn endpoint(channel: &str) -> &'static str {
+    if channel == "beta" { BETA_URL } else { STABLE_URL }
+  }
+
+  async fn updater_for(
+    app: &tauri::AppHandle,
+    channel: &str,
+  ) -> Result<tauri_plugin_updater::Updater, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    app
+      .updater_builder()
+      .endpoints(vec![endpoint(channel).parse().map_err(|e| format!("{e}"))?])
+      .map_err(|e| e.to_string())?
+      .build()
+      .map_err(|e| e.to_string())
+  }
+
+  #[derive(serde::Serialize)]
+  pub struct UpdateInfo {
+    pub version: String,
+    pub body: Option<String>,
+  }
+
+  #[tauri::command]
+  pub async fn check_update_channel(
+    app: tauri::AppHandle,
+    channel: String,
+  ) -> Result<Option<UpdateInfo>, String> {
+    let updater = updater_for(&app, &channel).await?;
+    match updater.check().await {
+      Ok(Some(u)) => Ok(Some(UpdateInfo { version: u.version.clone(), body: u.body.clone() })),
+      Ok(None) => Ok(None),
+      Err(e) => Err(e.to_string()),
+    }
+  }
+
+  /// Télécharge et installe la mise à jour du canal. Progression remontée
+  /// au frontend par l'événement `update-progress` (0-100). Sous Windows,
+  /// l'installateur NSIS ferme l'app lui-même en fin d'installation.
+  #[tauri::command]
+  pub async fn install_update_channel(app: tauri::AppHandle, channel: String) -> Result<(), String> {
+    use tauri::Emitter;
+    let updater = updater_for(&app, &channel).await?;
+    let update = updater
+      .check()
+      .await
+      .map_err(|e| e.to_string())?
+      .ok_or_else(|| "no update available".to_string())?;
+    let emit_app = app.clone();
+    let mut received: u64 = 0;
+    update
+      .download_and_install(
+        move |chunk, total| {
+          received += chunk as u64;
+          if let Some(total) = total {
+            if total > 0 {
+              let pct = ((received as f64 / total as f64) * 100.0).min(100.0) as u32;
+              let _ = emit_app.emit("update-progress", pct);
+            }
+          }
+        },
+        || {},
+      )
+      .await
+      .map_err(|e| e.to_string())?;
+    Ok(())
+  }
+}
+
 fn spawn_sidecar() -> std::io::Result<Child> {
   let mut cmd = if cfg!(debug_assertions) {
     // `cargo tauri dev` runs with cwd = frontend/src-tauri, so the repo's
@@ -108,8 +192,16 @@ pub fn run() {
     builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
   }
 
+  #[cfg(not(any(target_os = "android", target_os = "ios")))]
+  let builder = builder.invoke_handler(tauri::generate_handler![
+    startup_file,
+    updater_channel::check_update_channel,
+    updater_channel::install_update_channel
+  ]);
+  #[cfg(any(target_os = "android", target_os = "ios"))]
+  let builder = builder.invoke_handler(tauri::generate_handler![startup_file]);
+
   builder
-    .invoke_handler(tauri::generate_handler![startup_file])
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_dialog::init())

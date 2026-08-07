@@ -14,6 +14,8 @@ import { sidecar, useIfaces, usePsnPreview, usePsnRunning } from '../sidecar'
 import type { Project } from '../types'
 import { NumericInput } from './NumericInput'
 import { useT } from '../i18n'
+import { getUpdateChannel, setUpdateChannel, requestUpdateCheck } from './UpdateDialog'
+import tauriConf from '../../src-tauri/tauri.conf.json'
 
 const PREVIEW_POLL_MS = 500
 
@@ -27,6 +29,7 @@ export function PsnPanel({ project, onClose }: {
   const preview = usePsnPreview()
   const [mcastIp, setMcastIp] = useState(project.psnMcastIp)
   const [systemName, setSystemName] = useState(project.psnSystemName)
+  const [updateChannel, setUpdateChannelState] = useState(() => getUpdateChannel())
 
   // Interfaces au montage, moniteur en continu tant que le panneau est là.
   useEffect(() => {
@@ -376,6 +379,32 @@ export function PsnPanel({ project, onClose }: {
               )}
             </tbody>
           </table></div>
+        </section>
+        </details>
+
+        <details className="settings-section" open>
+          <summary>{t('app.sectionTitle')}</summary>
+        <section>
+          {/* Canal de mise à jour (tranche F, 2026-08-07) : réglage MACHINE
+              (localStorage), pas un réglage projet — deux postes d'une même
+              équipe peuvent suivre des canaux différents. */}
+          <p className="psn-note">{t('app.currentVersion', { version: tauriConf.version })}</p>
+          <label>{t('app.updateChannel')}
+            <select
+              value={updateChannel}
+              onChange={(e) => {
+                const ch = e.target.value === 'beta' ? 'beta' : 'stable'
+                setUpdateChannelState(ch)
+                setUpdateChannel(ch)
+              }}
+            >
+              <option value="stable">{t('app.channelStable')}</option>
+              <option value="beta">{t('app.channelBeta')}</option>
+            </select>
+          </label>
+          {updateChannel === 'beta' && <p className="psn-note update-beta-warning">{t('app.channelBetaWarning')}</p>}
+          <button onClick={() => requestUpdateCheck()}>{t('app.checkNow')}</button>
+          <p className="psn-note">{t('app.channelSwitchNote')}</p>
         </section>
         </details>
 

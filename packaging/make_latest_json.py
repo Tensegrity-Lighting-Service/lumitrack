@@ -11,7 +11,12 @@ simplement pas la mise a jour (pas d'erreur).
 """
 import json
 import os
+import sys
 from datetime import datetime, timezone
+
+# Canal (2026-08-07) : "beta" publie sur la release ROULANTE taguee `beta`
+# (URL de telechargement stable), "stable" (defaut) sur la release versionnee.
+CHANNEL = "beta" if "beta" in sys.argv[1:] else "stable"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUNDLE = os.path.join(ROOT, "frontend", "src-tauri", "target", "release", "bundle", "nsis")
@@ -32,7 +37,8 @@ manifest = {
     "platforms": {
         "windows-x86_64": {
             "signature": signature,
-            "url": f"{REPO_URL}/releases/download/v{version}/{setup_name}",
+            "url": (f"{REPO_URL}/releases/download/beta/{setup_name}" if CHANNEL == "beta"
+                    else f"{REPO_URL}/releases/download/v{version}/{setup_name}"),
         }
     },
 }
@@ -40,4 +46,4 @@ manifest = {
 out = os.path.join(BUNDLE, "latest.json")
 with open(out, "w", encoding="utf-8") as fh:
     json.dump(manifest, fh, indent=2)
-print(f"OK : {out} (version {version})")
+print(f"OK : {out} (version {version}, canal {CHANNEL})")
