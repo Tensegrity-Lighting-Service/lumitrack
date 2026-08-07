@@ -71,10 +71,6 @@ const FIT_PADDING = 0.9 // leaves a small margin around the fit region on zoom-t
 const ROTATE_HANDLE_PX = 9
 const ROTATE_HANDLE_OFFSET_PX = 40 // distance above the top edge, same constant-screen-size logic
 const SNAP_RADIUS_M = 0.6
-// Target ghosts keep a constant screen size like the zone handles do — a
-// world-sized marker would be unreadable at zoom-to-fit scale, defeating
-// the whole "every edit has visible feedback" point of block-edit mode.
-const GHOST_PX = 15
 // Badge numéro/abrégé sur chaque acteur, comme Stancz (le numéro affiché
 // dans son UI, cf. CONCEPTION.md §1.3 — "candidat naturel pour l'ID de
 // tracker"). Taille écran constante : doit rester lisible même au zoom-to-
@@ -529,29 +525,29 @@ function PathEditOverlay({ entry, act, color, selectedIndex, onWaypointDown, onH
  * as the zone handles). Draggable: grabbing the ghost — like dragging the
  * actor itself while a block is selected — moves the block's target, so the
  * thing being edited is always the thing on screen. */
-function TargetGhost({ pose, color, emphasis, onPointerDown }: {
+function TargetGhost({ pose, color, emphasis, radiusM, onPointerDown }: {
   pose: Pose
   color: string
   emphasis: Emphasis
+  /** Harmonisation 2026-08-07 ('leur taille est dementielle') : le ghost
+   * adopte la taille MONDE de l'acteur (meme regle que le disque —
+   * zoomer pour le detail), plus jamais une taille ecran constante qui
+   * dominait la scene dezoomee et dont la hitbox ecran volait les clics
+   * entre acteurs proches. */
+  radiusM: number
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
 }) {
   const [x_cm, y_cm, z_cm, yaw_deg] = pose
   const [x, y, z] = stageToLocal(x_cm, y_cm, z_cm)
   const yawRad = THREE.MathUtils.degToRad(yaw_deg)
-  const scaledRef = useRef<THREE.Group>(null)
-  useFrame(({ camera }) => {
-    if (!scaledRef.current) return
-    const zoom = (camera as THREE.OrthographicCamera).zoom || 1
-    const s = GHOST_PX / zoom
-    scaledRef.current.scale.set(s, s, s)
-  })
+  const s = radiusM * 1.1
   const opacity = EMPHASIS_OPACITY[emphasis]
   return (
     // π/2 − yaw : même convention que Actor (voir son commentaire) —
     // lacet 0° = est, cône au repos vers +Z local.
     <group position={[x, y, z]} rotation={[0, Math.PI / 2 - yawRad, 0]}>
       <group
-        ref={scaledRef}
+        scale={[s, s, s]}
         onPointerDown={onPointerDown}
         onPointerOver={() => { document.body.style.cursor = 'grab' }}
         onPointerOut={() => { document.body.style.cursor = 'auto' }}
@@ -2339,21 +2335,33 @@ function SceneContent({
                   />
                 )
               })()}
-              {entry.targetPose && (
-                <>
-                  <TargetGhost
-                    pose={entry.targetPose}
-                    color={point.color}
-                    emphasis={emphasis}
-                    onPointerDown={(e) => handleGhostPointerDown(e, point.id, entry.targetPose![2])}
-                  />
-                  <ActorLabel
-                    text={actorLabelText(point)}
-                    xCm={entry.targetPose[0]} yCm={entry.targetPose[1]} zCm={entry.targetPose[2]}
-                    opacity={EMPHASIS_OPACITY[emphasis]}
-                  />
-                </>
-              )}
+              {entry.targetPose && (() => {
+                // Ghost superpose a l'acteur (cible = position vivante au
+                // playhead, cas de toute selection a l'arret) : ne rien
+                // dessiner — l'acteur et son anneau de selection suffisent,
+                // et sa hitbox normale n'est plus concurrencee (retour
+                // 2026-08-07, 'on perd trop facilement la selection').
+                const livePose = positions[point.id]
+                if (livePose && Math.hypot(entry.targetPose[0] - livePose[0], entry.targetPose[1] - livePose[1]) < 15) {
+                  return null
+                }
+                return (
+                  <>
+                    <TargetGhost
+                      pose={entry.targetPose}
+                      color={point.color}
+                      emphasis={emphasis}
+                      radiusM={(project.actorDiameterCm / 2) * CM_TO_M}
+                      onPointerDown={(e) => handleGhostPointerDown(e, point.id, entry.targetPose![2])}
+                    />
+                    <ActorLabel
+                      text={actorLabelText(point)}
+                      xCm={entry.targetPose[0]} yCm={entry.targetPose[1]} zCm={entry.targetPose[2]}
+                      opacity={EMPHASIS_OPACITY[emphasis]}
+                    />
+                  </>
+                )
+              })()}
             </group>
           )
         })}
