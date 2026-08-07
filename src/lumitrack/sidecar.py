@@ -911,6 +911,24 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         cue = session.project.cue_by_id(msg.get("cueId", ""))
         if cue is None:
             return {"type": "error", "message": "Unknown cue id"}
+        # Mode APERCU (2026-08-07) : le geste libre 'trou' etire le bloc a
+        # chaque echantillon (startMs/durationMs) — en preview on applique
+        # la fenetre + le resync leger des fades, on rebuild, on ack ; le
+        # relogement anti-superposition et la rediffusion attendent
+        # l'ecriture finale du relachement.
+        if msg.get("preview"):
+            if "startMs" in msg:
+                cue.start_ms = float(msg["startMs"])
+            if "durationMs" in msg:
+                cue.duration_ms = float(msg["durationMs"])
+                if not cue.auto_duration:
+                    for act in cue.activations.values():
+                        if not act.fade_overridden:
+                            act.fade_ms = max(
+                                MIN_AUTO_DURATION_MS, cue.duration_ms - act.start_offset_ms)
+            session.project.sort_cues()
+            session.timeline.rebuild()
+            return {"type": "ack"}
         if "name" in msg:
             cue.name = msg["name"]
         if "startMs" in msg:
@@ -985,6 +1003,18 @@ async def _handle_message(session: Session, msg: dict) -> Optional[dict]:
         cue = session.project.cue_by_id(msg.get("cueId", ""))
         if cue is None:
             return {"type": "error", "message": "Unknown cue id"}
+        # Mode APERCU (2026-08-07) — meme contrat que set_activations :
+        # applique + rebuild, PAS de rediffusion (ack), auto-duration
+        # sautee. Necessaire aussi ici : le drag d'UN acteur/waypoint/
+        # poignee passe par set_activation, et chaque echantillon mutant
+        # empilait une rediffusion complete ('le chemin se fait mais en
+        # retard' apres le relachement).
+        if msg.get("preview"):
+            err = _apply_activation_patch(session, cue, msg)
+            if err is not None:
+                return err
+            session.timeline.rebuild()
+            return {"type": "ack"}
         err = _apply_activation_patch(session, cue, msg)
         if err is not None:
             return err

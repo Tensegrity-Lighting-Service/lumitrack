@@ -1542,10 +1542,31 @@ function SceneContent({
       )
     }
 
+    // Dernieres ecritures du geste en cours (rejouees non-preview au
+    // relachement) — hors SceneDrag pour ne pas toucher l'union de types.
+    const lastWriteRef = { current: null as null | {
+      cueId: string
+      cuePatch?: { startMs: number; durationMs: number }
+      entries?: Array<Record<string, unknown> & { pointId: string }>
+      pointId?: string
+      patch?: Record<string, unknown>
+    } }
+
     const endDrag = () => {
       const drag = dragRef.current
       if (!drag) return
       dragRef.current = null
+      // Rejeu FINAL des dernieres ecritures du geste (mode apercu,
+      // 2026-08-07) : les echantillons sont partis en preview (aucune
+      // rediffusion) — la version non-preview du dernier etat paie
+      // auto-duration/anti-superposition/rediffusion UNE fois.
+      const fin = lastWriteRef.current
+      lastWriteRef.current = null
+      if (fin) {
+        if (fin.cuePatch) sidecar.updateCue(fin.cueId, fin.cuePatch)
+        if (fin.entries) sidecar.setActivations(fin.cueId, fin.entries)
+        else if (fin.pointId && fin.patch) sidecar.setActivation(fin.cueId, fin.pointId, fin.patch)
+      }
       // Clic SEC (aucun mouvement) sur un membre d'une selection multiple :
       // le geste n'a rien ecrit — c'etait une re-selection, la selection
       // se reduit a cet acteur au relachement (demande 2026-08-07 :
@@ -1602,9 +1623,11 @@ function SceneContent({
           const vref = proj.referenceSpeedCms || 220
           const fade = Math.max(200, (dist / vref) * 1000)
           const startMs = Math.max(0, drag.freeCreate.arrivalMs - fade)
-          sidecar.updateCue(gestureCueId, {
+          const cuePatch = {
             startMs, durationMs: Math.max(200, drag.freeCreate.arrivalMs - startMs),
-          })
+          }
+          sidecar.updateCuePreview(gestureCueId, cuePatch)
+          lastWriteRef.current = { ...(lastWriteRef.current ?? { cueId: gestureCueId }), cueId: gestureCueId, cuePatch }
         }
         if (drag.group) {
           // Transformation groupée : delta souris depuis le premier
@@ -1619,11 +1642,15 @@ function SceneContent({
           }
           // UN message groupé pour tout le groupe (optimisation
           // 2026-08-06) — N set_activation = N rediffusions du projet.
-          sidecar.setActivations(gestureCueId, drag.group.map((m) => ({
+          const entries = drag.group.map((m) => ({
             pointId: m.pointId, targetXCm: m.baseX + dx, targetYCm: m.baseY + dy,
-          })))
+          }))
+          sidecar.setActivationsPreview(gestureCueId, entries)
+          lastWriteRef.current = { ...(lastWriteRef.current ?? { cueId: gestureCueId }), cueId: gestureCueId, entries }
         } else {
-          sidecar.setActivation(gestureCueId, drag.pointId, { targetXCm: xCm, targetYCm: yCm })
+          const patch = { targetXCm: xCm, targetYCm: yCm }
+          sidecar.setActivationPreview(gestureCueId, drag.pointId, patch)
+          lastWriteRef.current = { ...(lastWriteRef.current ?? { cueId: gestureCueId }), cueId: gestureCueId, pointId: drag.pointId, patch }
         }
         return
       }
@@ -1636,7 +1663,8 @@ function SceneContent({
         const wps = (act.pathPoints ?? []).map((wp) => ({ ...wp }))
         if (!wps[drag.index]) return
         wps[drag.index] = { ...wps[drag.index], xCm, yCm }
-        sidecar.setActivation(gestureCueId, drag.pointId, { pathPoints: wps })
+        sidecar.setActivationPreview(gestureCueId, drag.pointId, { pathPoints: wps })
+        lastWriteRef.current = { cueId: gestureCueId, pointId: drag.pointId, patch: { pathPoints: wps } }
         return
       }
 
@@ -1646,14 +1674,14 @@ function SceneContent({
       if (!entry) return
       if (drag.anchor === 'start') {
         if (!entry.startPose) return
-        sidecar.setActivation(gestureCueId, drag.pointId, {
-          startHandle: { dxCm: xCm - entry.startPose[0], dyCm: yCm - entry.startPose[1] },
-        })
+        const patch = { startHandle: { dxCm: xCm - entry.startPose[0], dyCm: yCm - entry.startPose[1] } }
+        sidecar.setActivationPreview(gestureCueId, drag.pointId, patch)
+        lastWriteRef.current = { cueId: gestureCueId, pointId: drag.pointId, patch }
       } else if (drag.anchor === 'target') {
         if (!entry.targetPose) return
-        sidecar.setActivation(gestureCueId, drag.pointId, {
-          targetHandle: { dxCm: xCm - entry.targetPose[0], dyCm: yCm - entry.targetPose[1] },
-        })
+        const patch = { targetHandle: { dxCm: xCm - entry.targetPose[0], dyCm: yCm - entry.targetPose[1] } }
+        sidecar.setActivationPreview(gestureCueId, drag.pointId, patch)
+        lastWriteRef.current = { cueId: gestureCueId, pointId: drag.pointId, patch }
       } else {
         const wps = (act.pathPoints ?? []).map((wp) => ({ ...wp }))
         const wp = wps[drag.anchor]
@@ -1669,7 +1697,8 @@ function SceneContent({
           wp.outDyCm = dy
           if (!e.altKey) { wp.inDxCm = -dx; wp.inDyCm = -dy }
         }
-        sidecar.setActivation(gestureCueId, drag.pointId, { pathPoints: wps })
+        sidecar.setActivationPreview(gestureCueId, drag.pointId, { pathPoints: wps })
+        lastWriteRef.current = { cueId: gestureCueId, pointId: drag.pointId, patch: { pathPoints: wps } }
       }
     }
 
