@@ -151,6 +151,10 @@ export interface SnapPoint { x: number; z: number }
  * for any venue survey. Grandstands/roof/rigging sit well above the floor
  * so they're naturally excluded; whatever's drawn on the ground (pitch
  * lines, markings, thresholds) is exactly what's left. */
+// Résolution maximale du bake terrain (px, côté long) — 4096 couvre un
+// terrain de 100 m à ~4 cm/px, largement au-delà du besoin de lecture.
+const TERRAIN_BAKE_MAX_PX = 4096
+
 function Terrain({ path, rotationDeg, onBounds, onSnapPoints }: {
   path: string
   rotationDeg: number
@@ -159,22 +163,32 @@ function Terrain({ path, rotationDeg, onBounds, onSnapPoints }: {
 }) {
   const url = useMemo(() => fileSrc(path), [path])
   const { scene } = useGLTF(url)
-  const groupRef = useRef<THREE.Group>(null)
-  // Bornes et points de snap recalculés APRÈS application de la rotation
-  // (matrices monde à jour) — sinon le snap viserait l'ancien terrain.
+  const { gl } = useThree()
+  // BAKE 2D (audit fluidité 2026-08-07, idée de Florian : "rendre le 3D
+  // en 2D tout en gardant les mesures absolues") : un survey d'aréna =
+  // des centaines de meshes/matériaux redessinés à CHAQUE frame pour un
+  // décor STATIQUE — 30-45 fps au repos rien que pour lui. On le rend UNE
+  // FOIS dans une texture orthographique vue du dessus, affichée comme UN
+  // plan aux dimensions monde exactes (1 draw call). La vue étant
+  // orthographique du dessus, le résultat est visuellement identique ;
+  // bounds et points de snap restent calculés sur la vraie géométrie.
+  const [baked, setBaked] = useState<{
+    texture: THREE.Texture
+    centerX: number; centerZ: number
+    widthM: number; depthM: number
+    floorY: number
+  } | null>(null)
   useEffect(() => {
-    const g = groupRef.current
-    if (!g) return
-    g.rotation.y = -THREE.MathUtils.degToRad(rotationDeg)
-    g.updateWorldMatrix(true, true)
+    scene.rotation.y = -THREE.MathUtils.degToRad(rotationDeg)
+    scene.updateWorldMatrix(true, true)
 
-    const box = new THREE.Box3().setFromObject(g)
+    const box = new THREE.Box3().setFromObject(scene)
     onBounds({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z })
 
     const floorY = box.min.y + SNAP_FLOOR_EPSILON_M
     const points: SnapPoint[] = []
     const v = new THREE.Vector3()
-    g.traverse((node) => {
+    scene.traverse((node) => {
       if (points.length >= SNAP_MAX_POINTS) return
       if (!(node instanceof THREE.Mesh)) return
       const position = node.geometry.getAttribute('position')
@@ -185,8 +199,48 @@ function Terrain({ path, rotationDeg, onBounds, onSnapPoints }: {
       }
     })
     onSnapPoints(points)
-  }, [scene, rotationDeg, onBounds, onSnapPoints])
-  return <group ref={groupRef}><primitive object={scene} /></group>
+
+    // ---- Bake orthographique vu du dessus ----
+    const widthM = Math.max(0.001, box.max.x - box.min.x)
+    const depthM = Math.max(0.001, box.max.z - box.min.z)
+    const centerX = (box.min.x + box.max.x) / 2
+    const centerZ = (box.min.z + box.max.z) / 2
+    const long = Math.max(widthM, depthM)
+    const resX = Math.max(64, Math.round((widthM / long) * TERRAIN_BAKE_MAX_PX))
+    const resY = Math.max(64, Math.round((depthM / long) * TERRAIN_BAKE_MAX_PX))
+    const target = new THREE.WebGLRenderTarget(resX, resY, { samples: 4 })
+    const bakeScene = new THREE.Scene()
+    bakeScene.add(scene)
+    bakeScene.add(new THREE.AmbientLight(0xffffff, 1.6))
+    const sun = new THREE.DirectionalLight(0xffffff, 0.8)
+    sun.position.set(centerX, box.max.y + long, centerZ)
+    bakeScene.add(sun)
+    const cam = new THREE.OrthographicCamera(-widthM / 2, widthM / 2, depthM / 2, -depthM / 2, 0.1, box.max.y - box.min.y + 20)
+    cam.position.set(centerX, box.max.y + 10, centerZ)
+    cam.up.set(0, 0, -1)
+    cam.lookAt(centerX, 0, centerZ)
+    cam.updateProjectionMatrix()
+    const prevTarget = gl.getRenderTarget()
+    gl.setRenderTarget(target)
+    gl.render(bakeScene, cam)
+    gl.setRenderTarget(prevTarget)
+    bakeScene.remove(scene)
+    setBaked((prev) => {
+      prev?.texture.dispose()
+      return { texture: target.texture, centerX, centerZ, widthM, depthM, floorY: box.min.y }
+    })
+  }, [scene, rotationDeg, onBounds, onSnapPoints, gl])
+
+  if (!baked) return null
+  return (
+    <mesh
+      position={[baked.centerX, baked.floorY, baked.centerZ]}
+      rotation={[-Math.PI / 2, 0, 0]}
+    >
+      <planeGeometry args={[baked.widthM, baked.depthM]} />
+      <meshBasicMaterial map={baked.texture} toneMapped={false} />
+    </mesh>
+  )
 }
 
 function GenericFloor({ widthM, heightM }: { widthM: number; heightM: number }) {
@@ -2571,8 +2625,11 @@ export const Scene = forwardRef<SceneHandle, {
         // DPR 2 quadruple les pixels a dessiner pour un gain visuel nul
         // sur une vue technique) + high-performance force le vrai GPU sur
         // les laptops double-carte (WebView2 prend l'iGPU par defaut).
-        dpr={[1, 1.5]}
-        gl={{ powerPreference: 'high-performance', antialias: true }}
+        // Cible : machine modeste (2026-08-07) — DPR 1.25 max et PAS de
+        // MSAA plein ecran (les elements sont des aplats 2D nets ; le
+        // terrain cuit a son propre anti-crenelage 4x dans sa texture).
+        dpr={[1, 1.25]}
+        gl={{ powerPreference: 'high-performance', antialias: false }}
       >
         <RendererProbe />
         <SceneContent {...props} positions={positions} tMs={tMs} onLassoRect={setLassoRect} dropHandleRef={dropHandleRef} />

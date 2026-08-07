@@ -16,14 +16,31 @@ function emit() {
   for (const fn of listeners) fn()
 }
 
+// COALESCING par frame d'affichage (fix 2026-08-07, "10 fps en
+// déplacement") : les pointermove arrivent à 60-120 Hz — émettre à chaque
+// événement re-rendait la scène React à cette fréquence et ÉCROULAIT le
+// GPU/CPU pendant les gestes. On stocke la dernière valeur et on n'émet
+// qu'une fois par requestAnimationFrame : le suivi reste collé au curseur
+// (1 mise à jour par frame affichée, par définition suffisant).
+let raf = 0
+
+function scheduleEmit() {
+  if (raf) return
+  raf = requestAnimationFrame(() => {
+    raf = 0
+    emit()
+  })
+}
+
 export function setDragOverrides(next: DragOverrides | null) {
   overrides = next
-  emit()
+  scheduleEmit()
 }
 
 export function clearDragOverrides() {
   if (overrides === null) return
   overrides = null
+  if (raf) { cancelAnimationFrame(raf); raf = 0 }
   emit()
 }
 
