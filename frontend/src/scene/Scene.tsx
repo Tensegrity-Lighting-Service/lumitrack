@@ -27,7 +27,7 @@
 // the placement once, rather than every child re-deriving it.
 import { Suspense, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
-import { OrthographicCamera, MapControls, useGLTF, Line } from '@react-three/drei'
+import { OrthographicCamera, MapControls, useGLTF, Line, Html } from '@react-three/drei'
 import type { MapControls as MapControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import { fileSrc } from '../fileSrc'
@@ -42,6 +42,7 @@ import { t } from '../i18n'
 const EMPTY_POSITIONS: Record<string, Pose> = {}
 import { CM_TO_M, DRAG_SEND_INTERVAL_MS, HANDLE_PX, stageToLocal, ScreenSizedHandle, type DragKind } from './sceneShared'
 import { SelectionTransformLegacy } from './SelectionTransformLegacy'
+import { useDragOverrides, setDragOverrides, clearDragOverrides } from './dragOverride'
 import { TransformBox } from './TransformBoxGizmo'
 
 // Bascule pièce-détachée (tranche C0, 2026-08-07) : l'ancien gizmo
@@ -1218,6 +1219,45 @@ function BackstageZoneOverlay({ zone, editing, stageGroupRef, controlsRef, allZo
   )
 }
 
+/** Sonde de diagnostic (dev uniquement, audit fluidite 2026-08-07) :
+ * affiche les FPS REELS du canvas et le nom du renderer WebGL — un
+ * "SwiftShader"/"Basic Render" = rendu LOGICIEL (pas de GPU), un "Intel
+ * (R) UHD" sur un laptop gamer = mauvaise carte choisie. C'est le chiffre
+ * qui transforme "c'est lent" en cause identifiable. */
+function RendererProbe() {
+  const { gl } = useThree()
+  const frames = useRef(0)
+  const last = useRef(performance.now())
+  const [info, setInfo] = useState('')
+  useFrame(() => {
+    frames.current += 1
+    const now = performance.now()
+    if (now - last.current >= 1000) {
+      const fps = Math.round((frames.current * 1000) / (now - last.current))
+      frames.current = 0
+      last.current = now
+      let renderer = 'webgl?'
+      try {
+        const ctx = gl.getContext()
+        const ext = ctx.getExtension('WEBGL_debug_renderer_info')
+        renderer = ext ? String(ctx.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'masque'
+      } catch { /* ignore */ }
+      setInfo(`${fps} fps — ${renderer} — dpr ${gl.getPixelRatio().toFixed(2)}`)
+    }
+  })
+  if (!import.meta.env.DEV) return null
+  return (
+    <Html position={[0, 0, 0]} calculatePosition={() => [8, 8, 0]} style={{ pointerEvents: 'none' }}>
+      <div style={{
+        position: 'fixed', top: 2, left: 260, zIndex: 999,
+        background: 'rgba(10,10,14,0.85)', color: '#4fe081',
+        font: '11px ui-monospace, monospace', padding: '2px 8px', borderRadius: 4,
+        whiteSpace: 'nowrap',
+      }}>{info}</div>
+    </Html>
+  )
+}
+
 function SceneContent({
   project, positions, tMs, selectedPointId, selectedPointIds, selectedCueId, blockContext, onSelectPoint, onSelectPoints,
   onSelectCue, onLassoRect, cameraLocked, fitToken, editingZone,
@@ -1245,6 +1285,20 @@ function SceneContent({
   onToggleGrid: () => void
   onFitToWindow: () => void
 }) {
+  // Retour visuel immediat des gestes (voir dragOverride.ts) : les
+  // positions AFFICHEES fusionnent l'override du geste en cours — les
+  // marqueurs suivent la souris sans attendre l'aller-retour moteur.
+  const dragOverrides = useDragOverrides()
+  const displayPositions = useMemo(() => {
+    if (!dragOverrides) return positions
+    const merged: Record<string, Pose> = { ...positions }
+    for (const [pid, [x, y]] of Object.entries(dragOverrides)) {
+      const base = positions[pid]
+      merged[pid] = [x, y, base?.[2] ?? 0, base?.[3] ?? 0]
+    }
+    return merged
+  }, [positions, dragOverrides])
+
   const widthM = project.stageWidthCm * CM_TO_M
   const heightM = project.stageHeightCm * CM_TO_M
 
@@ -1556,6 +1610,7 @@ function SceneContent({
       const drag = dragRef.current
       if (!drag) return
       dragRef.current = null
+      clearDragOverrides()
       // Rejeu FINAL des dernieres ecritures du geste (mode apercu,
       // 2026-08-07) : les echantillons sont partis en preview (aucune
       // rediffusion) — la version non-preview du dernier etat paie
@@ -1614,6 +1669,19 @@ function SceneContent({
       }
 
       if (drag.kind === 'target') {
+        // Retour visuel immediat (non throttle) : le(s) marqueur(s)
+        // suivent la souris a chaque pointermove.
+        if (drag.group) {
+          if (drag.baseCursor) {
+            const dxV = xCm - drag.baseCursor.x
+            const dyV = yCm - drag.baseCursor.y
+            const ov: Record<string, [number, number]> = {}
+            for (const m of drag.group) ov[m.pointId] = [m.baseX + dxV, m.baseY + dyV]
+            setDragOverrides(ov)
+          }
+        } else {
+          setDragOverrides({ [drag.pointId]: [xCm, yCm] })
+        }
         // Geste libre dans un trou : le bloc s'étire pour que la durée
         // colle à distance/vitesse de référence, arrivée figée au playhead
         // du pointerdown (spec point 3). update_cue resynchronise
@@ -2296,7 +2364,7 @@ function SceneContent({
         )}
 
         {project.points.map((point) => {
-          const pose = positions[point.id]
+          const pose = displayPositions[point.id]
           if (!pose) return null
           const opacity = editEntries === null ? 1
             : editEntries[point.id] ? EDIT_ACTIVATED_OPACITY : EDIT_BYSTANDER_OPACITY
@@ -2497,7 +2565,16 @@ export const Scene = forwardRef<SceneHandle, {
   }), [])
   return (
     <div className="scene-canvas-wrap">
-      <Canvas onPointerMissed={(e) => dropHandleRef.current?.handleTerrainContextMenu(e)}>
+      <Canvas
+        onPointerMissed={(e) => dropHandleRef.current?.handleTerrainContextMenu(e)}
+        // Audit fluidite 2026-08-07 : DPR plafonne a 1.5 (un ecran 4K a
+        // DPR 2 quadruple les pixels a dessiner pour un gain visuel nul
+        // sur une vue technique) + high-performance force le vrai GPU sur
+        // les laptops double-carte (WebView2 prend l'iGPU par defaut).
+        dpr={[1, 1.5]}
+        gl={{ powerPreference: 'high-performance', antialias: true }}
+      >
+        <RendererProbe />
         <SceneContent {...props} positions={positions} tMs={tMs} onLassoRect={setLassoRect} dropHandleRef={dropHandleRef} />
       </Canvas>
       {lassoRect && (

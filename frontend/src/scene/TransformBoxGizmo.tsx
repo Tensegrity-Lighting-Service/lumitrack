@@ -30,6 +30,7 @@ import {
   type Bounds, type BoxHandleDef,
 } from './transformBox'
 import { BOX_PAD_PX, CM_TO_M, DRAG_SEND_INTERVAL_MS, HANDLE_PX, ScreenSizedHandle, stageToLocal } from './sceneShared'
+import { setDragOverrides, clearDragOverrides } from './dragOverride'
 
 type Member = {
   pointId: string; baseX: number; baseY: number
@@ -225,6 +226,45 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
       return
     }
 
+    // Retour visuel immediat (non throttle, audit fluidite 2026-08-07) :
+    // les marqueurs suivent la souris a chaque pointermove, le moteur
+    // (apercu throttle ci-dessous) reste l'autorite.
+    if (drag.kind === 'move') {
+      let dxV = cursor.x - drag.startCursorCm.x
+      let dyV = cursor.y - drag.startCursorCm.y
+      if (snapToGrid && gridSizeCm > 0) {
+        dxV = Math.round(dxV / gridSizeCm) * gridSizeCm
+        dyV = Math.round(dyV / gridSizeCm) * gridSizeCm
+      }
+      const ov: Record<string, [number, number]> = {}
+      for (const m of drag.members) ov[m.pointId] = [m.baseX + dxV, m.baseY + dyV]
+      setDragOverrides(ov)
+    } else if (drag.kind === 'scale' && drag.handle && drag.handleStartCm && drag.handleStartRawCm && drag.boundsRaw) {
+      const fixedV = shiftRef.current ? drag.anchorCm : oppositePointCm(drag.handle, drag.boundsRaw)
+      const cursorAdjV = {
+        x: cursor.x - (drag.handleStartCm.x - drag.handleStartRawCm.x),
+        y: cursor.y - (drag.handleStartCm.y - drag.handleStartRawCm.y),
+      }
+      const f = scaleFactors(drag.handle, fixedV, drag.handleStartRawCm, cursorAdjV)
+      const ov: Record<string, [number, number]> = {}
+      for (const m of drag.members) {
+        ov[m.pointId] = [fixedV.x + (m.baseX - fixedV.x) * f.fx, fixedV.y + (m.baseY - fixedV.y) * f.fy]
+      }
+      setDragOverrides(ov)
+    } else if (drag.kind === 'rotate-group') {
+      let th = Math.atan2(cursor.y - drag.anchorCm.y, cursor.x - drag.anchorCm.x) - drag.startTheta
+      if (shiftRef.current) th = (Math.round(((th * 180) / Math.PI) / 5) * 5 * Math.PI) / 180
+      const cV = Math.cos(th)
+      const sV = Math.sin(th)
+      const ov: Record<string, [number, number]> = {}
+      for (const m of drag.members) {
+        const rx = m.baseX - drag.anchorCm.x
+        const ry = m.baseY - drag.anchorCm.y
+        ov[m.pointId] = [drag.anchorCm.x + rx * cV - ry * sV, drag.anchorCm.y + rx * sV + ry * cV]
+      }
+      setDragOverrides(ov)
+    }
+
     const now = performance.now()
     // Debit adaptatif (retour 2026-08-07, 'ca rame avec tout un tas
     // d'acteurs') : chaque envoi declenche une rediffusion projet
@@ -322,6 +362,7 @@ export function TransformBox({ project, positions, selectedCueId, selectedPointI
     dragRef.current = null
     dragActiveRef.current = false
     setLiveThetaDeg(null)
+    clearDragOverrides()
     if (controlsRef.current) controlsRef.current.enabled = true
     if (!drag) return
 
